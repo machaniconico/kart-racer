@@ -4,7 +4,7 @@ export const ROAD_HALF_WIDTH = 7.2;
 export const WALL_HALF_WIDTH = 10.5;
 const CONTROL_POINTS = [
   [0, 0.7, 82], [46, 2, 74], [87, 7.2, 47], [91, 8.5, 2],
-  [65, 4.5, -27], [86, 1.5, -70], [32, 0.8, -91], [-26, 0.4, -86],
+  [75, 4.5, -27], [82, 1.5, -70], [32, 0.8, -105], [-26, 0.4, -86],
   [-75, 2.5, -62], [-91, 6.4, -10], [-68, 4, 38], [-31, 1.2, 58],
 ];
 const SEGMENT_SAMPLES = 32;
@@ -54,7 +54,7 @@ export function wrapDistance(distance: number): number {
   return ((distance % TRACK_LENGTH) + TRACK_LENGTH) % TRACK_LENGTH;
 }
 
-export function sampleTrack(distance: number): TrackSample {
+function segmentIndex(distance: number): number {
   const d = wrapDistance(distance);
   let low = 0;
   let high = TRACK_SAMPLES.length - 1;
@@ -63,6 +63,12 @@ export function sampleTrack(distance: number): TrackSample {
     if (TRACK_SAMPLES[mid]!.distance <= d) low = mid;
     else high = mid - 1;
   }
+  return low;
+}
+
+export function sampleTrack(distance: number): TrackSample {
+  const d = wrapDistance(distance);
+  const low = segmentIndex(d);
   const a = TRACK_SAMPLES[low]!;
   const b = TRACK_SAMPLES[(low + 1) % TRACK_SAMPLES.length]!;
   const segmentLength = low === TRACK_SAMPLES.length - 1 ? TRACK_LENGTH - a.distance : b.distance - a.distance;
@@ -77,12 +83,26 @@ export function sampleTrack(distance: number): TrackSample {
   };
 }
 
-export function projectToTrack(x: number, z: number): TrackProjection {
+export function projectToTrack(x: number, z: number, previousDistance?: number): TrackProjection {
+  const count = TRACK_SAMPLES.length;
+  let startIndex = 0;
+  let segmentCount = count;
+  if (previousDistance !== undefined && Number.isFinite(previousDistance)) {
+    const previous = sampleTrack(previousDistance);
+    // Normal driving remains in the previous section, including the start seam.
+    // Positions beyond the road corridor (respawns/teleports) reacquire globally.
+    if (Math.hypot(x - previous.x, z - previous.z) <= WALL_HALF_WIDTH + 6) {
+      startIndex = segmentIndex(previousDistance - 20);
+      const endIndex = segmentIndex(previousDistance + 20);
+      segmentCount = (endIndex - startIndex + count) % count + 1;
+    }
+  }
   let nearestSquared = Infinity;
   let nearestDistance = 0;
   let nearestX = 0;
   let nearestZ = 0;
-  for (let i = 0; i < TRACK_SAMPLES.length; i++) {
+  for (let step = 0; step < segmentCount; step++) {
+    const i = (startIndex + step) % count;
     const a = TRACK_SAMPLES[i]!;
     const b = TRACK_SAMPLES[(i + 1) % TRACK_SAMPLES.length]!;
     const dx = b.x - a.x;

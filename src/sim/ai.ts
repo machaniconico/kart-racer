@@ -8,13 +8,17 @@ function angleDifference(angle: number): number {
 /** AI only produces the same input frame consumed by human/network drivers. */
 export function getAIInput(state: RaceState, kartId: number): InputFrame {
   const kart = state.karts.find((candidate) => candidate.id === kartId);
-  if (!kart || kart.finishTime !== null) return { steer: 0, throttle: 0, brake: false, drift: false, useItem: false };
+  if (!kart) return { steer: 0, throttle: 0, brake: false, drift: false, useItem: false };
   const lookAhead = 7.5 + Math.max(0, kart.speed) * 0.24;
   const target = sampleTrack(kart.trackDistance + lookAhead);
   const lineOffset = Math.sin(kart.aiPhase + state.time * 0.12) * 1.25;
   const desired = Math.atan2(target.x + target.nx * lineOffset - kart.x, target.z + target.nz * lineOffset - kart.z);
   const travelHeading = kart.heading - kart.driftDirection * Math.min(0.23, kart.driftTime * 0.35);
   const error = angleDifference(desired - travelHeading);
+  if (kart.finishTime !== null) {
+    return { steer: Math.max(-1, Math.min(1, error * 1.8)), throttle: kart.speed < 10 ? 0.45 : 0,
+      brake: kart.speed > 12, drift: false, useItem: false };
+  }
   const later = sampleTrack(kart.trackDistance + lookAhead + 12);
   const curvature = Math.abs(angleDifference(Math.atan2(later.tx, later.tz) - Math.atan2(target.tx, target.tz)));
   const shouldBrake = (Math.abs(error) > 0.65 || curvature > 0.62) && kart.speed > 21;

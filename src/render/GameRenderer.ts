@@ -4,7 +4,8 @@ import {
   ROAD_HALF_WIDTH, WALL_HALF_WIDTH, TRACK_LENGTH,
   projectToTrack, sampleTrack,
 } from '../sim';
-import type { Pose, RaceState, TrackSample } from '../sim';
+import type { RaceState, TrackSample } from '../sim';
+import type { RenderSnapshot } from './snapshot';
 
 const mix = (a: number, b: number, t: number) => a + (b - a) * t;
 const angleMix = (a: number, b: number, t: number) =>
@@ -38,7 +39,8 @@ export class GameRenderer {
   private readonly sunOffset = new THREE.Vector3(55, 85, 35);
   private readonly transform = new THREE.Object3D();
   private readonly kartVisuals: KartVisual[] = [];
-  private readonly boxVisuals: THREE.Group[] = [];
+  private readonly boxCubes: THREE.InstancedMesh;
+  private readonly boxCores: THREE.InstancedMesh;
   private readonly entities = new Map<number, THREE.Mesh>();
   private readonly boltGeometry = new THREE.IcosahedronGeometry(0.55, 0);
   private readonly trapGeometry = new THREE.ConeGeometry(0.8, 0.45, 5);
@@ -51,10 +53,10 @@ export class GameRenderer {
   private reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   constructor(private readonly canvas: HTMLCanvasElement, initial: RaceState) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    const mobile = window.matchMedia('(pointer: coarse)').matches;
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: !mobile, powerPreference: 'high-performance' });
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = mobile ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.setClearColor(0xa3dce6);
     this.scene.fog = new THREE.Fog(0xb4e1df, 170, 460);
@@ -82,20 +84,15 @@ export class GameRenderer {
       this.scene.add(visual.root);
     }
     const cubeGeometry = new THREE.BoxGeometry(1.3, 1.3, 1.3);
-    const cubeMaterial = material(0x9ce9d2);
-    for (const item of initial.boxes) {
-      const group = new THREE.Group();
-      const cube = new THREE.Mesh(cubeGeometry, cubeMaterial);
-      cube.rotation.z = Math.PI / 4;
-      cube.rotation.x = Math.PI / 5;
-      cube.castShadow = true;
-      group.add(cube);
-      const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.62), material(0xfff4a3));
-      core.position.y = 0.2;
-      group.add(core);
-      group.position.set(item.x, item.y + 1.4, item.z);
-      this.boxVisuals.push(group);
-      this.scene.add(group);
+    cubeGeometry.applyMatrix4(new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(Math.PI / 5, 0, Math.PI / 4)));
+    this.boxCubes = new THREE.InstancedMesh(cubeGeometry, material(0x9ce9d2), initial.boxes.length);
+    this.boxCores = new THREE.InstancedMesh(new THREE.OctahedronGeometry(0.62).translate(0, 0.2, 0), material(0xfff4a3), initial.boxes.length);
+    this.boxCubes.castShadow = true;
+    for (const mesh of [this.boxCubes, this.boxCores]) {
+      mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      // The small set spans the course and bobs every frame; avoid stale instance bounds.
+      mesh.frustumCulled = false;
+      this.scene.add(mesh);
     }
     this.resize();
   }
@@ -103,6 +100,9 @@ export class GameRenderer {
   resize(): void {
     const w = this.canvas.clientWidth;
     const h = this.canvas.clientHeight;
+    const mobile = window.matchMedia('(pointer: coarse)').matches;
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, mobile ? 1.5 : 2));
+    this.renderer.shadowMap.type = mobile ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / Math.max(1, h);
     this.camera.updateProjectionMatrix();
@@ -319,6 +319,7 @@ export class GameRenderer {
     const ivory = material(0xfffce4);
     const chassis = box(1.8, 0.48, 2.8, paint);
     chassis.position.y = 0.65;
+    chassis.castShadow = true;
     body.add(chassis);
     const nose = box(1.3, 0.32, 1.3, paint);
     nose.position.set(0, 0.97, 0.77);
@@ -372,11 +373,11 @@ export class GameRenderer {
     steering.position.set(0, 1.25, 0.45);
     steering.rotation.x = -0.45;
     body.add(steering);
-    // Batch each kart's static body to three material draws. Wheels remain animated.
+    // Batch small static details by material; only the separate chassis casts a shadow.
     const batches = new Map<THREE.Material, THREE.BufferGeometry[]>();
     const originals = new Set<THREE.BufferGeometry>();
     for (const child of [...body.children]) {
-      if (!(child instanceof THREE.Mesh) || wheels.includes(child)) continue;
+      if (!(child instanceof THREE.Mesh) || child === chassis || wheels.includes(child)) continue;
       child.updateMatrix();
       const mat = child.material as THREE.Material;
       const parts = batches.get(mat) ?? [];
@@ -391,7 +392,6 @@ export class GameRenderer {
       parts.forEach((part) => part.dispose());
     }
     originals.forEach((geo) => geo.dispose());
-    body.traverse((object) => { if (object instanceof THREE.Mesh) object.castShadow = true; });
     const sparks = new THREE.InstancedMesh(new THREE.OctahedronGeometry(0.13), new THREE.MeshBasicMaterial({ color: 0x64e3ff }), 12);
     root.add(sparks);
     const flame = new THREE.Mesh(new THREE.ConeGeometry(0.38, 1.7, 6), new THREE.MeshBasicMaterial({ color: 0xffd863 }));
@@ -401,12 +401,12 @@ export class GameRenderer {
     return { root, body, wheels, sparks, flame };
   }
 
-  update(state: RaceState, previous: Pose[], alpha: number, dt: number, mode: 'title' | 'race' | 'results'): void {
+  update(state: RaceState, previous: RenderSnapshot, alpha: number, dt: number, mode: 'title' | 'race' | 'results'): void {
     this.elapsed += dt;
     if (mode !== this.lastMode) { this.cameraReady = false; this.lastMode = mode; }
     for (const kart of state.karts) {
       const visual = this.kartVisuals[kart.id];
-      const prev = previous[kart.id] ?? kart;
+      const prev = previous.karts[kart.id] ?? kart;
       visual.root.position.set(mix(prev.x, kart.x, alpha), mix(prev.y, kart.y, alpha), mix(prev.z, kart.z, alpha));
       visual.root.rotation.y = angleMix(prev.heading, kart.heading, alpha);
       const p = sampleTrack(kart.trackDistance);
@@ -438,11 +438,15 @@ export class GameRenderer {
       visual.flame.scale.y = 1 + Math.sin(this.elapsed * 45) * 0.25;
     }
     state.boxes.forEach((item, i) => {
-      const group = this.boxVisuals[i];
-      group.visible = item.respawnTime <= 0;
-      group.rotation.y = this.elapsed * 1.1 + i;
-      group.position.y = item.y + 1.5 + (this.reducedMotion ? 0 : Math.sin(this.elapsed * 2.6 + i) * 0.2);
+      this.transform.position.set(item.x, item.y + 1.5 + (this.reducedMotion ? 0 : Math.sin(this.elapsed * 2.6 + i) * 0.2), item.z);
+      this.transform.rotation.set(0, this.elapsed * 1.1 + i, 0);
+      this.transform.scale.setScalar(item.respawnTime <= 0 ? 1 : 0);
+      this.transform.updateMatrix();
+      this.boxCubes.setMatrixAt(i, this.transform.matrix);
+      this.boxCores.setMatrixAt(i, this.transform.matrix);
     });
+    this.boxCubes.instanceMatrix.needsUpdate = true;
+    this.boxCores.instanceMatrix.needsUpdate = true;
     const active = new Set<number>();
     for (const [items, type] of [[state.projectiles, 'bolt'], [state.traps, 'trap']] as const) {
       for (const item of items) {
@@ -454,8 +458,9 @@ export class GameRenderer {
           this.entities.set(item.id, mesh);
           this.scene.add(mesh);
         }
-        mesh.position.set(item.x, item.y + (type === 'bolt' ? 0.7 : 0.22), item.z);
-        mesh.rotation.y = type === 'bolt' ? this.elapsed * 9 : item.heading;
+        const prev = previous.entities.get(item.id) ?? item;
+        mesh.position.set(mix(prev.x, item.x, alpha), mix(prev.y, item.y, alpha) + (type === 'bolt' ? 0.7 : 0.22), mix(prev.z, item.z, alpha));
+        mesh.rotation.y = type === 'bolt' ? this.elapsed * 9 : angleMix(prev.heading, item.heading, alpha);
       }
     }
     for (const [id, mesh] of this.entities) if (!active.has(id)) {

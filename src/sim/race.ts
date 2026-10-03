@@ -1,4 +1,5 @@
 import { getRank, raceProgress, updateLapTracking } from './laps';
+import { getAIInput } from './ai';
 import { chooseItem, random } from './random';
 import { ROAD_HALF_WIDTH, TRACK_LENGTH, WALL_HALF_WIDTH, projectToTrack, sampleTrack } from './track';
 import type { InputFrame, KartState, RaceState } from './types';
@@ -9,6 +10,7 @@ export const DRIFT_ORANGE_TIME = 1.5;
 export const NEUTRAL_INPUT: Readonly<InputFrame> = Object.freeze({ steer: 0, throttle: 0, brake: false, drift: false, useItem: false });
 export const BOX_RESPAWN_TIME = 5;
 export const KART_RADIUS = 0.95;
+export const RACE_FINISH_TIMEOUT = 30;
 const COLORS = [0xffbf38, 0xff5f80, 0x56d9c1, 0x8c7bff, 0x4dc6ff, 0xff854f];
 const NAMES = ['YOU', 'PIP', 'NOVA', 'MOSS', 'ZIPP', 'ROCO'];
 
@@ -53,7 +55,7 @@ function normalizeInput(input: InputFrame | undefined): InputFrame {
 }
 
 function updateProjection(kart: KartState): void {
-  const projection = projectToTrack(kart.x, kart.z);
+  const projection = projectToTrack(kart.x, kart.z, kart.trackDistance);
   kart.trackDistance = projection.distance;
   kart.lateralOffset = projection.offset;
   kart.y = projection.height;
@@ -109,7 +111,12 @@ function advanceKart(state: RaceState, kart: KartState, input: InputFrame): void
   kart.spinTime = Math.max(0, kart.spinTime - FIXED_DT);
   kart.hopTime = Math.max(0, kart.hopTime - FIXED_DT);
   kart.hitCooldown = Math.max(0, kart.hitCooldown - FIXED_DT);
-  if (kart.finishTime !== null) { kart.speed = 0; return; }
+  if (kart.finishTime !== null) {
+    input = getAIInput(state, kart.id);
+    kart.boostTime = 0;
+    kart.driftTime = 0;
+    kart.driftDirection = 0;
+  }
   if (input.useItem && !kart.previousItem) useItem(state, kart);
   kart.previousItem = input.useItem;
   if (input.drift && !kart.previousDrift && kart.speed > 5 && kart.spinTime === 0) kart.hopTime = 0.32;
@@ -133,6 +140,7 @@ function advanceKart(state: RaceState, kart: KartState, input: InputFrame): void
   }
   if (kart.boostTime > 0) maxSpeed *= 1.46;
   if (onGrass) maxSpeed = Math.min(maxSpeed, kart.boostTime > 0 ? 26 : 14);
+  if (kart.finishTime !== null) maxSpeed = 12;
   const spinning = kart.spinTime > 0;
   const acceleration = spinning ? 0 : input.throttle * (kart.boostTime > 0 ? 36 : onGrass ? 13 : 22);
   const deceleration = spinning ? 12 : input.brake ? 42 : input.throttle > 0 ? 2.1 : 5.5;
@@ -155,10 +163,8 @@ function advanceKart(state: RaceState, kart: KartState, input: InputFrame): void
 function collideKarts(state: RaceState): void {
   for (let a = 0; a < state.karts.length; a++) {
     const first = state.karts[a]!;
-    if (first.finishTime !== null) continue;
     for (let b = a + 1; b < state.karts.length; b++) {
       const second = state.karts[b]!;
-      if (second.finishTime !== null) continue;
       const dx = second.x - first.x;
       const dz = second.z - first.z;
       const distance = Math.hypot(dx, dz);
@@ -190,7 +196,7 @@ function collideKarts(state: RaceState): void {
 }
 
 function hitKart(state: RaceState, kart: KartState): void {
-  if (kart.spinTime > 0 || kart.finishTime !== null) return;
+  if (kart.spinTime > 0) return;
   kart.spinTime = 1.05;
   kart.speed *= 0.3;
   kart.driftTime = 0;
@@ -217,7 +223,7 @@ function advanceItems(state: RaceState): void {
     trap.life -= FIXED_DT;
     trap.age += FIXED_DT;
     for (const kart of state.karts) {
-      if (kart.finishTime !== null || kart.spinTime > 0 || (kart.id === trap.ownerId && trap.age < 1.2)) continue;
+      if (kart.spinTime > 0 || (kart.id === trap.ownerId && trap.age < 1.2)) continue;
       if (Math.hypot(kart.x - trap.x, kart.z - trap.z) < 1.55) {
         hitKart(state, kart);
         trap.life = 0;
@@ -247,7 +253,7 @@ function advanceItems(state: RaceState): void {
       if (bolt.bounces >= 4) bolt.life = 0;
     }
     for (const kart of state.karts) {
-      if (kart.finishTime !== null || kart.spinTime > 0 || (kart.id === bolt.ownerId && bolt.life > 4.7)) continue;
+      if (kart.spinTime > 0 || (kart.id === bolt.ownerId && bolt.life > 4.7)) continue;
       // Swept segment collision prevents a fast bolt tunnelling through a kart.
       const dx = bolt.x - previousX;
       const dz = bolt.z - previousZ;
@@ -287,5 +293,9 @@ export function stepRace(state: RaceState, inputs: readonly InputFrame[]): void 
   collideKarts(state);
   advanceItems(state);
   for (let i = 0; i < state.karts.length; i++) updateLapTracking(state, state.karts[i]!, previous[i]!);
-  if (state.karts[0]!.finishTime !== null) state.phase = 'finished';
+  const firstFinish = Math.min(...state.karts.map((kart) => kart.finishTime ?? Infinity));
+  if (state.karts[0]!.finishTime !== null || state.time - firstFinish >= RACE_FINISH_TIMEOUT) {
+    // Null finish times remain null so results can identify DNF racers.
+    state.phase = 'finished';
+  }
 }

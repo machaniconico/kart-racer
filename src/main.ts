@@ -2,8 +2,9 @@ import './style.css';
 import { AudioEngine } from './audio/AudioEngine';
 import { Controls } from './input/Controls';
 import { GameRenderer } from './render/GameRenderer';
+import { captureRenderSnapshot } from './render/snapshot';
 import { createRace, FIXED_DT, getAIInput, stepRace } from './sim';
-import type { InputFrame, InputSource, Pose, RaceState } from './sim';
+import type { InputFrame, InputSource, RaceState } from './sim';
 import { GameUI } from './ui/GameUI';
 import { loadBest, loadMuted, saveBest, saveMuted } from './storage';
 
@@ -27,7 +28,7 @@ let state = createRace(seed());
 const cpuSource: InputSource = { sample: getAIInput };
 // A future network source can implement this same sample(state, kartId) boundary.
 const inputSources: InputSource[] = state.karts.map((kart) => kart.id === 0 ? controls : cpuSource);
-let previous: Pose[] = state.karts.map((kart) => ({ ...kart }));
+let previous = captureRenderSnapshot(state);
 let screen: 'title' | 'race' | 'results' = 'title';
 let paused = false;
 let accumulator = 0;
@@ -54,7 +55,7 @@ try {
 function start(): void {
   if (fatal) return;
   state = createRace(seed());
-  previous = state.karts.map((kart) => ({ ...kart }));
+  previous = captureRenderSnapshot(state);
   accumulator = 0;
   lastTime = performance.now();
   screen = 'race';
@@ -93,7 +94,7 @@ function title(): void {
   paused = false;
   accumulator = 0;
   state = createRace(seed());
-  previous = state.karts.map((kart) => ({ ...kart }));
+  previous = captureRenderSnapshot(state);
   controls.setEnabled(false);
   audio.suspend();
   ui.setPaused(false);
@@ -105,9 +106,9 @@ function finish(): void {
   screen = 'results';
   controls.setEnabled(false);
   audio.finishRace();
-  const time = state.karts[0].finishTime ?? state.time;
-  const isRecord = best === null || time < best;
-  if (isRecord) { best = time; saveBest(time); }
+  const time = state.karts[0].finishTime;
+  const isRecord = time !== null && (best === null || time < best);
+  if (isRecord && time !== null) { best = time; saveBest(time); }
   ui.showResults(state, best, isRecord);
   ui.show('results');
 }
@@ -147,7 +148,7 @@ function frame(now: number): void {
     accumulator += elapsed;
     // No wall-clock variable step enters sim. Long background frames are paused/clamped.
     while (accumulator >= FIXED_DT && state.phase !== 'finished') {
-      previous = state.karts.map(({ x, y, z, heading }) => ({ x, y, z, heading }));
+      previous = captureRenderSnapshot(state);
       const inputs: InputFrame[] = state.karts.map((kart) => inputSources[kart.id].sample(state, kart.id));
       stepRace(state, inputs);
       audio.playEvents(state.events);
@@ -178,7 +179,7 @@ if (import.meta.env.DEV) {
       for (let i = 0; i < Math.min(ticks, 60 * 600) && state.phase !== 'finished'; i++) {
         stepRace(state, state.karts.map((kart) => autopilot || kart.id > 0 ? getAIInput(state, kart.id) : controls.sample(state, kart.id)));
       }
-      previous = state.karts.map((kart) => ({ ...kart }));
+      previous = captureRenderSnapshot(state);
       ui.update(state);
       if (state.phase === 'finished' && screen === 'race') finish();
     },

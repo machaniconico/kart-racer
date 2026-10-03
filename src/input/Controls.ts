@@ -15,8 +15,7 @@ const clamp = (value: number, min: number, max: number): number => Math.min(max,
 
 /** Converts every local input device into the same fixed-tick simulation input. */
 export class Controls implements InputSource {
-  readonly isTouch: boolean;
-
+  private touchMode: boolean;
   private enabled = false;
   private auto = false;
   private readonly keys = new Set<string>();
@@ -31,12 +30,14 @@ export class Controls implements InputSource {
   private readonly originalTouchAction: string;
 
   constructor(private readonly root: HTMLElement) {
-    this.isTouch = window.matchMedia?.('(pointer: coarse)').matches === true || navigator.maxTouchPoints > 0;
+    this.touchMode = window.matchMedia?.('(pointer: coarse)').matches === true;
     this.auto = this.isTouch;
     this.pad = root.querySelector<HTMLElement>('#steering-pad');
     this.knob = root.querySelector<HTMLElement>('#steering-knob');
     this.autoButton = root.querySelector<HTMLButtonElement>('#auto-accelerate');
     this.originalTouchAction = root.style.touchAction;
+    root.style.touchAction = 'none';
+    root.classList.toggle('touch-device', this.isTouch);
 
     this.listen(window, 'keydown', this.onKeyDown as EventListener);
     this.listen(window, 'keyup', this.onKeyUp as EventListener);
@@ -44,13 +45,16 @@ export class Controls implements InputSource {
     this.listen(document, 'visibilitychange', () => {
       if (document.hidden) this.reset();
     });
+    this.listen(root, 'pointerdown', ((event: PointerEvent) => {
+      if (event.pointerType === 'touch') this.setTouchMode(true);
+    }) as EventListener, { capture: true });
     this.listen(root, 'contextmenu', (event) => {
       if (this.enabled) event.preventDefault();
     });
     // touch-action handles Pointer Events; these also cover older WebKit gestures.
     for (const type of ['touchmove', 'gesturestart', 'gesturechange', 'gestureend']) {
       this.listen(root, type, (event) => {
-        if (this.enabled && event.cancelable) event.preventDefault();
+        if (event.cancelable) event.preventDefault();
       }, { passive: false });
     }
 
@@ -72,6 +76,10 @@ export class Controls implements InputSource {
     this.setAutoAccelerate(this.auto);
   }
 
+  get isTouch(): boolean {
+    return this.touchMode;
+  }
+
   get autoAccelerate(): boolean {
     return this.auto;
   }
@@ -85,7 +93,6 @@ export class Controls implements InputSource {
   setEnabled(value: boolean): void {
     if (this.enabled === value) return;
     this.enabled = value;
-    this.root.style.touchAction = value ? 'none' : this.originalTouchAction;
     this.reset();
   }
 
@@ -146,20 +153,26 @@ export class Controls implements InputSource {
   }
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
-    if (!this.enabled || !GAME_KEYS.has(event.code) || event.ctrlKey || event.metaKey || event.altKey) return;
-    const target = event.target;
-    if (target instanceof HTMLElement && (target.isContentEditable || target.closest('input, textarea, select'))) return;
-    // Space activates focused utility buttons normally, including mute/pause/auto.
-    if (event.code === 'Space' && target instanceof HTMLElement && target.closest('button') && target.getClientRects().length > 0) return;
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    this.setTouchMode(false);
+    this.setAutoAccelerate(false);
+    if (!this.enabled || !GAME_KEYS.has(event.code)) return;
     event.preventDefault();
     if (ITEM_KEYS.has(event.code) && !event.repeat && !this.keys.has(event.code)) this.itemQueued = true;
     this.keys.add(event.code);
   };
 
   private readonly onKeyUp = (event: KeyboardEvent): void => {
-    if (this.keys.has(event.code) && this.enabled) event.preventDefault();
+    if (this.enabled && GAME_KEYS.has(event.code)) event.preventDefault();
     this.keys.delete(event.code);
   };
+
+  private setTouchMode(value: boolean): void {
+    if (this.touchMode === value) return;
+    this.reset();
+    this.touchMode = value;
+    this.root.classList.toggle('touch-device', value);
+  }
 
   private bindPointer(element: HTMLElement | null, action: TouchAction): void {
     if (!element) return;

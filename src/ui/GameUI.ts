@@ -109,6 +109,16 @@ export class GameUI {
     this.mapContext = this.map.getContext('2d');
     this.prepareMap();
     this.pause.addEventListener('keydown', (event) => this.trapFocus(event));
+    this.root.addEventListener('mousedown', (event) => {
+      if (this.isPlaying() && event.target instanceof Element && event.target.closest('button')) {
+        event.preventDefault();
+      }
+    });
+    this.root.addEventListener('click', (event) => {
+      if (this.isPlaying() && event.target instanceof Element && event.target.closest('button')) {
+        this.canvas.focus({ preventScroll: true });
+      }
+    });
     this.show('title');
   }
 
@@ -163,7 +173,8 @@ export class GameUI {
     const countText = counting ? String(Math.min(3, Math.max(1, Math.ceil(state.countdown)))) : 'GO!';
     this.text('countdown-display', countText);
     countdown.classList.toggle('is-go', !counting);
-    this.get('wrong-way').hidden = !player.wrongWay;
+    this.get('wrong-way').hidden = !player.wrongWay && player.lapValid;
+    this.text('wrong-way', player.wrongWay ? '↶ 逆走しています' : 'コースアウト · この周回は無効です');
     const status = this.get('race-status');
     status.hidden = player.spinTime <= 0 && player.boostTime <= 0;
     this.text('race-status', player.spinTime > 0 ? 'SPIN!' : 'DASH!');
@@ -185,6 +196,7 @@ export class GameUI {
       this.get('item-hud-icon').classList.toggle('has-item', player.item !== null);
       const button = this.get<HTMLButtonElement>('use-item');
       button.disabled = player.item === null;
+      if (button.disabled) button.classList.remove('is-pressed');
       button.setAttribute('aria-label', player.item ? `${itemNames[player.item]}を使う` : 'アイテムを持っていません');
     }
     if (state.tick !== this.lastMapTick && (state.tick % 4 === 0 || this.lastMapTick < 0)) {
@@ -197,10 +209,12 @@ export class GameUI {
     const player = state.karts.find((kart) => kart.id === 0);
     if (!player) return;
     const rank = getRank(state, 0);
+    const didFinish = player.finishTime !== null;
+    this.text('results-heading', didFinish ? 'FINISH!' : 'RACE OVER');
     this.get('result-position').innerHTML = `${rank}<span>位</span>`;
-    this.text('finish-time', formatTime(player.finishTime ?? state.time));
+    this.text('finish-time', didFinish ? formatTime(player.finishTime!) : 'DNF');
     this.text('finish-best', best === null ? '—' : formatTime(best));
-    this.get('new-record').hidden = !isRecord;
+    this.get('new-record').hidden = !isRecord || !didFinish;
     const list = this.get('leaderboard');
     list.replaceChildren();
     const order = [...state.karts].sort((a, b) => getRank(state, a.id) - getRank(state, b.id));
@@ -223,11 +237,13 @@ export class GameUI {
       }
       const time = document.createElement('span');
       time.className = 'racer-time';
-      time.textContent = kart.finishTime !== null ? formatTime(kart.finishTime) : `走行中 · ${Math.min(3, kart.lap + 1)}周目`;
+      time.textContent = kart.finishTime !== null ? formatTime(kart.finishTime) : 'DNF · 未完走';
       row.append(position, swatch, name, time);
       list.append(row);
     }
-    this.text('result-laps', player.lapTimes.map((time, index) => `LAP ${index + 1}  ${formatTime(time)}`).join('   /   '));
+    const lapResults = player.lapTimes.map((time, index) => `LAP ${index + 1}  ${formatTime(time)}`);
+    if (!didFinish) lapResults.push(`未完走 · ${player.lap} / ${TOTAL_LAPS} 周完了`);
+    this.text('result-laps', lapResults.join('   /   '));
     this.setBest(best);
     this.show('results');
   }
@@ -248,6 +264,10 @@ export class GameUI {
     this.text('error-message', message);
     this.get('error-dialog').hidden = false;
     this.get('reload-page').focus({ preventScroll: true });
+  }
+
+  private isPlaying(): boolean {
+    return this.screen === 'race' && !this.paused && this.get('error-dialog').hidden;
   }
 
   private get<T extends HTMLElement = HTMLElement>(id: string): T {
