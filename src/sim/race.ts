@@ -10,9 +10,22 @@ export const DRIFT_ORANGE_TIME = 1.5;
 export const NEUTRAL_INPUT: Readonly<InputFrame> = Object.freeze({ steer: 0, throttle: 0, brake: false, drift: false, useItem: false });
 export const BOX_RESPAWN_TIME = 5;
 export const KART_RADIUS = 0.95;
-export const RACE_FINISH_TIMEOUT = 30;
+export const RACE_FINISH_TIMEOUT = 45;
 const COLORS = [0xffbf38, 0xff5f80, 0x56d9c1, 0x8c7bff, 0x4dc6ff, 0xff854f];
 const NAMES = ['YOU', 'PIP', 'NOVA', 'MOSS', 'ZIPP', 'ROCO'];
+
+export function getFinishTimeRemaining(state: RaceState): number | null {
+  const firstFinish = Math.min(...state.karts.map((kart) => kart.finishTime ?? Infinity));
+  if (!Number.isFinite(firstFinish)) return null;
+  // Race times are fixed ticks; discard floating-point dust at the deadline.
+  const ticksLeft = Math.round((firstFinish + RACE_FINISH_TIMEOUT - state.time) / FIXED_DT);
+  return Math.max(0, ticksLeft) * FIXED_DT;
+}
+
+export function isRaceTimedOut(state: RaceState): boolean {
+  // A human finish on the deadline still takes precedence over the timeout.
+  return state.phase === 'finished' && state.karts[0]!.finishTime === null && getFinishTimeRemaining(state) === 0;
+}
 
 export function createRace(seed: number): RaceState {
   const state: RaceState = {
@@ -66,20 +79,27 @@ function collideWall(state: RaceState, kart: KartState): void {
   if (Math.abs(kart.lateralOffset) <= limit) return;
   const sample = sampleTrack(kart.trackDistance);
   const side = Math.sign(kart.lateralOffset);
-  kart.x = sample.x + sample.nx * limit * side;
-  kart.z = sample.z + sample.nz * limit * side;
+  // Correct only penetration; rebuilding from the centre sample erases travel
+  // along the rail at polyline vertices and can pin a sliding kart in place.
+  const penetration = kart.lateralOffset - limit * side;
+  kart.x -= sample.nx * penetration;
+  kart.z -= sample.nz * penetration;
   kart.lateralOffset = limit * side;
-  const outward = (Math.sin(kart.heading) * sample.nx + Math.cos(kart.heading) * sample.nz) * side;
-  if (outward > 0.05) {
-    if (kart.speed > 10 && kart.hitCooldown === 0) {
+  const slip = kart.driftDirection * Math.min(0.23, kart.driftTime * 0.35);
+  const travelHeading = kart.heading - slip;
+  const outward = (Math.sin(travelHeading) * sample.nx + Math.cos(travelHeading) * sample.nz) * side;
+  if (outward > 0) {
+    if (kart.speed * outward > 4 && kart.hitCooldown === 0) {
       state.events.push({ type: 'hit', kartId: kart.id });
       kart.hitCooldown = 0.7;
     }
-    kart.speed *= 0.72;
-    // Preserve the tangential component and let the kart slide along the rail.
-    const vx = Math.sin(kart.heading) - sample.nx * side * outward * 0.32;
-    const vz = Math.cos(kart.heading) - sample.nz * side * outward * 0.32;
-    kart.heading = Math.atan2(vx, vz);
+    // Remove the incoming normal velocity once. Tangential velocity survives,
+    // so sustained shallow contact slides instead of multiplying drag each tick.
+    const vx = Math.sin(travelHeading) - sample.nx * side * outward;
+    const vz = Math.cos(travelHeading) - sample.nz * side * outward;
+    const tangent = Math.hypot(vx, vz);
+    kart.speed *= tangent;
+    kart.heading = (tangent > 0.0001 ? Math.atan2(vx, vz) : Math.atan2(sample.tx, sample.tz)) + slip;
   }
 }
 
@@ -293,9 +313,8 @@ export function stepRace(state: RaceState, inputs: readonly InputFrame[]): void 
   collideKarts(state);
   advanceItems(state);
   for (let i = 0; i < state.karts.length; i++) updateLapTracking(state, state.karts[i]!, previous[i]!);
-  const firstFinish = Math.min(...state.karts.map((kart) => kart.finishTime ?? Infinity));
-  if (state.karts[0]!.finishTime !== null || state.time - firstFinish >= RACE_FINISH_TIMEOUT) {
-    // Null finish times remain null so results can identify DNF racers.
+  if (state.karts[0]!.finishTime !== null || getFinishTimeRemaining(state) === 0) {
+    // Preserve null times: results distinguish a timeout from a human finish.
     state.phase = 'finished';
   }
 }

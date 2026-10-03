@@ -18,6 +18,7 @@ export class Controls implements InputSource {
   private touchMode: boolean;
   private enabled = false;
   private auto = false;
+  private touchAuto = true;
   private readonly keys = new Set<string>();
   private readonly pointers = new Map<number, { action: TouchAction; element: HTMLElement }>();
   private readonly listeners: Array<() => void> = [];
@@ -27,7 +28,6 @@ export class Controls implements InputSource {
   private steering = 0;
   private itemQueued = false;
   private gamepadItemHeld = false;
-  private readonly originalTouchAction: string;
 
   constructor(private readonly root: HTMLElement) {
     this.touchMode = window.matchMedia?.('(pointer: coarse)').matches === true;
@@ -35,8 +35,6 @@ export class Controls implements InputSource {
     this.pad = root.querySelector<HTMLElement>('#steering-pad');
     this.knob = root.querySelector<HTMLElement>('#steering-knob');
     this.autoButton = root.querySelector<HTMLButtonElement>('#auto-accelerate');
-    this.originalTouchAction = root.style.touchAction;
-    root.style.touchAction = 'none';
     root.classList.toggle('touch-device', this.isTouch);
 
     this.listen(window, 'keydown', this.onKeyDown as EventListener);
@@ -52,7 +50,11 @@ export class Controls implements InputSource {
       if (this.enabled) event.preventDefault();
     });
     // touch-action handles Pointer Events; these also cover older WebKit gestures.
-    for (const type of ['touchmove', 'gesturestart', 'gesturechange', 'gestureend']) {
+    this.listen(root, 'touchmove', ((event: TouchEvent) => {
+      const scrollable = event.target instanceof Element && event.target.closest('.results-content');
+      if (event.cancelable && (!scrollable || event.touches.length !== 1)) event.preventDefault();
+    }) as EventListener, { passive: false });
+    for (const type of ['gesturestart', 'gesturechange', 'gestureend']) {
       this.listen(root, type, (event) => {
         if (event.cancelable) event.preventDefault();
       }, { passive: false });
@@ -73,7 +75,7 @@ export class Controls implements InputSource {
     if (this.autoButton) {
       this.listen(this.autoButton, 'click', () => this.setAutoAccelerate(!this.auto));
     }
-    this.setAutoAccelerate(this.auto);
+    this.applyAutoAccelerate(this.auto);
   }
 
   get isTouch(): boolean {
@@ -85,6 +87,11 @@ export class Controls implements InputSource {
   }
 
   setAutoAccelerate(value: boolean): void {
+    this.touchAuto = value;
+    this.applyAutoAccelerate(value);
+  }
+
+  private applyAutoAccelerate(value: boolean): void {
     this.auto = value;
     this.autoButton?.setAttribute('aria-pressed', String(value));
     this.autoButton?.classList.toggle('active', value);
@@ -142,7 +149,6 @@ export class Controls implements InputSource {
   dispose(): void {
     this.enabled = false;
     this.reset();
-    this.root.style.touchAction = this.originalTouchAction;
     for (const remove of this.listeners) remove();
     this.listeners.length = 0;
   }
@@ -155,7 +161,7 @@ export class Controls implements InputSource {
   private readonly onKeyDown = (event: KeyboardEvent): void => {
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     this.setTouchMode(false);
-    this.setAutoAccelerate(false);
+    this.applyAutoAccelerate(false);
     if (!this.enabled || !GAME_KEYS.has(event.code)) return;
     event.preventDefault();
     if (ITEM_KEYS.has(event.code) && !event.repeat && !this.keys.has(event.code)) this.itemQueued = true;
@@ -172,12 +178,24 @@ export class Controls implements InputSource {
     this.reset();
     this.touchMode = value;
     this.root.classList.toggle('touch-device', value);
+    this.applyAutoAccelerate(value ? this.touchAuto : false);
   }
 
   private bindPointer(element: HTMLElement | null, action: TouchAction): void {
     if (!element) return;
+    this.listen(element, 'control-disabled', () => {
+      for (const [pointerId, pointer] of this.pointers) {
+        if (pointer.element !== element) continue;
+        this.pointers.delete(pointerId);
+        try {
+          if (element.hasPointerCapture(pointerId)) element.releasePointerCapture(pointerId);
+        } catch { /* The pointer may already have ended. */ }
+      }
+      element.classList.remove('is-pressed');
+      if (action === 'item') this.itemQueued = false;
+    });
     this.listen(element, 'pointerdown', ((event: PointerEvent) => {
-      if (!this.enabled || (event.pointerType === 'mouse' && event.button !== 0)) return;
+      if (!this.enabled || element.matches(':disabled') || (event.pointerType === 'mouse' && event.button !== 0)) return;
       if (action === 'steer' && this.hasPointer('steer')) return;
       this.pointers.set(event.pointerId, { action, element });
       element.classList.add('is-pressed');

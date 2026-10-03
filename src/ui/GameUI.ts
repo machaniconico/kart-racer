@@ -1,6 +1,7 @@
 import { getRank, TOTAL_LAPS } from '../sim/laps';
+import { getFinishTimeRemaining, isRaceTimedOut } from '../sim/race';
 import { TRACK_SAMPLES } from '../sim/track';
-import type { ItemType, RaceState } from '../sim/types';
+import type { ItemType, KartState, RaceState } from '../sim/types';
 
 type Screen = 'title' | 'race' | 'results';
 
@@ -21,6 +22,11 @@ const itemShortNames: Record<ItemType, string> = { dash: 'ダッシュ', trap: '
 export function formatTime(seconds: number): string {
   const hundredths = Math.max(0, Math.floor(seconds * 100));
   return `${String(Math.floor(hundredths / 6000)).padStart(2, '0')}:${String(Math.floor(hundredths / 100) % 60).padStart(2, '0')}.${String(hundredths % 100).padStart(2, '0')}`;
+}
+
+export function formatResultTime(state: RaceState, kart: KartState): string {
+  if (kart.finishTime !== null) return formatTime(kart.finishTime);
+  return isRaceTimedOut(state) ? 'DNF · 未完走' : '走行中 · 推定順位';
 }
 
 /** DOM and 2D HUD only. The rendered world and simulation stay independent. */
@@ -77,7 +83,7 @@ export class GameUI {
         <div class="race-times"><div><span>TOTAL</span><strong id="total-time">00:00.00</strong></div><div><span>LAP</span><strong id="lap-time">00:00.00</strong></div><div class="best-lap-line"><span>BEST LAP</span><strong id="best-lap">—</strong></div></div>
         <div class="item-display"><div id="item-hud-icon" class="item-icon">${emptyItem}</div><div><span class="hud-eyebrow">YOUR ITEM</span><strong id="item-name">ボックスを取ろう</strong><span class="item-key"><kbd>SHIFT</kbd> / <kbd>E</kbd> で使う</span></div></div>
         <div id="countdown-display" class="countdown-display" role="status" aria-live="polite" hidden>3</div>
-        <div class="race-notices"><p id="wrong-way" class="wrong-way" role="status" hidden>↶ 逆走しています</p><p id="race-status" class="race-status" hidden></p></div>
+        <div class="race-notices"><p id="finish-countdown" class="finish-countdown" role="timer" hidden></p><p id="wrong-way" class="wrong-way" role="status" hidden>↶ 逆走しています</p><p id="race-status" class="race-status" hidden></p></div>
         <div class="speed-display"><strong id="speed-value">0</strong><span>km/h</span><div id="drift-meter" class="drift-meter" data-stage="0"><div class="drift-meter-label"><span id="drift-label">MINI TURBO</span><span class="drift-levels">Ⅰ / Ⅱ</span></div><div class="drift-track"><div id="drift-fill" class="drift-fill"></div><i class="drift-threshold"></i></div></div></div>
         <div class="minimap"><span>MEADOW LOOP</span><canvas id="minimap-canvas" width="360" height="256" aria-label="コース全体図。明るい枠のマーカーがあなたです。"></canvas><span class="map-you"><i></i>YOU</span></div>
         <div class="touch-controls" aria-label="タッチ操作">
@@ -173,6 +179,9 @@ export class GameUI {
     const countText = counting ? String(Math.min(3, Math.max(1, Math.ceil(state.countdown)))) : 'GO!';
     this.text('countdown-display', countText);
     countdown.classList.toggle('is-go', !counting);
+    const remaining = getFinishTimeRemaining(state);
+    this.get('finish-countdown').hidden = remaining === null || state.phase !== 'racing';
+    this.text('finish-countdown', remaining === null ? '' : `レース終了まで ${Math.ceil(remaining)}秒`);
     this.get('wrong-way').hidden = !player.wrongWay && player.lapValid;
     this.text('wrong-way', player.wrongWay ? '↶ 逆走しています' : 'コースアウト · この周回は無効です');
     const status = this.get('race-status');
@@ -196,7 +205,10 @@ export class GameUI {
       this.get('item-hud-icon').classList.toggle('has-item', player.item !== null);
       const button = this.get<HTMLButtonElement>('use-item');
       button.disabled = player.item === null;
-      if (button.disabled) button.classList.remove('is-pressed');
+      if (button.disabled) {
+        button.classList.remove('is-pressed');
+        button.dispatchEvent(new Event('control-disabled'));
+      }
       button.setAttribute('aria-label', player.item ? `${itemNames[player.item]}を使う` : 'アイテムを持っていません');
     }
     if (state.tick !== this.lastMapTick && (state.tick % 4 === 0 || this.lastMapTick < 0)) {
@@ -237,7 +249,7 @@ export class GameUI {
       }
       const time = document.createElement('span');
       time.className = 'racer-time';
-      time.textContent = kart.finishTime !== null ? formatTime(kart.finishTime) : 'DNF · 未完走';
+      time.textContent = formatResultTime(state, kart);
       row.append(position, swatch, name, time);
       list.append(row);
     }

@@ -4,8 +4,10 @@ import {
   KART_RADIUS, NEUTRAL_INPUT, ROAD_HALF_WIDTH, TOTAL_LAPS, TRACK_LENGTH,
   WALL_HALF_WIDTH, chooseItem, createRace, getAIInput, getRank, projectToTrack,
   sampleTrack, stepRace, updateLapTracking, TRACK_SAMPLES, RACE_FINISH_TIMEOUT,
+  getFinishTimeRemaining, isRaceTimedOut,
 } from './index';
 import type { InputFrame, KartState, RaceState } from './types';
+import { formatResultTime } from '../ui/GameUI';
 
 const accelerate: InputFrame = { ...NEUTRAL_INPUT, throttle: 1 };
 
@@ -44,18 +46,41 @@ function travelLap(state: RaceState, lapTime: number): void {
   for (let i = 1; i <= steps; i++) trackMove(state, 0.5 + i / steps * TRACK_LENGTH, startTime + i / steps * lapTime);
 }
 
+function minimumRadius(points: readonly { x: number; z: number }[]): number {
+  return Math.min(...points.map((b, i) => {
+    const a = points[(i + points.length - 1) % points.length]!;
+    const c = points[(i + 1) % points.length]!;
+    const twiceArea = Math.abs((b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x));
+    return Math.hypot(b.x - a.x, b.z - a.z) * Math.hypot(c.x - b.x, c.z - b.z) *
+      Math.hypot(c.x - a.x, c.z - a.z) / (2 * twiceArea);
+  }));
+}
+
+function expectSafeRadius(points: readonly { x: number; z: number }[]): void {
+  expect(minimumRadius(points)).toBeGreaterThan(WALL_HALF_WIDTH);
+  expect(minimumRadius(points)).toBeGreaterThanOrEqual(13);
+}
+
 describe('course and clock', () => {
   it('keeps the minimum course radius at least 13 metres and beyond the guardrails', () => {
-    for (let i = 0; i < TRACK_SAMPLES.length; i++) {
-      const a = TRACK_SAMPLES[(i + TRACK_SAMPLES.length - 1) % TRACK_SAMPLES.length]!;
-      const b = TRACK_SAMPLES[i]!;
-      const c = TRACK_SAMPLES[(i + 1) % TRACK_SAMPLES.length]!;
-      const twiceArea = Math.abs((b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x));
-      const radius = Math.hypot(b.x - a.x, b.z - a.z) * Math.hypot(c.x - b.x, c.z - b.z) *
-        Math.hypot(c.x - a.x, c.z - a.z) / (2 * twiceArea);
-      expect(radius, `curve at ${b.distance.toFixed(1)}m`).toBeGreaterThan(WALL_HALF_WIDTH);
-      expect(radius).toBeGreaterThanOrEqual(13);
-    }
+    expectSafeRadius(TRACK_SAMPLES);
+  });
+
+  it('rejects the original self-intersecting hairpin with the same radius assertion', () => {
+    // Original X/Z control points from 55ece2b, before the round-one course fix.
+    const points = [[0, 82], [46, 74], [87, 47], [91, 2], [65, -27], [86, -70],
+      [32, -91], [-26, -86], [-75, -62], [-91, -10], [-68, 38], [-31, 58]];
+    const legacy = points.flatMap((_, i) => Array.from({ length: 32 }, (_, j) => {
+      const t = j / 32;
+      const coordinate = (axis: number): number => {
+        const [a, b, c, d] = [-1, 0, 1, 2].map((offset) => points[(i + offset + points.length) % points.length]![axis]!);
+        return 0.55 * (2 * b! + (-a! + c!) * t + (2 * a! - 5 * b! + 4 * c! - d!) * t ** 2 +
+          (-a! + 3 * b! - 3 * c! + d!) * t ** 3);
+      };
+      return { x: coordinate(0), z: coordinate(1) };
+    }));
+    expect(minimumRadius(legacy)).toBeCloseTo(7.4, 0);
+    expect(() => expectSafeRadius(legacy)).toThrow();
   });
 
   it('projects continuous half-metre steps around the entire course at offsets from -10 to +10', () => {
@@ -122,16 +147,16 @@ describe('course and clock', () => {
 });
 
 describe('ordered directional checkpoints and lap timing', () => {
-  it('finishes three laps along the inside hairpin at a nine-metre offset without projection jumps', () => {
+  it.each([8.5, 9, 9.5, 10])('finishes three laps along the inside hairpin at offset %s without projection jumps', (offset) => {
     const state = startRace();
     const kart = state.karts[0]!;
-    place(kart, TRACK_LENGTH - 0.5, 9);
+    place(kart, TRACK_LENGTH - 0.5, offset);
     let elapsed = 0;
     for (let distance = 0; distance <= TRACK_LENGTH * TOTAL_LAPS + 1; distance += 0.5) {
       const previous = { x: kart.x, z: kart.z, trackDistance: kart.trackDistance };
       const point = sampleTrack(distance);
-      kart.x = point.x + point.nx * 9;
-      kart.z = point.z + point.nz * 9;
+      kart.x = point.x + point.nx * offset;
+      kart.z = point.z + point.nz * offset;
       const projection = projectToTrack(kart.x, kart.z, previous.trackDistance);
       kart.trackDistance = projection.distance;
       kart.lateralOffset = projection.offset;
@@ -145,6 +170,25 @@ describe('ordered directional checkpoints and lap timing', () => {
     expect(kart.lapTimes).toHaveLength(TOTAL_LAPS);
     expect(kart.finishTime).not.toBeNull();
   });
+
+  it.each([8.5, 9, 9.5, 10])('completes a fixed-tick driving probe targeting inside offset %s', (offset) => {
+    const state = startRace();
+    const kart = state.karts[0]!;
+    state.karts = [kart];
+    state.boxes = [];
+    place(kart, TRACK_LENGTH - 1, offset);
+    for (let tick = 0; tick < 60 * 360 && state.phase !== 'finished'; tick++) {
+      const target = sampleTrack(kart.trackDistance + 4);
+      const heading = Math.atan2(target.x + target.nx * offset - kart.x, target.z + target.nz * offset - kart.z);
+      const error = Math.atan2(Math.sin(heading - kart.heading), Math.cos(heading - kart.heading));
+      stepRace(state, [{ ...NEUTRAL_INPUT, throttle: kart.speed < 12 ? 1 : 0, steer: error * 3 }]);
+      expect(kart.lapValid, `offset ${offset}, distance ${kart.trackDistance.toFixed(1)}`).toBe(true);
+    }
+    expect(state.phase, JSON.stringify({ lap: kart.lap, checkpoint: kart.nextCheckpoint, progress: kart.lapProgress,
+      distance: kart.trackDistance, speed: kart.speed, offset: kart.lateralOffset })).toBe('finished');
+    expect(kart.lapTimes).toHaveLength(3);
+    expect(kart.finishTime).not.toBeNull();
+  }, 10_000);
 
   it('counts three full laps, records each time, and preserves total race time', () => {
     const state = startRace();
@@ -360,29 +404,74 @@ describe('CPU race integration', () => {
 
 
 describe('CPU finish independence', () => {
-  it('ends exactly 30 seconds after the earliest finish and preserves DNF through JSON replay', () => {
+  it.each([600, 3605])('ends exactly 45 seconds after first finish tick %s and preserves DNF through JSON replay', (firstFinishTick) => {
+    expect(RACE_FINISH_TIMEOUT).toBe(45);
     const state = startRace();
-    state.karts[1]!.finishTime = 10;
-    state.karts[2]!.finishTime = 15;
-    state.racingTicks = (10 + RACE_FINISH_TIMEOUT) / FIXED_DT - 2;
+    const firstFinish = firstFinishTick * FIXED_DT;
+    const deadlineTick = firstFinishTick + RACE_FINISH_TIMEOUT / FIXED_DT;
+    const deadline = deadlineTick * FIXED_DT;
+    state.karts[1]!.finishTime = firstFinish;
+    state.karts[2]!.finishTime = firstFinish + 5;
+    state.racingTicks = deadlineTick - 2;
     state.time = state.racingTicks * FIXED_DT;
     const restored: RaceState = JSON.parse(JSON.stringify(state));
     for (const race of [state, restored]) {
       stepRace(race, []);
       expect(race.phase).toBe('racing');
-      expect(race.time).toBeCloseTo(10 + RACE_FINISH_TIMEOUT - FIXED_DT, 10);
+      expect(getFinishTimeRemaining(race)).toBeCloseTo(FIXED_DT, 10);
+      expect(isRaceTimedOut(race)).toBe(false);
+      expect(race.time).toBeCloseTo(deadline - FIXED_DT, 10);
       stepRace(race, []);
       expect(race.phase).toBe('finished');
-      expect(race.time).toBe(10 + RACE_FINISH_TIMEOUT);
+      expect(getFinishTimeRemaining(race)).toBe(0);
+      expect(isRaceTimedOut(race)).toBe(true);
+      expect(formatResultTime(race, race.karts[0]!)).toBe('DNF · 未完走');
+      expect(formatResultTime(race, race.karts[3]!)).toBe('DNF · 未完走');
+      expect(race.time).toBe(deadline);
       expect(race.karts[0]!.finishTime).toBeNull();
-      expect(race.karts[1]!.finishTime).toBe(10);
-      expect(race.karts[2]!.finishTime).toBe(15);
+      expect(race.karts[1]!.finishTime).toBe(firstFinish);
+      expect(race.karts[2]!.finishTime).toBe(firstFinish + 5);
       expect(getRank(race, 1)).toBe(1);
       expect(getRank(race, 2)).toBe(2);
       stepRace(race, []);
-      expect(race.time).toBe(10 + RACE_FINISH_TIMEOUT);
+      expect(race.time).toBe(deadline);
     }
     expect(restored).toEqual(state);
+  });
+
+  it('announces 45 seconds at the first finish and counts down without resetting for later finishers', () => {
+    const state = startRace();
+    expect(getFinishTimeRemaining(state)).toBeNull();
+    state.time = 80;
+    state.karts[1]!.finishTime = 80;
+    expect(getFinishTimeRemaining(state)).toBe(45);
+    state.time = 81.2;
+    expect(Math.ceil(getFinishTimeRemaining(state)!)).toBe(44);
+    state.time = 100;
+    state.karts[2]!.finishTime = 100;
+    expect(getFinishTimeRemaining(state)).toBe(25);
+    expect(getFinishTimeRemaining(JSON.parse(JSON.stringify(state)))).toBe(25);
+  });
+
+  it.each([80, 125])('labels unfinished CPUs as running in progress order when the player finishes at %s', (time) => {
+    const state = startRace();
+    state.karts[1]!.finishTime = 80;
+    state.karts[0]!.finishTime = time;
+    state.racingTicks = Math.round(time / FIXED_DT) - 1;
+    const ahead = state.karts[4]!;
+    ahead.startedLap = true;
+    ahead.lap = 2;
+    ahead.lapProgress = 300;
+    stepRace(state, []);
+    expect(state.phase).toBe('finished');
+    expect(isRaceTimedOut(state)).toBe(false);
+    expect(getRank(state, ahead.id)).toBe(3);
+    expect(getRank(state, 2)).toBeGreaterThan(getRank(state, ahead.id));
+    expect(formatResultTime(state, ahead)).toBe('走行中 · 推定順位');
+    expect(formatResultTime(state, state.karts[2]!)).toBe('走行中 · 推定順位');
+    expect(formatResultTime(state, state.karts[1]!)).toBe('01:20.00');
+    const replay: RaceState = JSON.parse(JSON.stringify(state));
+    expect(formatResultTime(replay, replay.karts[4]!)).toBe('走行中 · 推定順位');
   });
 
   it('keeps the race open before anyone finishes and ends immediately on the human finish', () => {
@@ -442,6 +531,51 @@ describe('CPU finish independence', () => {
     expect(state.karts.slice(1).map((kart) => kart.lap)).toEqual([3, 3, 3, 3, 3]);
     expect(state.phase).toBe('racing');
   }, 20_000);
+});
+
+describe('wall contact velocity', () => {
+  it('loses speed in proportion to impact angle and removes the outward velocity once', () => {
+    const impact = (angle: number, offset: number): RaceState => {
+      const state = startRace();
+      const kart = state.karts[0]!;
+      place(kart, 25, offset);
+      kart.heading += angle;
+      kart.speed = 14;
+      stepRace(state, [accelerate]);
+      return state;
+    };
+    const limit = WALL_HALF_WIDTH - KART_RADIUS;
+    const free = impact(0.12, limit - 1);
+    const shallow = impact(0.12, limit - 0.01);
+    const steep = impact(1.2, limit - 0.01);
+    expect(shallow.karts[0]!.speed).toBeGreaterThan(free.karts[0]!.speed * 0.97);
+    expect(steep.karts[0]!.speed).toBeLessThan(free.karts[0]!.speed * 0.5);
+    expect(steep.events).toContainEqual({ type: 'hit', kartId: 0 });
+    for (const state of [shallow, steep]) {
+      const kart = state.karts[0]!;
+      const sample = sampleTrack(kart.trackDistance);
+      const normal = Math.sin(kart.heading) * sample.nx + Math.cos(kart.heading) * sample.nz;
+      expect(normal).toBeCloseTo(0, 8);
+      const speed = kart.speed;
+      stepRace(state, [accelerate]);
+      expect(kart.speed).toBeGreaterThan(speed * 0.99);
+      expect(state.events).not.toContainEqual({ type: 'hit', kartId: 0 });
+    }
+  });
+
+  it.each([false, true])('slides along the rail under sustained outward steering (drift=%s)', (drift) => {
+    const state = startRace();
+    const kart = state.karts[0]!;
+    place(kart, 25, WALL_HALF_WIDTH - KART_RADIUS - 0.01);
+    kart.heading += 0.12;
+    kart.speed = 14;
+    for (let tick = 0; tick < 120; tick++) {
+      stepRace(state, [{ ...accelerate, steer: 0.15, drift }]);
+      expect(Math.abs(kart.lateralOffset)).toBeLessThanOrEqual(WALL_HALF_WIDTH - KART_RADIUS + 0.01);
+    }
+    expect(kart.speed).toBeGreaterThan(11);
+    expect(kart.trackDistance).toBeGreaterThan(45);
+  });
 });
 
 describe('kart contact impulses', () => {
