@@ -201,10 +201,6 @@ h1 span { color: var(--lime); }
 .pause-shortcut kbd { border-color: #52736166; font-size: 8px; }
 .error-overlay { z-index: 10; }
 .error-overlay h2 { font-size: 23px; }
-.orientation-hint { display: none; position: absolute; z-index: 5; left: 50%; transform: translateX(-50%); width: max-content; max-width: calc(100% - 30px); padding: 9px 13px; border: 1px solid #ffffff35; border-radius: 5px; background: #173d35ed; gap: 10px; align-items: center; pointer-events: none; }
-.orientation-hint svg { width: 24px; height: 24px; flex-shrink: 0; }
-.orientation-hint > span { display: flex; flex-direction: column; font-size: 11px; font-weight: 750; gap: 3px; }
-.orientation-hint > span > span { font-size: 8px; font-weight: 500; color: #ffffffb3; }
 
 .touch-device .touch-controls { display: block; }
 .touch-device .keyboard-help { display: none; }
@@ -260,9 +256,6 @@ h1 span { color: var(--lime); }
   .course-index { display: none; }
   .course-strip small { font-size: 6px; letter-spacing: .7px; }
   .course-strip strong { font-size: 9px; letter-spacing: .4px; }
-  .orientation-hint { display: flex; bottom: 110px; }
-  [data-screen="race"] .orientation-hint { bottom: 304px; top: auto; }
-  [data-screen="results"] .orientation-hint, .is-paused .orientation-hint { display: none; }
   [data-screen="race"] .topbar { top: 18px; right: 16px; }
   .race-position { left: 17px; top: 21px; gap: 14px; }
   .position-group .hud-eyebrow, .lap-group .hud-eyebrow { font-size: 7px; }
@@ -419,7 +412,6 @@ h1 span { color: var(--lime); }
   .title-description { display: none; }
   .title-tagline { font-size: 20px; }
   .start-button { margin-top: 24px; }
-  .orientation-hint { bottom: 101px; }
   .course-strip { bottom: 28px; }
   .results-content { padding: 18px 19px; }
   .finish-summary { padding: 10px 0; margin-top: 10px; }
@@ -429,8 +421,6 @@ h1 span { color: var(--lime); }
 }
 
 @media (max-height: 660px) and (max-width: 700px) and (orientation: portrait) {
-  [data-screen="race"] .orientation-hint { top: 165px; bottom: auto; left: 17px; transform: none; padding: 7px 10px; }
-  [data-screen="race"] .orientation-hint > span > span { display: none; }
   .minimap { top: 161px; }
   .race-notices { top: 272px; }
   .finish-countdown { left: 4px; right: auto; }
