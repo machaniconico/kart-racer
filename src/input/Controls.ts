@@ -27,7 +27,6 @@ export class Controls implements InputSource {
   private readonly autoButton: HTMLButtonElement | null;
   private steering = 0;
   private itemQueued = false;
-  private gamepadItemHeld = false;
 
   constructor(private readonly root: HTMLElement) {
     this.touchMode = window.matchMedia?.('(pointer: coarse)').matches === true;
@@ -68,7 +67,7 @@ export class Controls implements InputSource {
     this.bindPointer(itemButton, 'item');
     if (itemButton) {
       this.listen(itemButton, 'click', (event) => {
-        // Pointer presses were already queued on pointerdown. Preserve keyboard/AT activation.
+        // Pointer presses are held via this.pointers. Keyboard/AT activation is a one-tick pulse.
         if (this.enabled && (event as MouseEvent).detail === 0) this.itemQueued = true;
       });
     }
@@ -105,8 +104,6 @@ export class Controls implements InputSource {
 
   sample(state: RaceState, _kartId: number): InputFrame {
     const gamepad = this.readGamepad();
-    const gamepadItemPressed = gamepad.useItem && !this.gamepadItemHeld;
-    this.gamepadItemHeld = gamepad.useItem;
 
     if (!this.enabled || state.phase !== 'racing') {
       this.itemQueued = false;
@@ -124,7 +121,7 @@ export class Controls implements InputSource {
       throttle: brake ? 0 : Math.max(Number(accelerating), gamepad.throttle),
       brake,
       drift: this.keys.has('Space') || this.hasPointer('drift') || gamepad.drift,
-      useItem: this.itemQueued || gamepadItemPressed,
+      useItem: this.itemQueued || this.itemHeld() || gamepad.useItem,
     };
     this.itemQueued = false;
     return frame;
@@ -133,7 +130,6 @@ export class Controls implements InputSource {
   reset(): void {
     this.keys.clear();
     this.itemQueued = false;
-    this.gamepadItemHeld = false;
     const held = [...this.pointers.entries()];
     this.pointers.clear();
     for (const [pointerId, { element }] of held) {
@@ -164,7 +160,6 @@ export class Controls implements InputSource {
     this.applyAutoAccelerate(false);
     if (!this.enabled || !GAME_KEYS.has(event.code)) return;
     event.preventDefault();
-    if (ITEM_KEYS.has(event.code) && !event.repeat && !this.keys.has(event.code)) this.itemQueued = true;
     this.keys.add(event.code);
   };
 
@@ -200,7 +195,6 @@ export class Controls implements InputSource {
       this.pointers.set(event.pointerId, { action, element });
       element.classList.add('is-pressed');
       try { element.setPointerCapture(event.pointerId); } catch { /* Capture is best effort. */ }
-      if (action === 'item') this.itemQueued = true;
       if (action === 'steer') this.updateSteering(event);
     }) as EventListener);
     this.listen(element, 'pointermove', ((event: PointerEvent) => {
@@ -234,6 +228,11 @@ export class Controls implements InputSource {
 
   private moveKnob(x: number, y: number): void {
     if (this.knob) this.knob.style.transform = `translate(${x}px, ${y}px)`;
+  }
+
+  private itemHeld(): boolean {
+    for (const key of ITEM_KEYS) if (this.keys.has(key)) return true;
+    return this.hasPointer('item');
   }
 
   private hasPointer(action: TouchAction): boolean {

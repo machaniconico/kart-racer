@@ -1,4 +1,5 @@
 import { sampleTrack } from './track';
+import { decideItemUse, getSteeringError } from './itemAi';
 import type { InputFrame, RaceState } from './types';
 
 function angleDifference(angle: number): number {
@@ -11,12 +12,11 @@ export function getAIInput(state: RaceState, kartId: number): InputFrame {
   if (!kart) return { steer: 0, throttle: 0, brake: false, drift: false, useItem: false };
   const lookAhead = 7.5 + Math.max(0, kart.speed) * 0.24;
   const target = sampleTrack(kart.trackDistance + lookAhead);
-  const lineOffset = Math.sin(kart.aiPhase + state.time * 0.12) * 1.25;
-  const desired = Math.atan2(target.x + target.nx * lineOffset - kart.x, target.z + target.nz * lineOffset - kart.z);
-  const travelHeading = kart.heading - kart.driftDirection * Math.min(0.23, kart.driftTime * 0.35);
-  const error = angleDifference(desired - travelHeading);
+  const error = getSteeringError(state, kart);
+  const inkNoise = kart.effects.inkTime > 0 ? 0.35 * Math.sin(state.time * 7 + kart.aiPhase) : 0;
+  const steer = Math.max(-1, Math.min(1, error * 1.8 + inkNoise));
   if (kart.finishTime !== null) {
-    return { steer: Math.max(-1, Math.min(1, error * 1.8)), throttle: kart.speed < 10 ? 0.45 : 0,
+    return { steer, throttle: kart.speed < 10 ? 0.45 : 0,
       brake: kart.speed > 12, drift: false, useItem: false };
   }
   const later = sampleTrack(kart.trackDistance + lookAhead + 12);
@@ -24,11 +24,6 @@ export function getAIInput(state: RaceState, kartId: number): InputFrame {
   const shouldBrake = (Math.abs(error) > 0.65 || curvature > 0.62) && kart.speed > 21;
   const driftWindow = (state.racingTicks + kartId * 61) % 220;
   const drift = driftWindow < 115 && Math.abs(error) > 0.1 && Math.abs(error) < 0.75 && kart.speed > 16;
-  let useItem = false;
-  if (kart.item && (state.racingTicks + kartId * 47) % 95 === 0) {
-    if (kart.item === 'dash') useItem = Math.abs(error) < 0.35;
-    else if (kart.item === 'trap') useItem = true;
-    else useItem = Math.abs(error) < 0.38;
-  }
-  return { steer: Math.max(-1, Math.min(1, error * 1.8)), throttle: shouldBrake ? 0.35 : 1, brake: shouldBrake, drift, useItem };
+  const useItem = decideItemUse(state, kart);
+  return { steer, throttle: shouldBrake ? 0.35 : 1, brake: shouldBrake, drift, useItem };
 }

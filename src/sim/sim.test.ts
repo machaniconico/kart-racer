@@ -4,7 +4,8 @@ import {
   KART_RADIUS, NEUTRAL_INPUT, ROAD_HALF_WIDTH, TOTAL_LAPS, TRACK_LENGTH,
   WALL_HALF_WIDTH, chooseItem, createRace, getAIInput, getRank, projectToTrack,
   sampleTrack, stepRace, updateLapTracking, TRACK_SAMPLES, RACE_FINISH_TIMEOUT,
-  getFinishTimeRemaining, isRaceTimedOut,
+  getFinishTimeRemaining, isRaceTimedOut, KART_EFFECT_LAYOUT, ENTITY_KINDS,
+  decideItemUse, getKartModifiers, onKartContact, hitKart, useItem, advanceItems,
 } from './index';
 import type { InputFrame, KartState, RaceState } from './types';
 import { formatResultTime } from '../ui/GameUI';
@@ -60,6 +61,162 @@ function expectSafeRadius(points: readonly { x: number; z: number }[]): void {
   expect(minimumRadius(points)).toBeGreaterThan(WALL_HALF_WIDTH);
   expect(minimumRadius(points)).toBeGreaterThanOrEqual(13);
 }
+
+describe('eight racer roster and grid', () => {
+  it('creates ordered unique racers with one human and accepts custom profiles by slot', () => {
+    const state = createRace(42);
+    expect(state.karts.map((kart) => kart.id)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    expect(new Set(state.karts.map((kart) => kart.name)).size).toBe(8);
+    expect(new Set(state.karts.map((kart) => kart.color)).size).toBe(8);
+    expect(state.karts.filter((kart) => kart.human).map((kart) => kart.id)).toEqual([0]);
+    const racers = state.karts.map((kart) => ({ name: `Driver ${kart.id}`, color: kart.id, human: kart.id === 2 || kart.id === 5 }));
+    const custom = createRace(42, { racers });
+    expect(custom.karts.map(({ name, color, human }) => ({ name, color, human }))).toEqual(racers);
+    expect(custom.karts.map((kart) => kart.id)).toEqual(state.karts.map((kart) => kart.id));
+    racers[2]!.name = 'Changed';
+    expect(custom.karts[2]!.name).toBe('Driver 2');
+    const partial = createRace(42, { racers: [{ name: 'Host', color: 0, human: true }] });
+    expect(partial.karts).toHaveLength(8);
+    expect(partial.karts[0]).toMatchObject({ name: 'Host', color: 0, human: true });
+    expect(partial.karts.slice(1).every((kart) => !kart.human)).toBe(true);
+    expect(() => createRace(42, { racers: [...racers, racers[0]!] })).toThrow(RangeError);
+  });
+
+  it('places every grid slot inside the road, tangent-aligned and at least 2.2m apart', () => {
+    const { karts } = createRace(42);
+    for (const kart of karts) {
+      const projection = projectToTrack(kart.x, kart.z);
+      expect(Math.abs(kart.lateralOffset)).toBeLessThanOrEqual(2.5);
+      expect(Math.abs(projection.offset)).toBeLessThanOrEqual(2.5);
+      const angle = kart.heading - projection.heading;
+      expect(Math.abs(Math.atan2(Math.sin(angle), Math.cos(angle)))).toBeLessThan(0.1);
+      for (const other of karts.filter((candidate) => candidate.id > kart.id)) {
+        expect(Math.hypot(kart.x - other.x, kart.z - other.z)).toBeGreaterThanOrEqual(2.2);
+      }
+    }
+  });
+
+  it('initializes independent zero effects with a complete nonoverlapping eight-byte layout', () => {
+    const state = createRace(42);
+    for (const kart of state.karts) expect(Object.values(kart.effects).every((value) => value === 0)).toBe(true);
+    expect(KART_EFFECT_LAYOUT.map((field) => field.field).sort()).toEqual(Object.keys(state.karts[0]!.effects).sort());
+    const usedBits = Array<number>(8).fill(0);
+    for (const field of KART_EFFECT_LAYOUT) {
+      expect(field.byteOffset).toBeLessThan(8);
+      const bits = field.mask << field.shift;
+      expect(usedBits[field.byteOffset]! & bits).toBe(0);
+      usedBits[field.byteOffset]! |= bits;
+    }
+    expect(new Set(Object.values(ENTITY_KINDS)).size).toBe(Object.keys(ENTITY_KINDS).length);
+    state.karts[0]!.effects.inkTime = 4;
+    expect(state.karts.slice(1).every((kart) => kart.effects.inkTime === 0)).toBe(true);
+    expect(createRace(42).karts[0]!.effects.inkTime).toBe(0);
+  });
+});
+
+describe('human roster completion', () => {
+  function multiplayer(): RaceState {
+    const racers = createRace(42).karts.map(({ id, name, color }) => ({ name, color, human: id === 2 || id === 5 }));
+    const state = createRace(42, { racers });
+    for (let i = 0; i < 180; i++) stepRace(state, []);
+    return state;
+  }
+
+  it('uses the same driving speed for humans in any slot', () => {
+    const speeds = [0, 6].map((id) => {
+      const state = multiplayer();
+      for (const kart of state.karts) kart.human = kart.id === id;
+      const human = state.karts[id]!;
+      place(human, 30);
+      human.speed = 40;
+      stepRace(state, []);
+      return human.speed;
+    });
+    expect(speeds[0]).toBe(speeds[1]);
+  });
+
+  it('rubber-bands CPUs against the leading human, independent of slot order', () => {
+    const speed = (humanSlots: number[], cpuLeader: boolean): number => {
+      const state = multiplayer();
+      for (const kart of state.karts) {
+        kart.human = humanSlots.includes(kart.id);
+        kart.startedLap = true;
+        kart.lapProgress = -300;
+      }
+      const leadingHuman = state.karts[5]!;
+      leadingHuman.lapProgress = 300;
+      if (cpuLeader) state.karts[0]!.lapProgress = 1000;
+      const cpu = state.karts[7]!;
+      place(cpu, 30);
+      cpu.lapProgress = 0;
+      cpu.speed = 40;
+      stepRace(state, []);
+      return cpu.speed;
+    };
+    expect(speed([2, 5], true)).toBe(speed([5], false));
+    expect(speed([2, 5], false)).toBeGreaterThan(speed([2], false));
+  });
+
+  it('waits for both nonzero human slots and finishes immediately after the second finishes', () => {
+    const state = multiplayer();
+    state.karts[0]!.finishTime = 0;
+    state.karts[2]!.finishTime = 0;
+    stepRace(state, []);
+    expect(state.phase).toBe('racing');
+    expect(isRaceTimedOut(state)).toBe(false);
+    state.karts[5]!.finishTime = FIXED_DT;
+    stepRace(state, []);
+    expect(state.phase).toBe('finished');
+    expect(isRaceTimedOut(state)).toBe(false);
+  });
+
+  it('times out at exactly 45 seconds with one human unfinished, including after JSON restore', () => {
+    const state = multiplayer();
+    state.karts[2]!.finishTime = 0;
+    for (let tick = 0; tick < 45 / FIXED_DT - 1; tick++) stepRace(state, []);
+    expect(state.phase).toBe('racing');
+    expect(getFinishTimeRemaining(state)).toBeCloseTo(FIXED_DT, 10);
+    const restored: RaceState = JSON.parse(JSON.stringify(state));
+    for (const race of [state, restored]) {
+      stepRace(race, []);
+      expect(race.phase).toBe('finished');
+      expect(race.time).toBe(45);
+      expect(race.karts[5]!.finishTime).toBeNull();
+      expect(isRaceTimedOut(race)).toBe(true);
+    }
+    expect(restored).toEqual(state);
+  });
+
+  it('gives the last human finish on the deadline precedence over a timeout', () => {
+    const state = multiplayer();
+    state.karts[2]!.finishTime = 0;
+    state.racingTicks = 45 / FIXED_DT - 1;
+    const last = state.karts[5]!;
+    place(last, TRACK_LENGTH - 0.1);
+    last.startedLap = true;
+    last.lap = 2;
+    last.nextCheckpoint = 0;
+    last.lapProgress = TRACK_LENGTH - 0.1;
+    last.speed = 20;
+    stepRace(state, state.karts.map(() => accelerate));
+    expect(last.finishTime).toBe(45);
+    expect(state.phase).toBe('finished');
+    expect(isRaceTimedOut(state)).toBe(false);
+  });
+
+  it('keeps an all-CPU race running until all finish or the timeout expires', () => {
+    const state = createRace(42, { racers: [] });
+    for (let tick = 0; tick < 181; tick++) stepRace(state, []);
+    expect(state.phase).toBe('racing');
+    state.karts[0]!.finishTime = state.time;
+    stepRace(state, []);
+    expect(state.phase).toBe('racing');
+    for (const kart of state.karts) kart.finishTime ??= state.time;
+    stepRace(state, []);
+    expect(state.phase).toBe('finished');
+    expect(isRaceTimedOut(state)).toBe(false);
+  });
+});
 
 describe('course and clock', () => {
   it('keeps the minimum course radius at least 13 metres and beyond the guardrails', () => {
@@ -256,6 +413,7 @@ describe('ordered directional checkpoints and lap timing', () => {
 describe('deterministic inputs, PRNG and saves', () => {
   it('replays the same inputs and resumes a JSON snapshot exactly', () => {
     const first = startRace(991);
+    expect(first.karts).toHaveLength(8);
     for (let i = 0; i < 350; i++) stepRace(first, first.karts.map((kart) => getAIInput(first, kart.id)));
     const restored: RaceState = JSON.parse(JSON.stringify(first));
     for (let i = 0; i < 400; i++) {
@@ -277,9 +435,9 @@ describe('deterministic inputs, PRNG and saves', () => {
     let leaderDashes = 0;
     let lastDashes = 0;
     for (let i = 0; i < 3000; i++) {
-      expect(chooseItem(first, i % 6 + 1)).toBe(chooseItem(second, i % 6 + 1));
+      expect(chooseItem(first, i % 8 + 1)).toBe(chooseItem(second, i % 8 + 1));
       if (chooseItem(leading, 1) === 'dash') leaderDashes++;
-      if (chooseItem(trailing, 6) === 'dash') lastDashes++;
+      if (chooseItem(trailing, 8) === 'dash') lastDashes++;
     }
     expect(lastDashes).toBeGreaterThan(leaderDashes * 2.5);
     expect(createRace(0).seed).not.toBe(0);
@@ -294,6 +452,76 @@ describe('deterministic inputs, PRNG and saves', () => {
 });
 
 describe('driving and items', () => {
+  it('keeps the extracted modifier/contact hooks neutral for the original items', () => {
+    const state = startRace();
+    const first = state.karts[0]!;
+    const second = state.karts[1]!;
+    const saved = JSON.parse(JSON.stringify(state));
+    expect(getKartModifiers(state, first, accelerate)).toEqual({
+      input: accelerate, maxSpeedMultiplier: 1, contactHit: false, invulnerable: false,
+    });
+    onKartContact(state, first, second);
+    expect(state).toEqual(saved);
+  });
+
+  it.each(['trap', 'bolt'] as const)('exports typed %s entities and preserves lifetime and input edges', (item) => {
+    const state = startRace();
+    const kart = state.karts[0]!;
+    place(kart, 30);
+    kart.item = item;
+    const entityId = state.nextEntityId;
+    useItem(state, kart, { ...NEUTRAL_INPUT, useItem: true });
+    const entities = item === 'trap' ? state.traps : state.projectiles;
+    expect(entities).toHaveLength(1);
+    expect(entities[0]).toMatchObject({ kind: item, id: entityId, ownerId: kart.id });
+    expect(ENTITY_KINDS[entities[0]!.kind]).toBeGreaterThan(0);
+    const life = entities[0]!.life;
+    kart.item = item;
+    useItem(state, kart, { ...NEUTRAL_INPUT, useItem: true });
+    expect(entities).toHaveLength(1);
+    expect(kart.item).toBe(item);
+    advanceItems(state, FIXED_DT);
+    expect(entities[0]!.life).toBeCloseTo(life - FIXED_DT, 10);
+    expect(kart.spinTime).toBe(0);
+    useItem(state, kart, NEUTRAL_INPUT);
+    useItem(state, kart, { ...NEUTRAL_INPUT, useItem: true });
+    expect(state.traps.length + state.projectiles.length).toBe(2);
+  });
+
+  it('keeps hit response idempotent during a spin and clears drift and boost', () => {
+    const state = startRace();
+    const kart = state.karts[3]!;
+    kart.speed = 20;
+    kart.driftDirection = 1;
+    kart.driftTime = 1;
+    kart.boostTime = 1;
+    hitKart(state, kart);
+    expect(kart).toMatchObject({ speed: 6, spinTime: 1.05, driftTime: 0, driftDirection: 0, boostTime: 0 });
+    hitKart(state, kart);
+    expect(kart.speed).toBe(6);
+    expect(state.events.filter((event) => event.type === 'hit')).toEqual([{ type: 'hit', kartId: 3 }]);
+  });
+
+  it('delegates CPU item decisions and adds bounded deterministic ink steering noise', () => {
+    const state = startRace();
+    const kart = state.karts[3]!;
+    place(kart, 30);
+    kart.item = 'trap';
+    state.racingTicks = 190 - kart.id * 47;
+    expect(decideItemUse(state, kart)).toBe(true);
+    expect(getAIInput(state, kart.id).useItem).toBe(true);
+    state.racingTicks++;
+    expect(decideItemUse(state, kart)).toBe(false);
+    kart.aiPhase = Math.PI / 2;
+    const clear = getAIInput(state, kart.id);
+    expect(Math.abs(clear.steer)).toBeLessThan(0.6);
+    kart.effects.inkTime = 4;
+    const inked = getAIInput(state, kart.id);
+    expect(inked.steer).toBeCloseTo(clear.steer + 0.35, 10);
+    expect(inked.throttle).toBe(clear.throttle);
+    expect(getAIInput(JSON.parse(JSON.stringify(state)), kart.id)).toEqual(inked);
+  });
+
   it('charges two drift stages and hops before releasing a mini turbo', () => {
     for (const [charge, expected] of [[DRIFT_BLUE_TIME + 0.01, 0.65], [DRIFT_ORANGE_TIME + 0.01, 1.25]]) {
       const state = startRace();
@@ -373,7 +601,7 @@ describe('driving and items', () => {
   it('reflects bolts at rails and expires them after four bounces', () => {
     const state = startRace();
     const sample = sampleTrack(35);
-    const bolt = { id: 999, ownerId: 0, x: sample.x + sample.nx * 9.8, y: sample.y,
+    const bolt = { kind: 'bolt' as const, id: 999, ownerId: 0, x: sample.x + sample.nx * 9.8, y: sample.y,
       z: sample.z + sample.nz * 9.8, heading: Math.atan2(sample.nx, sample.nz), life: 5, bounces: 0 };
     state.projectiles.push(bolt);
     stepRace(state, []);
@@ -386,8 +614,9 @@ describe('driving and items', () => {
 });
 
 describe('CPU race integration', () => {
-  it('drives all six input sources around the course and completes a three lap race', () => {
-    const state = createRace(2026);
+  it('drives all eight input sources around the course and completes a three lap race', () => {
+    const racers = createRace(2026).karts.map(({ name, color }) => ({ name, color, human: true }));
+    const state = createRace(2026, { racers });
     const uses = new Set<string>();
     for (let i = 0; i < 60 * 180 && state.phase !== 'finished'; i++) {
       const frames = state.karts.map((kart) => getAIInput(state, kart.id));
@@ -397,7 +626,7 @@ describe('CPU race integration', () => {
     expect(state.phase, JSON.stringify(state.karts.map((kart) => ({ id: kart.id, lap: kart.lap, checkpoint: kart.nextCheckpoint, progress: kart.lapProgress, offset: kart.lateralOffset, speed: kart.speed })))).toBe('finished');
     expect(state.karts[0]!.lapTimes).toHaveLength(3);
     expect(state.karts[0]!.finishTime).toBeGreaterThan(35);
-    expect(state.karts.every((kart) => kart.lap >= 2)).toBe(true);
+    expect(state.karts.every((kart) => kart.lap === 3 && kart.finishTime !== null)).toBe(true);
     expect(uses.size).toBe(3);
   }, 20_000);
 });
@@ -515,7 +744,7 @@ describe('CPU finish independence', () => {
     expect(Math.hypot(cpu.x - player.x, cpu.z - player.z)).toBeGreaterThanOrEqual(KART_RADIUS * 2);
     expect(cpu.speed).toBeGreaterThan(5);
     expect(player.speed).toBeLessThan(15);
-    state.traps.push({ id: 999, ownerId: 0, x: cpu.x, y: cpu.y, z: cpu.z,
+    state.traps.push({ kind: 'trap', id: 999, ownerId: 0, x: cpu.x, y: cpu.y, z: cpu.z,
       heading: cpu.heading, life: 20, age: 2 });
     stepRace(state, []);
     expect(cpu.spinTime).toBeGreaterThan(0);
@@ -523,12 +752,12 @@ describe('CPU finish independence', () => {
     expect(cpu.finishTime).toBe(1);
   });
 
-  it('lets all five CPU racers complete three laps while the human remains on the grid', () => {
+  it('lets all seven CPU racers complete three laps while the human remains on the grid', () => {
     const state = createRace(681);
     for (let i = 0; i < 60 * 180 && state.karts.slice(1).some((kart) => kart.finishTime === null); i++) {
       stepRace(state, state.karts.map((kart) => kart.id === 0 ? NEUTRAL_INPUT : getAIInput(state, kart.id)));
     }
-    expect(state.karts.slice(1).map((kart) => kart.lap)).toEqual([3, 3, 3, 3, 3]);
+    expect(state.karts.slice(1).map((kart) => kart.lap)).toEqual([3, 3, 3, 3, 3, 3, 3]);
     expect(state.phase).toBe('racing');
   }, 20_000);
 });

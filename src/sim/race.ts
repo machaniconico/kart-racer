@@ -1,18 +1,20 @@
-import { getRank, raceProgress, updateLapTracking } from './laps';
+import { raceProgress, updateLapTracking } from './laps';
 import { getAIInput } from './ai';
-import { chooseItem, random } from './random';
+import { random } from './random';
+import { advanceItems, getKartModifiers, giveBoost, onKartContact, useItem } from './items';
+import { createKartEffects } from './itemTypes';
 import { ROAD_HALF_WIDTH, TRACK_LENGTH, WALL_HALF_WIDTH, projectToTrack, sampleTrack } from './track';
-import type { InputFrame, KartState, RaceState } from './types';
+import type { InputFrame, KartState, RaceOptions, RaceState } from './types';
 
 export const FIXED_DT = 1 / 60;
 export const DRIFT_BLUE_TIME = 0.65;
 export const DRIFT_ORANGE_TIME = 1.5;
 export const NEUTRAL_INPUT: Readonly<InputFrame> = Object.freeze({ steer: 0, throttle: 0, brake: false, drift: false, useItem: false });
-export const BOX_RESPAWN_TIME = 5;
+export { BOX_RESPAWN_TIME } from './items';
 export const KART_RADIUS = 0.95;
 export const RACE_FINISH_TIMEOUT = 45;
-const COLORS = [0xffbf38, 0xff5f80, 0x56d9c1, 0x8c7bff, 0x4dc6ff, 0xff854f];
-const NAMES = ['YOU', 'PIP', 'NOVA', 'MOSS', 'ZIPP', 'ROCO'];
+const COLORS = [0xffbf38, 0xff5f80, 0x56d9c1, 0x8c7bff, 0x4dc6ff, 0xff854f, 0xf04a4a, 0xf4f4f0];
+const NAMES = ['YOU', 'PIP', 'NOVA', 'MOSS', 'ZIPP', 'ROCO', 'LUNE', 'TAFF'];
 
 export function getFinishTimeRemaining(state: RaceState): number | null {
   const firstFinish = Math.min(...state.karts.map((kart) => kart.finishTime ?? Infinity));
@@ -24,22 +26,31 @@ export function getFinishTimeRemaining(state: RaceState): number | null {
 
 export function isRaceTimedOut(state: RaceState): boolean {
   // A human finish on the deadline still takes precedence over the timeout.
-  return state.phase === 'finished' && state.karts[0]!.finishTime === null && getFinishTimeRemaining(state) === 0;
+  return state.phase === 'finished' && !allRacersFinished(state) && getFinishTimeRemaining(state) === 0;
 }
 
-export function createRace(seed: number): RaceState {
+function allRacersFinished(state: RaceState): boolean {
+  const humans = state.karts.filter((kart) => kart.human);
+  const racers = humans.length > 0 ? humans : state.karts;
+  return racers.length > 0 && racers.every((kart) => kart.finishTime !== null);
+}
+
+export function createRace(seed: number, options: RaceOptions = {}): RaceState {
+  if (options.racers && options.racers.length > NAMES.length) throw new RangeError('A race supports at most eight racers');
   const state: RaceState = {
     tick: 0, seed: (seed >>> 0) || 0x51c3a97d, phase: 'countdown', countdown: 3,
     racingTicks: 0, time: 0, karts: [], boxes: [], projectiles: [], traps: [], events: [], nextEntityId: 100,
   };
-  for (let id = 0; id < 6; id++) {
+  for (let id = 0; id < NAMES.length; id++) {
     // Start the player at the rear so the chase camera sees the whole grid ahead.
-    const gridSlot = id === 0 ? 5 : id - 1;
+    const gridSlot = NAMES.length - 1 - id;
+    const racer = options.racers?.[id];
     const distance = TRACK_LENGTH - 8 - Math.floor(gridSlot / 2) * 4.5;
     const sample = sampleTrack(distance);
     const offset = gridSlot % 2 === 0 ? -2 : 2;
     state.karts.push({
-      id, name: NAMES[id]!, color: COLORS[id]!,
+      id, name: racer?.name ?? NAMES[id]!, color: racer?.color ?? COLORS[id]!,
+      human: racer?.human ?? (options.racers === undefined && id === 0), effects: createKartEffects(),
       x: sample.x + sample.nx * offset, y: sample.y, z: sample.z + sample.nz * offset,
       heading: Math.atan2(sample.tx, sample.tz), speed: 0, steer: 0,
       trackDistance: distance, lateralOffset: offset, lap: 0, nextCheckpoint: 0,
@@ -103,29 +114,6 @@ function collideWall(state: RaceState, kart: KartState): void {
   }
 }
 
-function giveBoost(state: RaceState, kart: KartState, duration: number): void {
-  kart.boostTime = Math.max(kart.boostTime, duration);
-  state.events.push({ type: 'boost', kartId: kart.id });
-}
-
-function useItem(state: RaceState, kart: KartState): void {
-  if (!kart.item || kart.spinTime > 0) return;
-  const item = kart.item;
-  kart.item = null;
-  state.events.push({ type: 'use', kartId: kart.id });
-  if (item === 'dash') giveBoost(state, kart, 1.9);
-  else if (item === 'trap') {
-    const x = kart.x - Math.sin(kart.heading) * 2.6;
-    const z = kart.z - Math.cos(kart.heading) * 2.6;
-    state.traps.push({ id: state.nextEntityId++, ownerId: kart.id, x, z,
-      y: projectToTrack(x, z).height, heading: kart.heading, life: 20, age: 0 });
-  } else {
-    state.projectiles.push({ id: state.nextEntityId++, ownerId: kart.id,
-      x: kart.x + Math.sin(kart.heading) * 2.3, y: kart.y,
-      z: kart.z + Math.cos(kart.heading) * 2.3, heading: kart.heading, life: 5, bounces: 0 });
-  }
-}
-
 function advanceKart(state: RaceState, kart: KartState, input: InputFrame): void {
   kart.boostTime = Math.max(0, kart.boostTime - FIXED_DT);
   kart.spinTime = Math.max(0, kart.spinTime - FIXED_DT);
@@ -137,8 +125,9 @@ function advanceKart(state: RaceState, kart: KartState, input: InputFrame): void
     kart.driftTime = 0;
     kart.driftDirection = 0;
   }
-  if (input.useItem && !kart.previousItem) useItem(state, kart);
-  kart.previousItem = input.useItem;
+  const modifiers = getKartModifiers(state, kart, input);
+  input = modifiers.input;
+  useItem(state, kart, input);
   if (input.drift && !kart.previousDrift && kart.speed > 5 && kart.spinTime === 0) kart.hopTime = 0.32;
   if (input.drift && kart.speed > 8 && kart.spinTime === 0) {
     if (kart.driftDirection === 0 && Math.abs(input.steer) > 0.12) kart.driftDirection = Math.sign(input.steer);
@@ -152,12 +141,15 @@ function advanceKart(state: RaceState, kart: KartState, input: InputFrame): void
   }
   kart.previousDrift = input.drift;
   const onGrass = Math.abs(kart.lateralOffset) > ROAD_HALF_WIDTH;
-  let maxSpeed = kart.id === 0 ? 32 : 30.2 + (kart.id % 3) * 0.35;
-  if (kart.id !== 0) {
-    const player = state.karts[0]!;
-    const difference = raceProgress(player) - raceProgress(kart);
-    maxSpeed *= 1 + Math.max(-0.02, Math.min(0.04, difference / 1800));
+  let maxSpeed = kart.human ? 32 : 30.2 + (kart.id % 3) * 0.35;
+  if (!kart.human) {
+    const humanProgress = state.karts.filter((racer) => racer.human).map(raceProgress);
+    if (humanProgress.length > 0) {
+      const difference = Math.max(...humanProgress) - raceProgress(kart);
+      maxSpeed *= 1 + Math.max(-0.02, Math.min(0.04, difference / 1800));
+    }
   }
+  maxSpeed *= modifiers.maxSpeedMultiplier;
   if (kart.boostTime > 0) maxSpeed *= 1.46;
   if (onGrass) maxSpeed = Math.min(maxSpeed, kart.boostTime > 0 ? 26 : 14);
   if (kart.finishTime !== null) maxSpeed = 12;
@@ -189,6 +181,7 @@ function collideKarts(state: RaceState): void {
       const dz = second.z - first.z;
       const distance = Math.hypot(dx, dz);
       if (distance >= KART_RADIUS * 2) continue;
+      onKartContact(state, first, second);
       const nx = distance > 0.0001 ? dx / distance : 1;
       const nz = distance > 0.0001 ? dz / distance : 0;
       const push = (KART_RADIUS * 2 - distance) * 0.51;
@@ -215,80 +208,6 @@ function collideKarts(state: RaceState): void {
   }
 }
 
-function hitKart(state: RaceState, kart: KartState): void {
-  if (kart.spinTime > 0) return;
-  kart.spinTime = 1.05;
-  kart.speed *= 0.3;
-  kart.driftTime = 0;
-  kart.driftDirection = 0;
-  kart.boostTime = 0;
-  state.events.push({ type: 'hit', kartId: kart.id });
-}
-
-function advanceItems(state: RaceState): void {
-  for (const box of state.boxes) {
-    box.respawnTime = Math.max(0, box.respawnTime - FIXED_DT);
-    if (box.respawnTime > 0) continue;
-    for (const kart of state.karts) {
-      if (kart.finishTime !== null || kart.item || kart.spinTime > 0) continue;
-      if (Math.hypot(kart.x - box.x, kart.z - box.z) < 1.9) {
-        kart.item = chooseItem(state, getRank(state, kart.id));
-        box.respawnTime = BOX_RESPAWN_TIME;
-        state.events.push({ type: 'pickup', kartId: kart.id });
-        break;
-      }
-    }
-  }
-  for (const trap of state.traps) {
-    trap.life -= FIXED_DT;
-    trap.age += FIXED_DT;
-    for (const kart of state.karts) {
-      if (kart.spinTime > 0 || (kart.id === trap.ownerId && trap.age < 1.2)) continue;
-      if (Math.hypot(kart.x - trap.x, kart.z - trap.z) < 1.55) {
-        hitKart(state, kart);
-        trap.life = 0;
-        break;
-      }
-    }
-  }
-  state.traps = state.traps.filter((trap) => trap.life > 0);
-  for (const bolt of state.projectiles) {
-    bolt.life -= FIXED_DT;
-    const previousX = bolt.x;
-    const previousZ = bolt.z;
-    bolt.x += Math.sin(bolt.heading) * 53 * FIXED_DT;
-    bolt.z += Math.cos(bolt.heading) * 53 * FIXED_DT;
-    const projection = projectToTrack(bolt.x, bolt.z);
-    bolt.y = projection.height;
-    if (Math.abs(projection.offset) > WALL_HALF_WIDTH - 0.4) {
-      const sample = sampleTrack(projection.distance);
-      const vx = Math.sin(bolt.heading);
-      const vz = Math.cos(bolt.heading);
-      const dot = vx * sample.nx + vz * sample.nz;
-      bolt.heading = Math.atan2(vx - 2 * dot * sample.nx, vz - 2 * dot * sample.nz);
-      const side = Math.sign(projection.offset);
-      bolt.x = sample.x + sample.nx * side * (WALL_HALF_WIDTH - 0.45);
-      bolt.z = sample.z + sample.nz * side * (WALL_HALF_WIDTH - 0.45);
-      bolt.bounces++;
-      if (bolt.bounces >= 4) bolt.life = 0;
-    }
-    for (const kart of state.karts) {
-      if (kart.spinTime > 0 || (kart.id === bolt.ownerId && bolt.life > 4.7)) continue;
-      // Swept segment collision prevents a fast bolt tunnelling through a kart.
-      const dx = bolt.x - previousX;
-      const dz = bolt.z - previousZ;
-      const squared = dx * dx + dz * dz;
-      const t = squared > 0 ? Math.max(0, Math.min(1, ((kart.x - previousX) * dx + (kart.z - previousZ) * dz) / squared)) : 0;
-      if (Math.hypot(kart.x - (previousX + t * dx), kart.z - (previousZ + t * dz)) < 1.4) {
-        hitKart(state, kart);
-        bolt.life = 0;
-        break;
-      }
-    }
-  }
-  state.projectiles = state.projectiles.filter((bolt) => bolt.life > 0);
-}
-
 /** Mutates only the supplied JSON-safe state by one deterministic 60 Hz tick. */
 export function stepRace(state: RaceState, inputs: readonly InputFrame[]): void {
   state.events = [];
@@ -311,9 +230,9 @@ export function stepRace(state: RaceState, inputs: readonly InputFrame[]): void 
   const previous = state.karts.map((kart) => ({ x: kart.x, z: kart.z, trackDistance: kart.trackDistance }));
   for (const kart of state.karts) advanceKart(state, kart, normalizeInput(inputs[kart.id]));
   collideKarts(state);
-  advanceItems(state);
+  advanceItems(state, FIXED_DT);
   for (let i = 0; i < state.karts.length; i++) updateLapTracking(state, state.karts[i]!, previous[i]!);
-  if (state.karts[0]!.finishTime !== null || getFinishTimeRemaining(state) === 0) {
+  if (allRacersFinished(state) || getFinishTimeRemaining(state) === 0) {
     // Preserve null times: results distinguish a timeout from a human finish.
     state.phase = 'finished';
   }
