@@ -1,18 +1,23 @@
 import './style.css';
 import { AudioEngine } from './audio/AudioEngine';
 import { Controls } from './input/Controls';
+import { GuestSession } from './net/guestSession';
+import { HostSession } from './net/hostSession';
+import { generateRoomCode } from './net/roomCode';
+import type { Transport } from './net/transport';
 import { GameRenderer } from './render/GameRenderer';
 import { captureRenderSnapshot } from './render/snapshot';
 import { createRace, FIXED_DT, getAIInput, stepRace } from './sim';
 import type { InputFrame, InputSource, RaceState } from './sim';
 import { GameUI } from './ui/GameUI';
+import { LobbyUI } from './ui/LobbyUI';
 import { loadBest, loadMuted, saveBest, saveMuted } from './storage';
 
 const root = document.querySelector<HTMLDivElement>('#app')!;
-const ui = new GameUI(root);
+const ui = new GameUI(root, 0);
 const controls = new Controls(root);
 root.classList.toggle('touch-device', controls.isTouch);
-const audio = new AudioEngine();
+let audio = new AudioEngine(0);
 let best = loadBest();
 let muted = loadMuted();
 audio.setMuted(muted);
@@ -26,10 +31,11 @@ function seed(): number {
 
 let state = createRace(seed());
 const cpuSource: InputSource = { sample: getAIInput };
-// A future network source can implement this same sample(state, kartId) boundary.
-const inputSources: InputSource[] = state.karts.map((kart) => kart.id === 0 ? controls : cpuSource);
+const soloSources: InputSource[] = state.karts.map((kart) => kart.id === 0 ? controls : cpuSource);
+// The host swaps in HostSession.inputSource(slot); solo keeps controls + CPU.
+let inputSources = soloSources;
 let previous = captureRenderSnapshot(state);
-let screen: 'title' | 'race' | 'results' = 'title';
+let screen: 'title' | 'lobby' | 'race' | 'results' = 'title';
 let paused = false;
 let accumulator = 0;
 let lastTime = performance.now();
@@ -37,6 +43,18 @@ let frameId = 0;
 let disposed = false;
 let renderer: GameRenderer | undefined;
 let fatal = false;
+// Online play. solo is the original single-player path; the others only add branches.
+let mode: 'solo' | 'host' | 'guest' = 'solo';
+let localId = 0;
+let host: HostSession | null = null;
+let guest: GuestSession | null = null;
+/** Invalidates a pending create/join when the player cancels or leaves. */
+let netGeneration = 0;
+/** A create/join is awaiting the transport (no session object exists yet). */
+let pendingNet = false;
+/** Online "leave?" confirmation; unlike pause it never stops the simulation. */
+let leaving = false;
+let guestAlpha = 1;
 
 function fail(message: string): void {
   fatal = true;
@@ -46,7 +64,7 @@ function fail(message: string): void {
 }
 
 try {
-  renderer = new GameRenderer(ui.canvas, state);
+  renderer = new GameRenderer(ui.canvas, state, 0);
 } catch (error) {
   console.error('The 3D renderer could not start.', error);
   fail('3D 表示を開始できませんでした。WebGL に対応したブラウザで、ハードウェアアクセラレーションを有効にして再読み込みしてください。');
@@ -54,10 +72,19 @@ try {
 
 function start(): void {
   if (fatal) return;
-  state = createRace(seed());
+  cancelOnline(); // A room being created or joined must not take over the solo race.
+  launch(createRace(seed()));
+}
+
+function launch(next: RaceState): void {
+  state = next;
+  if (mode !== 'solo') renderer?.setRoster(next.karts);
+  leaving = false;
   previous = captureRenderSnapshot(state);
   accumulator = 0;
   lastTime = performance.now();
+  // Leaving the lobby phase lets LobbyUI treat the next lobby visit as re-entry.
+  if (mode !== 'solo') lobby.render((host ?? guest)?.roster ?? null, 'countdown');
   screen = 'race';
   paused = false;
   ui.setPaused(false);
@@ -76,6 +103,7 @@ function start(): void {
 }
 
 function pause(value: boolean): void {
+  if (mode !== 'solo') { confirmLeave(value); return; }
   if (screen !== 'race' || fatal || paused === value) return;
   paused = value;
   accumulator = 0;
@@ -89,12 +117,28 @@ function pause(value: boolean): void {
   }
 }
 
+function confirmLeave(value: boolean): void {
+  if (screen !== 'race' || fatal || leaving === value) return;
+  leaving = value;
+  controls.setEnabled(!value);
+  ui.setPaused(value);
+}
+
 function title(): void {
+  const wasOnline = mode !== 'solo';
+  if (wasOnline) {
+    inputSources = soloSources;
+    setLocal('solo', 0);
+    lobby.render(null, 'idle');
+  }
+  ui.hideDisconnected();
+  leaving = false;
   screen = 'title';
   paused = false;
   accumulator = 0;
   state = createRace(seed());
   previous = captureRenderSnapshot(state);
+  if (wasOnline) renderer?.setRoster(state.karts);
   controls.setEnabled(false);
   audio.suspend();
   ui.setPaused(false);
@@ -106,20 +150,195 @@ function finish(): void {
   screen = 'results';
   controls.setEnabled(false);
   audio.finishRace();
-  const time = state.karts[0].finishTime;
-  const isRecord = time !== null && (best === null || time < best);
+  const time = state.karts.find((kart) => kart.id === localId)?.finishTime ?? null;
+  // Online races never update the personal best.
+  const isRecord = mode === 'solo' && time !== null && (best === null || time < best);
   if (isRecord && time !== null) { best = time; saveBest(time); }
+  if (mode !== 'solo') lobby.render((host ?? guest)?.roster ?? null, 'results');
   ui.showResults(state, best, isRecord);
   ui.show('results');
 }
 
 const bind = (id: string, handler: () => void) => root.querySelector(`#${id}`)?.addEventListener('click', handler);
+/** Recreates the local-kart-bound renderer/audio when the guest slot differs. */
+function setLocal(next: typeof mode, id: number): void {
+  mode = next;
+  ui.setMode(next, id);
+  if (id === localId) return;
+  localId = id;
+  audio.dispose();
+  audio = new AudioEngine(id);
+  audio.setMuted(muted);
+  if (next === 'guest') void audio.unlock();
+  if (!renderer || fatal) return;
+  // The new renderer shares the canvas context and assumes default unpack state.
+  const gl = renderer.renderer.getContext();
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+  renderer.dispose();
+  try { renderer = new GameRenderer(ui.canvas, state, id); }
+  catch (error) {
+    renderer = undefined;
+    console.error('The 3D renderer could not restart.', error);
+    fail('3D 表示を開始できませんでした。ページを再読み込みしてください。');
+  }
+}
+
+async function loadTransport(): Promise<Transport> {
+  // Keep peerjs out of the single-player initial chunk.
+  const { PeerJsTransport } = await import('./net/peerjsTransport');
+  return new PeerJsTransport();
+}
+
+async function createRoom(): Promise<void> {
+  const generation = ++netGeneration;
+  pendingNet = true;
+  let session: HostSession;
+  try {
+    const transport = await loadTransport();
+    if (generation !== netGeneration) return;
+    session = await HostSession.create(transport, { roomCode: generateRoomCode(), hostInput: controls });
+  } catch (error) {
+    if (generation !== netGeneration) return; // Cancelled: a late failure is not shown.
+    pendingNet = false;
+    throw error;
+  }
+  if (generation !== netGeneration) { session.close(); return; }
+  pendingNet = false;
+  host = session;
+  setLocal('host', 0);
+  session.onChange(() => { if (host === session && screen === 'lobby') renderLobby(); });
+  // Guests already connected keep playing; only new joins are impossible.
+  session.onBrokerLost(() => { if (host === session) lobby.showError('broker_lost'); });
+  enterLobby();
+}
+
+async function joinRoom(code: string): Promise<void> {
+  const generation = ++netGeneration;
+  pendingNet = true;
+  let transport: Transport;
+  try { transport = await loadTransport(); }
+  catch (error) {
+    if (generation !== netGeneration) return;
+    pendingNet = false;
+    throw error;
+  }
+  if (generation !== netGeneration) return;
+  pendingNet = false;
+  const session = new GuestSession(transport);
+  guest = session;
+  session.onChange(() => { if (guest === session) guestChanged(session); });
+  await session.join(code);
+}
+
+function guestChanged(session: GuestSession): void {
+  switch (session.phase) {
+    case 'lobby':
+      if (screen === 'lobby') renderLobby();
+      else {
+        setLocal('guest', session.localSlot);
+        enterLobby();
+      }
+      break;
+    case 'countdown':
+      if (screen === 'lobby' && !fatal) {
+        launch(session.frame()?.state ?? state);
+        renderer?.setRoster([...session.roster.players].sort((a, b) => a.slot - b.slot));
+      }
+      break;
+    case 'results': {
+      const final = session.finalState;
+      if (screen === 'race' && final) {
+        state = final;
+        previous = captureRenderSnapshot(state);
+        finish();
+      }
+      break;
+    }
+    case 'closed': {
+      guest = null;
+      const reason = session.reason;
+      if (reason === 'left') break;
+      if (screen === 'title') { lobby.showError(reason); break; }
+      controls.setEnabled(false);
+      audio.suspend();
+      ui.showDisconnected(reason === 'host_lost' || reason === 'timeout'
+        ? 'ホストとの接続が切れました。タイトルに戻ります。'
+        : '接続が終了しました。タイトルに戻ります。');
+      break;
+    }
+  }
+  ui.setNetStatus(session.stalled && screen === 'race' ? 'ホストが離席中…' : null);
+}
+
+function enterLobby(): void {
+  screen = 'lobby';
+  paused = false;
+  leaving = false;
+  accumulator = 0;
+  controls.setEnabled(false);
+  audio.suspend();
+  ui.show('lobby');
+  renderLobby();
+}
+
+function renderLobby(): void {
+  const session = host ?? guest;
+  if (session) lobby.render(session.roster, 'lobby');
+}
+
+function startOnline(): void {
+  if (!host || fatal || screen !== 'lobby') return;
+  const session = host;
+  const next = session.startRace(seed());
+  inputSources = next.karts.map((kart) => session.inputSource(kart.id));
+  launch(next);
+}
+
+function rematch(): void {
+  if (!host) return;
+  host.returnToLobby();
+  enterLobby();
+}
+
+/** Closes any session and invalidates create/join calls still awaiting the transport. */
+function cancelOnline(): void {
+  const active = pendingNet || !!host || !!guest;
+  netGeneration++;
+  pendingNet = false;
+  const sessions = [host, guest];
+  host = guest = null;
+  for (const session of sessions) session?.close();
+  if (active) lobby.render(null, 'idle');
+}
+
+function leaveOnline(): void {
+  cancelOnline();
+  title();
+}
+
+const exitToTitle = () => { if (mode === 'solo') title(); else leaveOnline(); };
+
+const lobby = new LobbyUI(root, {
+  onCreate: createRoom,
+  onJoin: joinRoom,
+  onLeave: leaveOnline,
+  onStart: startOnline,
+  onProfile: (name, color) => {
+    if (host) {
+      host.setProfile(name, color);
+      renderLobby(); // A refused color produces no roster broadcast.
+    } else guest?.updateProfile(name, color);
+  },
+});
+
 bind('start-race', start);
-bind('retry-race', start);
+bind('retry-race', () => { if (mode === 'host') rematch(); else if (mode === 'solo') start(); });
 bind('pause-race', () => pause(true));
 bind('resume-race', () => pause(false));
-bind('back-title', title);
-bind('quit-race', title);
+bind('back-title', exitToTitle);
+bind('quit-race', exitToTitle);
+bind('net-dialog-ok', leaveOnline);
 bind('reload-page', () => window.location.reload());
 bind('mute', () => {
   muted = !muted;
@@ -130,10 +349,13 @@ bind('mute', () => {
 });
 
 window.addEventListener('keydown', (event) => {
-  if (event.code === 'Escape' && screen === 'race') { event.preventDefault(); pause(!paused); }
+  if (event.code === 'Escape' && screen === 'race') { event.preventDefault(); pause(!(paused || leaving)); }
 });
-document.addEventListener('visibilitychange', () => { if (document.hidden) pause(true); });
-window.addEventListener('blur', () => pause(true));
+// Online play must keep running; the host only clamps the accumulator on return.
+document.addEventListener('visibilitychange', () => { if (document.hidden && mode === 'solo') pause(true); });
+window.addEventListener('blur', () => { if (mode === 'solo') pause(true); });
+// iOS needs a gesture to start audio; a guest's race begins on a network message.
+root.addEventListener('pointerdown', () => { if (mode === 'guest' && screen === 'lobby') void audio.unlock(); });
 window.addEventListener('resize', () => renderer?.resize());
 ui.canvas.addEventListener('webglcontextlost', (event) => {
   event.preventDefault();
@@ -144,22 +366,52 @@ function frame(now: number): void {
   if (disposed) return;
   const elapsed = Math.min(Math.max((now - lastTime) / 1000, 0), 0.1);
   lastTime = now;
-  if (!fatal && screen === 'race' && !paused) {
-    accumulator += elapsed;
+  if (mode === 'guest') {
+    const session = guest;
+    if (!fatal && screen === 'race' && session) {
+      accumulator += elapsed;
+      // GuestSession paces its input ticks against the host clock. A tick can
+      // close the session (host lost), which clears `guest` via onChange.
+      while (accumulator >= FIXED_DT && guest === session) {
+        session.tick(controls.sample(state, localId));
+        accumulator -= FIXED_DT;
+      }
+      // frame() reads its own monotonic clock; never pass the rAF timestamp.
+      const view = guest === session ? session.frame() : null;
+      if (view) {
+        state = view.state;
+        previous = view.previous;
+        guestAlpha = view.alpha;
+        audio.playEvents(state.events);
+        audio.update(state);
+        ui.update(state);
+      }
+    } else session?.frame(); // Lobby/results: keeps PING and the 5 s host timeout running.
+  } else if (!fatal && screen === 'race' && !paused) {
+    // The host does not advance before the start time announced in race_start.
+    const waiting = mode === 'host' && !!host && performance.now() < host.startAtHostTime;
+    if (waiting) host?.frame();
+    accumulator = waiting ? 0 : accumulator + elapsed;
     // No wall-clock variable step enters sim. Long background frames are paused/clamped.
     while (accumulator >= FIXED_DT && state.phase !== 'finished') {
       previous = captureRenderSnapshot(state);
       const inputs: InputFrame[] = state.karts.map((kart) => inputSources[kart.id].sample(state, kart.id));
       stepRace(state, inputs);
+      // Every tick: HostSession counts ticks to schedule snapshots.
+      if (mode === 'host') host?.afterTick(state);
       audio.playEvents(state.events);
       accumulator -= FIXED_DT;
     }
     audio.update(state);
     ui.update(state);
     if (state.phase === 'finished') finish();
+  } else {
+    host?.frame(); // Keeps RTT probes running in the lobby and results.
+    guest?.frame(); // A connecting guest (still solo mode) needs its timeout/PING too.
   }
   if (!fatal && renderer) {
-    renderer.update(state, previous, screen === 'race' && !paused ? accumulator / FIXED_DT : 1, paused ? 0 : elapsed, screen);
+    const alpha = mode === 'guest' ? guestAlpha : accumulator / FIXED_DT;
+    renderer.update(state, previous, screen === 'race' && !paused ? alpha : 1, paused ? 0 : elapsed, screen);
   }
   frameId = requestAnimationFrame(frame);
 }
@@ -174,10 +426,32 @@ if (import.meta.env.DEV) {
     get screen() { return screen; },
     get paused() { return paused; },
     get rendererInfo() { return renderer?.renderer.info; },
+    get renderer() { return renderer; },
+    get mode() { return mode; },
+    // PeerJsTransport appends its channels here (DEV only).
+    net: {
+      channels: [] as unknown[],
+      rttMs: {} as Record<string, number>,
+      get phase() { return (host ?? guest)?.phase ?? 'idle'; },
+      get slot() { return localId; },
+      get roster() { return (host ?? guest)?.roster ?? null; },
+      /** Guest: RTT to the host. Host: RTT per guest slot. */
+      get rtt() { return guest ? guest.rtt : host?.rtts ?? null; },
+      get offset() { return guest?.offset ?? null; },
+      get lead() { return guest?.lead ?? null; },
+      get stalled() { return guest?.stalled ?? false; },
+      /** Prediction correction still being blended out, and the last replay length. */
+      get correction() {
+        if (!guest) return null;
+        const { x, y, z } = guest.visualOffset;
+        return { x, y, z, meters: Math.hypot(x, y, z), replayTicks: guest.replayTicks };
+      },
+    },
     start,
     advance(ticks: number, autopilot = false) {
       for (let i = 0; i < Math.min(ticks, 60 * 600) && state.phase !== 'finished'; i++) {
         stepRace(state, state.karts.map((kart) => autopilot || kart.id > 0 ? getAIInput(state, kart.id) : controls.sample(state, kart.id)));
+        if (mode === 'host') host?.afterTick(state);
       }
       previous = captureRenderSnapshot(state);
       ui.update(state);
@@ -190,6 +464,9 @@ if (import.meta.env.DEV) {
 if (import.meta.hot) import.meta.hot.dispose(() => {
   disposed = true;
   cancelAnimationFrame(frameId);
+  host?.close();
+  guest?.close();
+  lobby.destroy();
   controls.dispose();
   audio.dispose();
   renderer?.dispose();

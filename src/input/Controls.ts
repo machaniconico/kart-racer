@@ -27,6 +27,11 @@ export class Controls implements InputSource {
   private readonly autoButton: HTMLButtonElement | null;
   private steering = 0;
   private itemQueued = false;
+  // A gamepad item button still held across reset() stays ignored until it is released.
+  private gamepadItemSuppressed = false;
+  // After reset(), auto-repeat from an item key held across the reset must not re-arm useItem.
+  // Each key is unblocked only by its own fresh press or release.
+  private readonly repeatBlockedItemKeys = new Set<string>();
 
   constructor(private readonly root: HTMLElement) {
     this.touchMode = window.matchMedia?.('(pointer: coarse)').matches === true;
@@ -104,6 +109,8 @@ export class Controls implements InputSource {
 
   sample(state: RaceState, _kartId: number): InputFrame {
     const gamepad = this.readGamepad();
+    if (!gamepad.useItem) this.gamepadItemSuppressed = false;
+    if (this.gamepadItemSuppressed) gamepad.useItem = false;
 
     if (!this.enabled || state.phase !== 'racing') {
       this.itemQueued = false;
@@ -130,6 +137,8 @@ export class Controls implements InputSource {
   reset(): void {
     this.keys.clear();
     this.itemQueued = false;
+    this.gamepadItemSuppressed = this.readGamepad().useItem;
+    for (const key of ITEM_KEYS) this.repeatBlockedItemKeys.add(key);
     const held = [...this.pointers.entries()];
     this.pointers.clear();
     for (const [pointerId, { element }] of held) {
@@ -160,12 +169,17 @@ export class Controls implements InputSource {
     this.applyAutoAccelerate(false);
     if (!this.enabled || !GAME_KEYS.has(event.code)) return;
     event.preventDefault();
+    if (this.repeatBlockedItemKeys.has(event.code)) {
+      if (event.repeat) return;
+      this.repeatBlockedItemKeys.delete(event.code);
+    }
     this.keys.add(event.code);
   };
 
   private readonly onKeyUp = (event: KeyboardEvent): void => {
     if (this.enabled && GAME_KEYS.has(event.code)) event.preventDefault();
     this.keys.delete(event.code);
+    this.repeatBlockedItemKeys.delete(event.code);
   };
 
   private setTouchMode(value: boolean): void {

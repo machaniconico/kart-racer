@@ -1,4 +1,5 @@
 import type { RaceEvent, RaceState } from '../sim/types';
+import { playItemEvent, type SoundKit } from './itemSounds';
 
 /** Small original WebAudio instruments; no audio files or network requests. */
 export class AudioEngine {
@@ -17,6 +18,13 @@ export class AudioEngine {
   private active = false;
   private resumePending = false;
   private lastResumeAttempt = -Infinity;
+
+  private readonly kit: SoundKit = {
+    tone: (...args) => this.tone(...args),
+    noise: (...args) => this.noise(...args),
+  };
+
+  constructor(private readonly localKartId: number) {}
 
   /** Call directly from the Start/Retry/Resume button's user gesture. */
   async unlock(): Promise<void> {
@@ -42,7 +50,7 @@ export class AudioEngine {
       this.finishRace();
       return;
     }
-    const player = state.karts.find((kart) => kart.id === 0);
+    const player = state.karts.find((kart) => kart.id === this.localKartId);
     if (!player) return;
     this.active = true;
     if (this.context.state === 'suspended' && !this.resumePending && performance.now() - this.lastResumeAttempt > 1000) {
@@ -65,7 +73,7 @@ export class AudioEngine {
     if (!this.context || this.disposed || this.muted || !this.active || this.context.state !== 'running') return;
     const now = this.context.currentTime;
     for (const event of events) {
-      if (event.kartId !== 0 && event.type !== 'countdown' && event.type !== 'go') continue;
+      if (event.kartId !== this.localKartId && event.type !== 'countdown' && event.type !== 'go') continue;
       switch (event.type) {
         case 'countdown':
           this.tone(440, now, 0.13, 0.24, 'sine');
@@ -98,6 +106,9 @@ export class AudioEngine {
           for (const [index, frequency] of [523, 659, 784, 1046].entries()) {
             this.tone(frequency, now + index * 0.09, 0.30, 0.17, 'triangle');
           }
+          break;
+        default:
+          playItemEvent(this.kit, event, now);
           break;
       }
     }

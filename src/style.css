@@ -161,6 +161,7 @@ h1 span { color: var(--lime); }
 .item-button { bottom: 124px; right: 6px; width: 66px; height: 66px; color: var(--lime); }
 .item-button:disabled { opacity: .53; color: #fff; }
 
+.lobby-screen { z-index: 3; display: flex; justify-content: center; align-items: center; padding: 35px 20px; background: #0a2d22c4; }
 .results-screen { z-index: 3; display: flex; justify-content: center; align-items: center; padding: 35px 20px; background: #0a2d22c4; }
 .results-content { width: 590px; max-height: 100%; overflow-y: auto; touch-action: pan-y; overscroll-behavior-y: contain; color: var(--ink); background: var(--white); padding: 29px 34px 30px; border-radius: 7px; box-shadow: 0 12px 55px #06231530; }
 .results-heading-row { display: flex; justify-content: space-between; align-items: center; }
@@ -309,12 +310,12 @@ h1 span { color: var(--lime); }
   .finish-best strong { font-size: 13px; }
   .finish-best > span { font-size: 6px !important; }
   .record-badge { font-size: 6px; padding: 5px; }
-  .leaderboard-row { padding: 9px 6px; grid-template-columns: 20px 9px 1fr auto; gap: 8px; font-size: 11px; min-height: 43px; }
+  .leaderboard-row { padding: 6px; grid-template-columns: 20px 9px 1fr auto; gap: 8px; font-size: 11px; min-height: 36px; }
   .racer-name { gap: 5px; }
   .racer-name small { font-size: 6px; }
   .racer-time { font-size: 9px; }
   .racer-swatch { width: 8px; height: 8px; }
-  .result-laps { font-size: 7px; line-height: 1.8; margin-top: 17px; }
+  .result-laps { font-size: 7px; line-height: 1.8; margin-top: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .result-actions { grid-template-columns: 1fr; gap: 9px; margin-top: 21px; }
   .result-actions button { min-height: 46px; }
 }
@@ -400,7 +401,7 @@ h1 span { color: var(--lime); }
   #finish-time { font-size: 23px; }
   .finish-best strong { font-size: 13px; }
   .leaderboard { padding-top: 6px; }
-  .leaderboard-row { min-height: 26px; padding: 5px 8px; font-size: 10px; }
+  .leaderboard-row { min-height: 22px; padding: 3px 8px; font-size: 10px; }
   .racer-time { font-size: 9px; }
   .leaderboard-position { font-size: 9px; }
   .result-laps { margin-top: 6px; font-size: 8px; }
@@ -420,6 +421,11 @@ h1 span { color: var(--lime); }
   .start-button { margin-top: 24px; }
   .orientation-hint { bottom: 101px; }
   .course-strip { bottom: 28px; }
+  .results-content { padding: 18px 19px; }
+  .finish-summary { padding: 10px 0; margin-top: 10px; }
+  .leaderboard { padding-top: 8px; }
+  .result-laps { margin-top: 8px; }
+  .result-actions { grid-template-columns: 1.25fr 1fr; margin-top: 12px; }
 }
 
 @media (max-height: 660px) and (max-width: 700px) and (orientation: portrait) {

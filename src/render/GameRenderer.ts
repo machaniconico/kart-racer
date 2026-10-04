@@ -6,6 +6,7 @@ import {
 } from '../sim';
 import type { RaceState, TrackSample } from '../sim';
 import type { RenderSnapshot } from './snapshot';
+import { attachKartEffects, createEntityMesh, entityPose, updateKartEffects, type KartEffectVisuals } from './itemVisuals';
 
 const mix = (a: number, b: number, t: number) => a + (b - a) * t;
 const angleMix = (a: number, b: number, t: number) =>
@@ -23,8 +24,9 @@ interface KartVisual {
   root: THREE.Group;
   body: THREE.Group;
   wheels: THREE.Mesh[];
+  paint: THREE.MeshLambertMaterial;
   sparks: THREE.InstancedMesh;
-  flame: THREE.Mesh;
+  effects: KartEffectVisuals;
 }
 
 /** Rendering owns all three objects; the serializable simulation stays unaware of them. */
@@ -42,17 +44,13 @@ export class GameRenderer {
   private readonly boxCubes: THREE.InstancedMesh;
   private readonly boxCores: THREE.InstancedMesh;
   private readonly entities = new Map<number, THREE.Mesh>();
-  private readonly boltGeometry = new THREE.IcosahedronGeometry(0.55, 0);
-  private readonly trapGeometry = new THREE.ConeGeometry(0.8, 0.45, 5);
-  private readonly boltMaterial = material(0xffdc41);
-  private readonly trapMaterial = material(0xff648b);
   private readonly sky: THREE.Mesh;
   private elapsed = 0;
   private cameraReady = false;
   private lastMode = '';
   private reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-  constructor(private readonly canvas: HTMLCanvasElement, initial: RaceState) {
+  constructor(private readonly canvas: HTMLCanvasElement, initial: RaceState, private readonly localKartId: number) {
     const mobile = window.matchMedia('(pointer: coarse)').matches;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: !mobile, powerPreference: 'high-performance' });
     this.renderer.shadowMap.enabled = true;
@@ -78,11 +76,7 @@ export class GameRenderer {
     this.scene.add(this.sky);
     this.buildCourse();
     this.buildScenery();
-    for (const kart of initial.karts) {
-      const visual = this.buildKart(kart.color);
-      this.kartVisuals.push(visual);
-      this.scene.add(visual.root);
-    }
+    this.setRoster(initial.karts);
     const cubeGeometry = new THREE.BoxGeometry(1.3, 1.3, 1.3);
     cubeGeometry.applyMatrix4(new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(Math.PI / 5, 0, Math.PI / 4)));
     this.boxCubes = new THREE.InstancedMesh(cubeGeometry, material(0x9ce9d2), initial.boxes.length);
@@ -95,6 +89,20 @@ export class GameRenderer {
       this.scene.add(mesh);
     }
     this.resize();
+    // Compiled away in production; lets browser QA call setRoster without touching main.ts.
+  }
+
+  /** Repaint karts by id (array index); missing karts are built, extra ones hidden. */
+  setRoster(karts: readonly { color: number }[]): void {
+    karts.forEach((kart, id) => {
+      if (!this.kartVisuals[id]) {
+        const visual = this.buildKart(kart.color);
+        this.kartVisuals[id] = visual;
+        this.scene.add(visual.root);
+      }
+      this.kartVisuals[id].paint.color.setHex(kart.color);
+    });
+    this.kartVisuals.forEach((visual, id) => { visual.root.visible = id < karts.length; });
   }
 
   resize(): void {
@@ -394,14 +402,10 @@ export class GameRenderer {
     originals.forEach((geo) => geo.dispose());
     const sparks = new THREE.InstancedMesh(new THREE.OctahedronGeometry(0.13), new THREE.MeshBasicMaterial({ color: 0x64e3ff }), 12);
     root.add(sparks);
-    const flame = new THREE.Mesh(new THREE.ConeGeometry(0.38, 1.7, 6), new THREE.MeshBasicMaterial({ color: 0xffd863 }));
-    flame.rotation.x = -Math.PI / 2;
-    flame.position.set(0, 0.58, -2.05);
-    root.add(flame);
-    return { root, body, wheels, sparks, flame };
+    return { root, body, wheels, paint, sparks, effects: attachKartEffects(root) };
   }
 
-  update(state: RaceState, previous: RenderSnapshot, alpha: number, dt: number, mode: 'title' | 'race' | 'results'): void {
+  update(state: RaceState, previous: RenderSnapshot, alpha: number, dt: number, mode: 'title' | 'lobby' | 'race' | 'results'): void {
     this.elapsed += dt;
     if (mode !== this.lastMode) { this.cameraReady = false; this.lastMode = mode; }
     for (const kart of state.karts) {
@@ -434,8 +438,7 @@ export class GameRenderer {
         }
         visual.sparks.instanceMatrix.needsUpdate = true;
       }
-      visual.flame.visible = kart.boostTime > 0;
-      visual.flame.scale.y = 1 + Math.sin(this.elapsed * 45) * 0.25;
+      updateKartEffects(visual.effects, kart, this.elapsed);
     }
     state.boxes.forEach((item, i) => {
       this.transform.position.set(item.x, item.y + 1.5 + (this.reducedMotion ? 0 : Math.sin(this.elapsed * 2.6 + i) * 0.2), item.z);
@@ -448,35 +451,34 @@ export class GameRenderer {
     this.boxCubes.instanceMatrix.needsUpdate = true;
     this.boxCores.instanceMatrix.needsUpdate = true;
     const active = new Set<number>();
-    for (const [items, type] of [[state.projectiles, 'bolt'], [state.traps, 'trap']] as const) {
-      for (const item of items) {
-        active.add(item.id);
-        let mesh = this.entities.get(item.id);
-        if (!mesh) {
-          mesh = new THREE.Mesh(type === 'bolt' ? this.boltGeometry : this.trapGeometry, type === 'bolt' ? this.boltMaterial : this.trapMaterial);
-          mesh.castShadow = true;
-          this.entities.set(item.id, mesh);
-          this.scene.add(mesh);
-        }
-        const prev = previous.entities.get(item.id) ?? item;
-        mesh.position.set(mix(prev.x, item.x, alpha), mix(prev.y, item.y, alpha) + (type === 'bolt' ? 0.7 : 0.22), mix(prev.z, item.z, alpha));
-        mesh.rotation.y = type === 'bolt' ? this.elapsed * 9 : angleMix(prev.heading, item.heading, alpha);
+    for (const item of [...state.projectiles, ...state.traps]) {
+      active.add(item.id);
+      let mesh = this.entities.get(item.id);
+      if (!mesh) {
+        mesh = createEntityMesh(item.kind);
+        this.entities.set(item.id, mesh);
+        this.scene.add(mesh);
       }
+      const pose = entityPose(mesh);
+      const prev = previous.entities.get(item.id) ?? item;
+      mesh.position.set(mix(prev.x, item.x, alpha), mix(prev.y, item.y, alpha) + pose.lift, mix(prev.z, item.z, alpha));
+      mesh.rotation.y = pose.spin ? this.elapsed * 9 : angleMix(prev.heading, item.heading, alpha);
     }
     for (const [id, mesh] of this.entities) if (!active.has(id)) {
       this.scene.remove(mesh);
       this.entities.delete(id);
     }
-    const player = state.karts[0];
-    const playerPosition = this.kartVisuals[0].root.position;
-    if (mode === 'title') {
+    const player = state.karts.find((kart) => kart.id === this.localKartId);
+    const playerVisual = player ? this.kartVisuals[this.localKartId] : undefined;
+    if (mode === 'title' || mode === 'lobby' || !player || !playerVisual) {
       const p = sampleTrack(TRACK_LENGTH - 8);
       const orbit = this.reducedMotion ? 0 : Math.sin(this.elapsed * 0.08) * 0.12;
       const heading = Math.atan2(p.tx, p.tz) + orbit;
       this.desiredCamera.set(p.x - Math.sin(heading) * 30 - p.nx * 19, p.y + 18, p.z - Math.cos(heading) * 30 - p.nz * 19);
       this.desiredTarget.set(p.x + p.tx * 15 + p.nx * 8, p.y + 1.5, p.z + p.tz * 15 + p.nz * 8);
     } else {
-      const heading = this.kartVisuals[0].root.rotation.y;
+      const playerPosition = playerVisual.root.position;
+      const heading = playerVisual.root.rotation.y;
       const swing = this.reducedMotion ? 0 : player.driftDirection * Math.min(player.driftTime, 1) * 1.1;
       const distance = this.reducedMotion ? 10 : 9.5 + Math.max(0, player.speed - 20) * 0.055;
       this.desiredCamera.set(playerPosition.x - Math.sin(heading) * distance + Math.cos(heading) * swing, playerPosition.y + 5.1, playerPosition.z - Math.cos(heading) * distance - Math.sin(heading) * swing);
@@ -488,8 +490,10 @@ export class GameRenderer {
     this.camera.lookAt(this.cameraTarget);
     this.cameraReady = true;
     this.sky.position.copy(this.camera.position);
-    this.sun.position.copy(playerPosition).add(this.sunOffset);
-    this.sun.target.position.copy(playerPosition);
+    // Without a local kart (spectating, roster mismatch) the sun follows the camera target instead.
+    const sunAnchor = playerVisual ? playerVisual.root.position : this.cameraTarget;
+    this.sun.position.copy(sunAnchor).add(this.sunOffset);
+    this.sun.target.position.copy(sunAnchor);
     this.renderer.render(this.scene, this.camera);
   }
 

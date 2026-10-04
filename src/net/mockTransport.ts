@@ -1,4 +1,4 @@
-import { normalize, toPeerId } from './roomCode';
+import { generateRoomCode, normalize, toPeerId } from './roomCode';
 import { TransportError } from './transport';
 import type { ChannelKind, PeerLink, Transport, TransportHost, WireData } from './transport';
 
@@ -67,7 +67,10 @@ class MockHost implements TransportHost {
   private pending: MockLink[] = [];
   closed = false;
 
-  constructor(private readonly remove: () => void) {}
+  constructor(readonly roomCode: string, private readonly remove: () => void) {}
+
+  // The virtual network has no broker and cannot lose its registration.
+  onBrokerLost(_handler: (error: TransportError) => void): void {}
 
   onJoin(handler: (link: PeerLink) => void): void {
     if (this.closed) return;
@@ -121,11 +124,15 @@ export class MockTransport implements Transport {
   get now(): number { return this.clock; }
   get pendingMessages(): number { return this.deliveries.length; }
 
-  async host(roomCode: string): Promise<TransportHost> {
-    const code = normalize(roomCode);
+  async host(roomCode: string): Promise<MockHost> {
+    let code = normalize(roomCode);
     if (code === null) throw new TypeError('Invalid room code');
-    if (this.rooms.has(code)) throw new TransportError('room_taken');
-    const host = new MockHost(() => this.rooms.delete(code));
+    for (let retries = 0; this.rooms.has(code); retries++) {
+      if (retries === 3) throw new TransportError('room_taken');
+      code = generateRoomCode();
+    }
+    const assignedCode = code;
+    const host = new MockHost(code, () => this.rooms.delete(assignedCode));
     this.rooms.set(code, host);
     return host;
   }

@@ -1,25 +1,34 @@
-export type ItemType = 'dash' | 'trap' | 'bolt';
+export type ItemType = 'dash' | 'trap' | 'bolt' | 'seeker' | 'skycomet' |
+  'tripleDash' | 'rapidDash' | 'aura' | 'storm' | 'ink' | 'decoy' | 'bomb' |
+  'autopilot' | 'barrier';
 
-/** Numeric fields keep saves and the snapshot layout JSON-safe. */
+/** Numeric fields keep saves and the snapshot layout JSON-safe.
+ * charges counts remaining tripleDash uses; rapidTime starts on its first press.
+ */
 export interface KartEffects {
   rapidTime: number;
+  /** Distinguishes a fresh rapid dash from an active timer quantized to zero. */
+  rapidUnused: number;
   auraTime: number;
   shrinkTime: number;
   inkTime: number;
   autoTime: number;
   charges: number;
   holding: number;
+  /** Consecutive held input ticks, saturated at the CPU defense limit. */
+  aiHoldTicks: number;
   orbitKind: number;
   orbitCount: number;
 }
 
 export function createKartEffects(): KartEffects {
-  return { rapidTime: 0, auraTime: 0, shrinkTime: 0, inkTime: 0, autoTime: 0,
-    charges: 0, holding: 0, orbitKind: 0, orbitCount: 0 };
+  return { rapidTime: 0, rapidUnused: 1, auraTime: 0, shrinkTime: 0, inkTime: 0, autoTime: 0,
+    charges: 0, holding: 0, aiHoldTicks: 0, orbitKind: 0, orbitCount: 0 };
 }
 
 /** Eight bytes. Encode round(value * scale), mask, then shift into byteOffset.
  * orbitKind (0=none, 1=trap, 2=bolt) and orbitCount (0..3) share the last byte.
+ * I1 uses the timer/charge slots already reserved by protocol v1.
  * Changes to this layout or entity IDs require a network protocol version bump.
  */
 export const KART_EFFECT_LAYOUT = [
@@ -30,10 +39,23 @@ export const KART_EFFECT_LAYOUT = [
   { field: 'autoTime', byteOffset: 4, scale: 20, mask: 255, shift: 0 },
   { field: 'charges', byteOffset: 5, scale: 1, mask: 255, shift: 0 },
   { field: 'holding', byteOffset: 6, scale: 1, mask: 1, shift: 0 },
+  { field: 'rapidUnused', byteOffset: 6, scale: 1, mask: 1, shift: 1 },
+  { field: 'aiHoldTicks', byteOffset: 6, scale: 1, mask: 63, shift: 2 },
   { field: 'orbitKind', byteOffset: 7, scale: 1, mask: 3, shift: 0 },
   { field: 'orbitCount', byteOffset: 7, scale: 1, mask: 3, shift: 2 },
 ] as const satisfies readonly { field: keyof KartEffects; byteOffset: number; scale: number; mask: number; shift: number }[];
 
-export const ENTITY_KINDS = { bolt: 1, trap: 2 } as const;
-export type ProjectileKind = 'bolt';
-export type TrapKind = 'trap';
+export const ENTITY_KINDS = { bolt: 1, trap: 2, seeker: 3, skycomet: 4, bomb: 5, decoy: 6 } as const;
+export type ProjectileKind = 'bolt' | 'seeker' | 'skycomet' | 'bomb';
+export type TrapKind = 'trap' | 'decoy';
+
+/** Kind-specific flight state; snapshotCodec packs it into the 25-byte entity record. */
+export interface ProjectileState {
+  target?: number | null;
+  /** Skycomet track distance, bomb fuse, or seeker launch speed. */
+  aux?: number;
+  /** Bomb launch speed in m/s, quantized to the snapshot's 0.5 m/s units. */
+  speed?: number;
+  /** Latched once a bolt has left its owner's launch safety radius; unused by bombs. */
+  ownerCleared?: boolean;
+}

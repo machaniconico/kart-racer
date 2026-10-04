@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import ts from 'typescript';
+import { getAIInput } from '../sim/ai';
+import { useItem } from '../sim/items';
+import { createRace, stepRace } from '../sim/race';
 import { CLOCK_WINDOW_MS, ClockSync, packPing, packPong, TickMap, TICK_MS, unpackClock } from './clock';
 import { INPUT_HOLD_TICKS, InputBuffer, NEUTRAL_INPUT, pack, quantizeInput, unpack } from './inputBuffer';
 import { MockTransport } from './mockTransport';
 import {
-  controlGuards, encodeControlMessage, isControlMessage, isPlayerName, isRaceState,
+  controlGuards, encodeControlMessage, isControlMessage, isPlayerName, isRaceEvent, isRaceState,
   isRosterPlayers, MAX_CONTROL_LENGTH, PacketKind, parseControlMessage, PROTOCOL_VERSION, ROOM_PREFIX,
 } from './protocol';
 import type { ControlMessage, InputFrame, RosterPlayer } from './protocol';
@@ -27,8 +30,8 @@ function finalState() {
       lapStartTime: 0, lapTimes: [2, 2, 3], finishTime: 7, driftTime: 0, driftDirection: 0,
       boostTime: 0, spinTime: 0, hopTime: 0, item: null, wrongWay: false, startedLap: true,
       lapProgress: 0, lapValid: true, previousDrift: false, previousItem: false, aiPhase: 0, hitCooldown: 0,
-      human: player.kind !== 'cpu', effects: { rapidTime: 0, auraTime: 0, shrinkTime: 0, inkTime: 0,
-        autoTime: 0, charges: 0, holding: 0, orbitKind: 0, orbitCount: 0 },
+      human: player.kind !== 'cpu', effects: { rapidTime: 0, rapidUnused: 1, auraTime: 0, shrinkTime: 0, inkTime: 0,
+        autoTime: 0, charges: 0, holding: 0, aiHoldTicks: 0, orbitKind: 0, orbitCount: 0 },
     })),
     boxes: [{ id: 100, x: 0, y: 0, z: 0, heading: 0, respawnTime: 0 }],
     projectiles: [{ kind: 'bolt' as const, id: 101, ownerId: 0, x: 0, y: 0, z: 0, heading: 0, life: 1, bounces: 0 }],
@@ -117,7 +120,7 @@ describe('control protocol', () => {
     expect(isPlayerName('車'.repeat(10))).toBe(true);
     expect(isPlayerName('🏎'.repeat(10))).toBe(true);
     expect(isPlayerName('🏎'.repeat(11))).toBe(false);
-    expect(controlGuards.hello({ ...messages[0], protocol: 2 })).toBe(true);
+    expect(controlGuards.hello({ ...messages[0], protocol: PROTOCOL_VERSION + 1 })).toBe(true);
     expect(controlGuards.hello({ ...messages[0], color: Infinity })).toBe(false);
     expect(controlGuards.hello({ ...messages[0], color: -1 })).toBe(false);
     expect(isRosterPlayers([...players, players[0]])).toBe(false);
@@ -150,6 +153,95 @@ describe('control protocol', () => {
       expect(parseControlMessage(JSON.stringify({ type: 'race_end', raceId: 0, finalState: state }))).toBeNull();
     }
   });
+
+  it('preserves all effect timers, rapid-dash state and defensive hold ticks in race_end JSON', () => {
+    const state = finalState();
+    state.karts.forEach((kart, id) => {
+      kart.effects = { rapidTime: 0.024, rapidUnused: id % 2, auraTime: 6.75,
+        shrinkTime: 4.125, inkTime: 3.5, autoTime: 3.875, charges: id % 4,
+        holding: id % 2, aiHoldTicks: id === 7 ? 60 : id * 8, orbitKind: id % 3, orbitCount: id % 4 };
+    });
+    const message: ControlMessage = { type: 'race_end', raceId: 4, finalState: state };
+    expect(isRaceState(JSON.parse(JSON.stringify(state)))).toBe(true);
+    expect(parseControlMessage(encodeControlMessage(message))).toEqual(message);
+  });
+
+  it.each([
+    { field: 'rapidTime' }, { field: 'auraTime' }, { field: 'shrinkTime' },
+    { field: 'inkTime' }, { field: 'autoTime' },
+    { field: 'rapidUnused', max: 1 }, { field: 'charges', max: 3 },
+    { field: 'holding', max: 1 }, { field: 'aiHoldTicks', max: 60 },
+    { field: 'orbitKind', max: 2 }, { field: 'orbitCount', max: 3 },
+  ])('requires a valid $field in restored effect state', ({ field, max }) => {
+    const base = finalState();
+    const missing: Record<string, unknown> = { ...base.karts[0].effects };
+    delete missing[field];
+    const invalidValues: unknown[] = [null, false, '1', -1, NaN, Infinity];
+    if (max !== undefined) invalidValues.push(0.5, max + 1);
+    const invalidEffects: Record<string, unknown>[] = [missing,
+      ...invalidValues.map(value => ({ ...base.karts[0].effects, [field]: value }))];
+    for (const effects of invalidEffects) {
+      const state = { ...base, karts: base.karts.map((kart, id) => id === 0 ? { ...kart, effects } : kart) };
+      expect(isRaceState(state), `${field}=${String(effects[field])}`).toBe(false);
+      expect(parseControlMessage(JSON.stringify({ type: 'race_end', raceId: 4, finalState: state }))).toBeNull();
+    }
+  });
+
+  it('validates projectile launch speed and clearance state in race_end payloads', () => {
+    const base = finalState();
+    const bomb = { ...base.projectiles[0], kind: 'bomb', speed: 56.5, aux: 2.4, ownerCleared: false };
+    const state = { ...base, projectiles: [bomb] };
+    expect(isRaceState(state)).toBe(true);
+    expect(parseControlMessage(JSON.stringify({ type: 'race_end', raceId: 0, finalState: state })))
+      .toEqual({ type: 'race_end', raceId: 0, finalState: state });
+    for (const invalid of [
+      { speed: -1 }, { speed: 128 }, { speed: NaN }, { speed: '56' },
+      { ownerCleared: 1 }, { ownerCleared: null }, { bounces: 128 }, { kind: 'seeker' },
+    ]) expect(isRaceState({ ...state, projectiles: [{ ...bomb, ...invalid }] })).toBe(false);
+  });
+
+  it('accepts every JSON-restored simulation state and event through a complete eight-kart race', () => {
+    const racers = createRace(2026).karts.map(({ name, color }) => ({ name, color, human: true }));
+    const state = createRace(2026, { racers });
+    const events = new Set<string>();
+    const kinds = new Set<string>();
+    let held = false;
+    const observe = () => {
+      const restored: unknown = JSON.parse(JSON.stringify(state));
+      expect(isRaceState(restored), `state at tick ${state.tick}`).toBe(true);
+      for (const event of state.events) {
+        expect(isRaceEvent(JSON.parse(JSON.stringify(event)))).toBe(true);
+        events.add(event.type);
+      }
+      held ||= state.karts.some(kart => kart.effects.holding === 1);
+      for (const entity of [...state.projectiles, ...state.traps]) kinds.add(entity.kind);
+    };
+    for (let tick = 0; tick < 60 * 180 && state.phase !== 'finished'; tick++) {
+      if (state.phase === 'racing' && state.racingTicks === 0) {
+        const items = ['seeker', 'skycomet', 'bomb', 'decoy', 'bolt', 'trap', 'ink', 'autopilot'] as const;
+        items.forEach((item, id) => {
+          const kart = state.karts[id];
+          kart.item = item;
+          useItem(state, kart, { ...NEUTRAL_INPUT, useItem: true });
+          observe();
+          useItem(state, kart, NEUTRAL_INPUT);
+          // Projectiles can hit immediately in the grid; validate before physics removes them.
+          observe();
+        });
+      }
+      stepRace(state, state.karts.map(kart => getAIInput(state, kart.id)));
+      observe();
+    }
+    expect(state.phase).toBe('finished');
+    expect(state.karts.every(kart => kart.finishTime !== null)).toBe(true);
+    expect(held).toBe(true);
+    for (const kind of ['seeker', 'skycomet', 'bomb', 'decoy']) expect(kinds.has(kind), kind).toBe(true);
+    for (const type of ['go', 'pickup', 'use', 'hit', 'explode', 'ink', 'auto_start', 'lap', 'finish']) {
+      expect(events.has(type), type).toBe(true);
+    }
+    expect(parseControlMessage(encodeControlMessage({ type: 'race_end', raceId: 1, finalState: state })))
+      .toEqual({ type: 'race_end', raceId: 1, finalState: state });
+  }, 20_000);
 });
 
 describe('MockTransport', () => {
@@ -240,8 +332,13 @@ describe('MockTransport', () => {
     host.onJoin(link => peers.push(link.peerId));
     expect(peers).toEqual(['mock-guest-1']);
     expect(guest.peerId).toBe(toPeerId('AB2X'));
-    await expect(network.host('ab2x')).rejects.toBeInstanceOf(TransportError);
-    await expect(network.host('ab2x')).rejects.toMatchObject({ code: 'room_taken' });
+    const regenerated = await network.host('ab2x');
+    expect(isRoomCode(regenerated.roomCode)).toBe(true);
+    expect(regenerated.roomCode).not.toBe(host.roomCode);
+    const secondGuest = await network.join(regenerated.roomCode);
+    expect(secondGuest.peerId).toBe(toPeerId(regenerated.roomCode));
+    regenerated.close();
+    await expect(network.join('ZZZZ')).rejects.toBeInstanceOf(TransportError);
     await expect(network.join('ZZZZ')).rejects.toMatchObject({ code: 'room_not_found' });
     expect(() => network.advance(-1)).toThrow(RangeError);
     expect(() => new MockTransport({ lossRate: 2 })).toThrow(RangeError);

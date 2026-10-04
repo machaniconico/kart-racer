@@ -4,12 +4,12 @@ import type { RosterPlayer } from './session';
 export type { InputFrame, RaceEvent, RaceState } from '../sim/types';
 export type { RosterPlayer } from './session';
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 4;
 export const ROOM_PREFIX = `pcircuit-v${PROTOCOL_VERSION}-`;
-/** FNV-1a32 of JSON.stringify([KART_EFFECT_LAYOUT, ENTITY_KINDS]), hex padded to 8 digits.
- * Pinned to protocol v1; snapshot codec tests must compare the sim's actual layout.
+/** FNV-1a32 of JSON.stringify(SNAPSHOT_LAYOUT), including enum order and flight fields.
+ * Pinned to protocol v4; snapshot codec tests compare the actual wire descriptors.
  */
-export const LAYOUT_FINGERPRINT = '584a661e';
+export const LAYOUT_FINGERPRINT = '2daf5fc7';
 export const MAX_PLAYERS = 8;
 export const MAX_NAME_LENGTH = 10;
 export const MAX_CONTROL_LENGTH = 65_536;
@@ -89,8 +89,9 @@ const kartNumbers = [...poseFields, 'speed', 'steer', 'trackDistance', 'lateralO
 const kartBooleans = ['wrongWay', 'startedLap', 'lapValid', 'previousDrift', 'previousItem'];
 const effectTimers = ['rapidTime', 'auraTime', 'shrinkTime', 'inkTime', 'autoTime'];
 function effects(value: unknown): boolean {
-  return record(value) && keys(value, [...effectTimers, 'charges', 'holding', 'orbitKind', 'orbitCount']) &&
+  return record(value) && keys(value, [...effectTimers, 'rapidUnused', 'charges', 'holding', 'aiHoldTicks', 'orbitKind', 'orbitCount']) &&
     effectTimers.every(key => positiveTime(value[key])) && integer(value.charges, 0, 3) &&
+    integer(value.rapidUnused, 0, 1) && integer(value.aiHoldTicks, 0, 60) &&
     integer(value.holding, 0, 1) && integer(value.orbitKind, 0, 2) && integer(value.orbitCount, 0, 3);
 }
 function kart(value: unknown): boolean {
@@ -110,12 +111,16 @@ function box(value: unknown): boolean {
 }
 function entity(value: unknown, trap: boolean): boolean {
   const extra = trap ? 'age' : 'bounces';
-  return record(value) && keys(value, [...poseFields, 'id', 'ownerId', 'life', extra, 'kind'], ['target', 'aux']) &&
+  return record(value) && keys(value, [...poseFields, 'id', 'ownerId', 'life', extra, 'kind'],
+    trap ? ['target', 'aux'] : ['target', 'aux', 'speed', 'ownerCleared']) &&
     poseFields.every(key => finite(value[key])) && integer(value.id) && slot(value.ownerId) &&
-    positiveTime(value.life) && (trap ? positiveTime(value.age) : integer(value.bounces, 0, 255)) &&
+    positiveTime(value.life) && (trap ? positiveTime(value.age) : integer(value.bounces, 0, 127)) &&
     oneOf(value.kind, trap ? ['trap', 'decoy'] : ['bolt', 'seeker', 'skycomet', 'bomb']) &&
     (!Object.hasOwn(value, 'target') || value.target === null || slot(value.target)) &&
-    (!Object.hasOwn(value, 'aux') || finite(value.aux));
+    (!Object.hasOwn(value, 'aux') || finite(value.aux)) &&
+    (!Object.hasOwn(value, 'speed') || (value.kind === 'bomb' && positiveTime(value.speed) && value.speed <= 127.5)) &&
+    (!Object.hasOwn(value, 'ownerCleared') ||
+      (oneOf(value.kind, ['bolt', 'bomb']) && typeof value.ownerCleared === 'boolean'));
 }
 export function isRaceState(value: unknown): value is RaceState {
   if (!record(value) || !keys(value, ['tick', 'seed', 'phase', 'countdown', 'racingTicks', 'time',

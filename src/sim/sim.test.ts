@@ -96,9 +96,12 @@ describe('eight racer roster and grid', () => {
     }
   });
 
-  it('initializes independent zero effects with a complete nonoverlapping eight-byte layout', () => {
+  it('initializes independent inactive effects with a complete nonoverlapping eight-byte layout', () => {
     const state = createRace(42);
-    for (const kart of state.karts) expect(Object.values(kart.effects).every((value) => value === 0)).toBe(true);
+    for (const kart of state.karts) {
+      expect(kart.effects.rapidUnused).toBe(1);
+      expect(Object.entries(kart.effects).every(([key, value]) => key === 'rapidUnused' || value === 0)).toBe(true);
+    }
     expect(KART_EFFECT_LAYOUT.map((field) => field.field).sort()).toEqual(Object.keys(state.karts[0]!.effects).sort());
     const usedBits = Array<number>(8).fill(0);
     for (const field of KART_EFFECT_LAYOUT) {
@@ -428,6 +431,7 @@ describe('deterministic inputs, PRNG and saves', () => {
   });
 
   it('draws identical item sequences from one seed and helps trailing racers', () => {
+    const DASH_FAMILY = new Set<string | null>(['dash', 'tripleDash', 'rapidDash']);
     const first = { seed: 9 };
     const second = { seed: 9 };
     const leading = { seed: 817 };
@@ -436,8 +440,8 @@ describe('deterministic inputs, PRNG and saves', () => {
     let lastDashes = 0;
     for (let i = 0; i < 3000; i++) {
       expect(chooseItem(first, i % 8 + 1)).toBe(chooseItem(second, i % 8 + 1));
-      if (chooseItem(leading, 1) === 'dash') leaderDashes++;
-      if (chooseItem(trailing, 8) === 'dash') lastDashes++;
+      if (DASH_FAMILY.has(chooseItem(leading, 1))) leaderDashes++;
+      if (DASH_FAMILY.has(chooseItem(trailing, 8))) lastDashes++;
     }
     expect(lastDashes).toBeGreaterThan(leaderDashes * 2.5);
     expect(createRace(0).seed).not.toBe(0);
@@ -471,6 +475,8 @@ describe('driving and items', () => {
     kart.item = item;
     const entityId = state.nextEntityId;
     useItem(state, kart, { ...NEUTRAL_INPUT, useItem: true });
+    expect(kart.effects.holding).toBe(1);
+    useItem(state, kart, NEUTRAL_INPUT);
     const entities = item === 'trap' ? state.traps : state.projectiles;
     expect(entities).toHaveLength(1);
     expect(entities[0]).toMatchObject({ kind: item, id: entityId, ownerId: kart.id });
@@ -484,7 +490,6 @@ describe('driving and items', () => {
     expect(entities[0]!.life).toBeCloseTo(life - FIXED_DT, 10);
     expect(kart.spinTime).toBe(0);
     useItem(state, kart, NEUTRAL_INPUT);
-    useItem(state, kart, { ...NEUTRAL_INPUT, useItem: true });
     expect(state.traps.length + state.projectiles.length).toBe(2);
   });
 
@@ -592,6 +597,7 @@ describe('driving and items', () => {
       owner.item = item;
       place(victim, item === 'trap' ? 27.4 : 33.5);
       stepRace(state, [{ ...NEUTRAL_INPUT, useItem: true }]);
+      stepRace(state, [NEUTRAL_INPUT]);
       expect(victim.spinTime).toBeGreaterThan(0);
       expect(state.events).toContainEqual({ type: 'hit', kartId: 1 });
       expect(state.traps.length + state.projectiles.length).toBe(0);
@@ -614,20 +620,55 @@ describe('driving and items', () => {
 });
 
 describe('CPU race integration', () => {
+  it('finishes three laps with eight CPUs across ten seeds, using all fourteen items from boxes', () => {
+    const uses = new Set<string>();
+    for (let seed = 1; seed <= 10; seed++) {
+      const racers = createRace(seed).karts.map(({ name, color }) => ({ name, color, human: false }));
+      const state = createRace(seed, { racers });
+      let restored: RaceState = JSON.parse(JSON.stringify(state));
+      for (let tick = 0; tick < 60 * 180 && state.phase !== 'finished'; tick++) {
+        const inventory = state.karts.map(kart => kart.item);
+        stepRace(state, state.karts.map(kart => getAIInput(state, kart.id)));
+        stepRace(restored, restored.karts.map(kart => getAIInput(restored, kart.id)));
+        for (const event of state.events) {
+          if (event.type === 'use') {
+            expect(inventory[event.kartId]).not.toBeNull();
+            uses.add(inventory[event.kartId]!);
+          }
+        }
+        if (tick % 137 === 0) {
+          expect(restored).toEqual(state);
+          restored = JSON.parse(JSON.stringify(restored));
+        }
+      }
+      expect(state.phase, `seed ${seed}`).toBe('finished');
+      expect(isRaceTimedOut(state), `seed ${seed}`).toBe(false);
+      expect(state.karts.every(kart => !kart.human && kart.lapTimes.length === 3 &&
+        kart.lap === 3 && kart.finishTime !== null), `seed ${seed}`).toBe(true);
+      expect(restored).toEqual(state);
+    }
+    expect([...uses].sort()).toEqual(['dash', 'trap', 'bolt', 'seeker', 'skycomet', 'tripleDash',
+      'rapidDash', 'aura', 'storm', 'ink', 'decoy', 'bomb', 'autopilot', 'barrier'].sort());
+  }, 20_000);
+
   it('drives all eight input sources around the course and completes a three lap race', () => {
     const racers = createRace(2026).karts.map(({ name, color }) => ({ name, color, human: true }));
     const state = createRace(2026, { racers });
     const uses = new Set<string>();
     for (let i = 0; i < 60 * 180 && state.phase !== 'finished'; i++) {
       const frames = state.karts.map((kart) => getAIInput(state, kart.id));
-      for (const kart of state.karts) if (kart.item && frames[kart.id]!.useItem) uses.add(kart.item);
+      const inventory = state.karts.map(kart => kart.item);
       stepRace(state, frames);
+      for (const event of state.events) {
+        if (event.type === 'use' && inventory[event.kartId]) uses.add(inventory[event.kartId]!);
+      }
     }
     expect(state.phase, JSON.stringify(state.karts.map((kart) => ({ id: kart.id, lap: kart.lap, checkpoint: kart.nextCheckpoint, progress: kart.lapProgress, offset: kart.lateralOffset, speed: kart.speed })))).toBe('finished');
     expect(state.karts[0]!.lapTimes).toHaveLength(3);
     expect(state.karts[0]!.finishTime).toBeGreaterThan(35);
     expect(state.karts.every((kart) => kart.lap === 3 && kart.finishTime !== null)).toBe(true);
-    expect(uses.size).toBe(3);
+    expect(uses.size).toBeGreaterThanOrEqual(3);
+    expect(['dash', 'trap', 'bolt'].some(item => uses.has(item))).toBe(true);
   }, 20_000);
 });
 
@@ -732,7 +773,7 @@ describe('CPU finish independence', () => {
     expect(getRank(state, cpu.id)).toBe(1);
   });
 
-  it('keeps finished CPU karts solid for rear impacts and item hits', () => {
+  it('keeps finished CPU karts solid for rear impacts but excludes item hits', () => {
     const state = startRace();
     const player = state.karts[0]!;
     const cpu = state.karts[1]!;
@@ -747,8 +788,8 @@ describe('CPU finish independence', () => {
     state.traps.push({ kind: 'trap', id: 999, ownerId: 0, x: cpu.x, y: cpu.y, z: cpu.z,
       heading: cpu.heading, life: 20, age: 2 });
     stepRace(state, []);
-    expect(cpu.spinTime).toBeGreaterThan(0);
-    expect(state.traps).toHaveLength(0);
+    expect(cpu.spinTime).toBe(0);
+    expect(state.traps).toHaveLength(1);
     expect(cpu.finishTime).toBe(1);
   });
 

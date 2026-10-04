@@ -2,22 +2,15 @@ import { getRank, TOTAL_LAPS } from '../sim/laps';
 import { getFinishTimeRemaining, isRaceTimedOut } from '../sim/race';
 import { TRACK_SAMPLES } from '../sim/track';
 import type { ItemType, KartState, RaceState } from '../sim/types';
+import { emptyItemIcon as emptyItem, icon, itemIcon, itemName, itemShortName } from './itemIcons';
 
-type Screen = 'title' | 'race' | 'results';
+type Screen = 'title' | 'lobby' | 'race' | 'results';
+type Mode = 'solo' | 'host' | 'guest';
 
-const icon = (body: string, className = ''): string => `<svg class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
 const arrow = icon('<path d="M4 12h15M13 5l7 7-7 7"/>');
 const volume = icon('<path d="M11 5 6 9H3v6h3l5 4V5Z"/><path class="sound-wave" d="M15 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/><path class="sound-cross" d="m16 9 6 6m0-6-6 6"/>');
 const pauseIcon = icon('<path d="M8 5v14M16 5v14"/>');
 const driftIcon = icon('<path d="m7 3 8 5-4 5 6 4M7 21h10M4 8l4 2m-4 4 3 1"/>');
-const itemIcons: Record<ItemType, string> = {
-  dash: icon('<path d="m14 2-9 12h7l-2 8 9-12h-7l2-8Z"/>'),
-  trap: icon('<path d="M5 16 12 4l7 12H5Z"/><path d="M3 20h18M12 9v3m0 3h.01"/>'),
-  bolt: icon('<path d="m4 16 12-12 4 4-12 12H4v-4ZM13 7l4 4M3 6l3-3m12 18 3-3"/>'),
-};
-const emptyItem = icon('<path d="M6 4h12l3 8-9 9-9-9 3-8Z"/><path d="M9 9a3 3 0 0 1 6 0c0 2-3 2-3 4m0 3h.01"/>');
-const itemNames: Record<ItemType, string> = { dash: 'ソニックダッシュ', trap: 'ポップトラップ', bolt: 'リコシェボルト' };
-const itemShortNames: Record<ItemType, string> = { dash: 'ダッシュ', trap: 'トラップ', bolt: 'ボルト' };
 
 export function formatTime(seconds: number): string {
   const hundredths = Math.max(0, Math.floor(seconds * 100));
@@ -33,6 +26,8 @@ export function formatResultTime(state: RaceState, kart: KartState): string {
 export class GameUI {
   readonly canvas: HTMLCanvasElement;
   private readonly title: HTMLElement;
+  /** Empty frame; the lobby UI mounts its own content here. */
+  readonly lobby: HTMLElement;
   private readonly race: HTMLElement;
   private readonly results: HTMLElement;
   private readonly pause: HTMLElement;
@@ -49,7 +44,7 @@ export class GameUI {
   private mapOffsetX = 0;
   private mapOffsetZ = 0;
 
-  constructor(private readonly root: HTMLElement) {
+  constructor(private readonly root: HTMLElement, private localKartId: number) {
     root.innerHTML = `
       <canvas id="game-canvas" tabindex="-1" aria-label="緑の丘を走る3Dカートレース"></canvas>
       <header class="topbar">
@@ -65,7 +60,7 @@ export class GameUI {
           <div class="eyebrow"><span class="live-dot"></span> SMALL KARTS. BIG ADVENTURES.</div>
           <h1 id="game-title">POCKET<br><span>CIRCUIT.</span></h1>
           <p class="title-tagline">曲がれ。風になれ。</p>
-          <p class="title-description">丘を越えて、カーブを抜けて。<br>5台のライバルと、3周の小さな冒険。</p>
+          <p class="title-description">丘を越えて、カーブを抜けて。<br>7台のライバルと、3周の小さな冒険。</p>
           <button id="start-race" class="primary-button start-button" type="button"><span>レースをはじめる</span>${arrow}</button>
           <div class="title-record"><span>PERSONAL BEST</span><strong id="title-best">まだ記録はありません</strong></div>
         </div>
@@ -75,15 +70,17 @@ export class GameUI {
           <p class="touch-help">左手で曲がる。右手でドリフト。<br>アクセルは自動でも、手動でも。</p>
           <p class="drift-tip">ドリフトをためて、離すとターボ。</p>
         </aside>
-        <footer class="course-strip"><div><span class="course-index">01</span><span><small>THE CIRCUIT</small><strong>MEADOW LOOP</strong></span></div><div><small>ON THE GRID</small><strong>6 RACERS</strong></div><div><small>TO THE FINISH</small><strong>3 LAPS</strong></div><span class="course-footnote">A FRESH LITTLE ESCAPE.</span></footer>
+        <footer class="course-strip"><div><span class="course-index">01</span><span><small>THE CIRCUIT</small><strong>MEADOW LOOP</strong></span></div><div><small>ON THE GRID</small><strong>8 RACERS</strong></div><div><small>TO THE FINISH</small><strong>3 LAPS</strong></div><span class="course-footnote">A FRESH LITTLE ESCAPE.</span></footer>
       </section>
 
+      <section id="lobby-screen" class="screen lobby-screen" aria-label="ロビー" hidden></section>
+
       <section id="race-screen" class="screen race-screen" aria-label="レース" hidden>
-        <div class="race-position" aria-label="順位とラップ"><div class="position-group"><span class="hud-eyebrow">POSITION</span><div><strong id="position-value">6</strong><span class="position-total">/ 6</span></div></div><div class="lap-group"><span class="hud-eyebrow">LAP</span><strong><span id="lap-value">1</span><span class="lap-total"> / 3</span></strong></div></div>
+        <div class="race-position" aria-label="順位とラップ"><div class="position-group"><span class="hud-eyebrow">POSITION</span><div><strong id="position-value">8</strong><span id="position-total" class="position-total">/ 8</span></div></div><div class="lap-group"><span class="hud-eyebrow">LAP</span><strong><span id="lap-value">1</span><span class="lap-total"> / 3</span></strong></div></div>
         <div class="race-times"><div><span>TOTAL</span><strong id="total-time">00:00.00</strong></div><div><span>LAP</span><strong id="lap-time">00:00.00</strong></div><div class="best-lap-line"><span>BEST LAP</span><strong id="best-lap">—</strong></div></div>
         <div class="item-display"><div id="item-hud-icon" class="item-icon">${emptyItem}</div><div><span class="hud-eyebrow">YOUR ITEM</span><strong id="item-name">ボックスを取ろう</strong><span class="item-key"><kbd>SHIFT</kbd> / <kbd>E</kbd> で使う</span></div></div>
         <div id="countdown-display" class="countdown-display" role="status" aria-live="polite" hidden>3</div>
-        <div class="race-notices"><p id="finish-countdown" class="finish-countdown" role="timer" hidden></p><p id="wrong-way" class="wrong-way" role="status" hidden>↶ 逆走しています</p><p id="race-status" class="race-status" hidden></p></div>
+        <div class="race-notices"><p id="finish-countdown" class="finish-countdown" role="timer" hidden></p><p id="wrong-way" class="wrong-way" role="status" hidden>↶ 逆走しています</p><p id="race-status" class="race-status" hidden></p><p id="net-status" class="race-status" role="status" hidden></p></div>
         <div class="speed-display"><strong id="speed-value">0</strong><span>km/h</span><div id="drift-meter" class="drift-meter" data-stage="0"><div class="drift-meter-label"><span id="drift-label">MINI TURBO</span><span class="drift-levels">Ⅰ / Ⅱ</span></div><div class="drift-track"><div id="drift-fill" class="drift-fill"></div><i class="drift-threshold"></i></div></div></div>
         <div class="minimap"><span>MEADOW LOOP</span><canvas id="minimap-canvas" width="360" height="256" aria-label="コース全体図。明るい枠のマーカーがあなたです。"></canvas><span class="map-you"><i></i>YOU</span></div>
         <div class="touch-controls" aria-label="タッチ操作">
@@ -98,16 +95,19 @@ export class GameUI {
           <div class="finish-summary"><div><span>YOUR TIME</span><strong id="finish-time">00:00.00</strong></div><span id="new-record" class="record-badge" hidden>NEW BEST!</span><div class="finish-best"><span>PERSONAL BEST</span><strong id="finish-best">—</strong></div></div>
           <ol id="leaderboard" class="leaderboard" aria-label="レース順位"></ol>
           <p id="result-laps" class="result-laps"></p>
-          <div class="result-actions"><button id="retry-race" class="primary-button" type="button"><span>もう一度走る</span>${arrow}</button><button id="back-title" class="secondary-button" type="button">タイトルへ</button></div>
+          <div class="result-actions"><button id="retry-race" class="primary-button" type="button"><span id="retry-label">もう一度走る</span>${arrow}</button><button id="back-title" class="secondary-button" type="button">タイトルへ</button></div>
         </div>
       </section>
 
-      <section id="pause-dialog" class="modal-overlay" hidden><div class="pause-content" role="dialog" aria-modal="true" aria-labelledby="pause-heading"><span class="eyebrow">TAKE A BREATHER</span><h2 id="pause-heading">ひとやすみ。</h2><p>レースはここで待っています。</p><button id="resume-race" class="primary-button" type="button"><span>レースをつづける</span>${arrow}</button><button id="quit-race" class="secondary-button" type="button">タイトルへ戻る</button><span class="pause-shortcut"><kbd>ESC</kbd> で再開</span></div></section>
+      <section id="pause-dialog" class="modal-overlay" hidden><div class="pause-content" role="dialog" aria-modal="true" aria-labelledby="pause-heading"><span id="pause-eyebrow" class="eyebrow">TAKE A BREATHER</span><h2 id="pause-heading">ひとやすみ。</h2><p id="pause-message">レースはここで待っています。</p><button id="resume-race" class="primary-button" type="button"><span id="resume-label">レースをつづける</span>${arrow}</button><button id="quit-race" class="secondary-button" type="button">タイトルへ戻る</button><span class="pause-shortcut"><kbd>ESC</kbd> で<span id="pause-shortcut-label">再開</span></span></div></section>
+      <section id="net-dialog" class="modal-overlay error-overlay" hidden><div class="pause-content" role="alertdialog" aria-modal="true" aria-labelledby="net-heading"><span class="eyebrow">CONNECTION LOST</span><h2 id="net-heading">接続が切れました</h2><p id="net-message"></p><button id="net-dialog-ok" class="primary-button" type="button">タイトルへ戻る</button></div></section>
+      <p id="host-notice" class="host-notice" role="note" hidden>ホスト中 · この画面を閉じたり切り替えたりしないでください</p>
       <div class="orientation-hint" role="note">${icon('<rect x="7" y="3" width="10" height="18" rx="2"/><path d="m20 7 2 3-2 3M4 17l-2-3 2-3"/>')}<span>横にしてね<span>横画面なら、もっと走りやすい。</span></span></div>
       <section id="error-dialog" class="modal-overlay error-overlay" hidden><div class="pause-content" role="alertdialog" aria-modal="true" aria-labelledby="error-heading"><span class="eyebrow">A SMALL PIT STOP</span><h2 id="error-heading">スタートできませんでした</h2><p id="error-message"></p><button id="reload-page" class="primary-button" type="button">ページを再読み込み</button></div></section>
     `;
     this.canvas = this.get<HTMLCanvasElement>('game-canvas');
     this.title = this.get('title-screen');
+    this.lobby = this.get('lobby-screen');
     this.race = this.get('race-screen');
     this.results = this.get('results-screen');
     this.pause = this.get('pause-dialog');
@@ -132,6 +132,7 @@ export class GameUI {
     this.screen = screen;
     this.root.dataset.screen = screen;
     this.title.hidden = screen !== 'title';
+    this.lobby.hidden = screen !== 'lobby';
     this.race.hidden = screen !== 'race';
     this.results.hidden = screen !== 'results';
     this.setPaused(false);
@@ -139,13 +140,52 @@ export class GameUI {
       this.lastItem = undefined;
       this.lastMapTick = -1;
       this.canvas.focus({ preventScroll: true });
-    } else {
+    } else if (screen !== 'lobby') {
       requestAnimationFrame(() => {
         if (this.screen === screen && !this.paused && this.get('error-dialog').hidden) {
-          this.get(screen === 'title' ? 'start-race' : 'retry-race').focus({ preventScroll: true });
+          const retry = this.get('retry-race').hidden ? 'back-title' : 'retry-race';
+          this.get(screen === 'title' ? 'start-race' : retry).focus({ preventScroll: true });
         }
       });
     }
+  }
+
+  /** Online play relabels pause as a leave confirmation and result actions as lobby/room actions. */
+  setMode(mode: Mode, localKartId = 0): void {
+    this.localKartId = localKartId;
+    this.lastItem = undefined;
+    this.lastMapTick = -1;
+    this.root.dataset.mode = mode;
+    const online = mode !== 'solo';
+    this.text('pause-eyebrow', online ? 'ONLINE RACE' : 'TAKE A BREATHER');
+    this.text('pause-heading', online ? 'レースを退出しますか？' : 'ひとやすみ。');
+    this.text('pause-message', mode === 'host' ? 'レースは止まりません。退出するとルームが閉じ、全員のレースが終わります。'
+      : mode === 'guest' ? 'レースは止まりません。退出すると、あなたのカートは CPU が走らせます。' : 'レースはここで待っています。');
+    this.text('resume-label', online ? 'レースにもどる' : 'レースをつづける');
+    this.text('quit-race', online ? '退出する' : 'タイトルへ戻る');
+    this.text('pause-shortcut-label', online ? 'もどる' : '再開');
+    this.text('retry-label', mode === 'host' ? '再戦（ロビーへ）' : 'もう一度走る');
+    this.get('retry-race').hidden = mode === 'guest';
+    this.text('back-title', mode === 'host' ? 'ルームを閉じる' : mode === 'guest' ? '退出する' : 'タイトルへ');
+    this.get('host-notice').hidden = mode !== 'host';
+    this.setNetStatus(null);
+  }
+
+  /** Guest-only connection notice inside the race HUD, e.g. a stalled host. */
+  setNetStatus(message: string | null): void {
+    this.get('net-status').hidden = message === null;
+    this.text('net-status', message ?? '');
+  }
+
+  showDisconnected(message: string): void {
+    this.setPaused(false);
+    this.text('net-message', message);
+    this.get('net-dialog').hidden = false;
+    this.get('net-dialog-ok').focus({ preventScroll: true });
+  }
+
+  hideDisconnected(): void {
+    this.get('net-dialog').hidden = true;
   }
 
   setPaused(paused: boolean): void {
@@ -164,9 +204,10 @@ export class GameUI {
   }
 
   update(state: RaceState): void {
-    const player = state.karts.find((kart) => kart.id === 0);
+    const player = state.karts.find((kart) => kart.id === this.localKartId);
     if (!player) return;
-    this.text('position-value', String(getRank(state, 0)));
+    this.text('position-value', String(getRank(state, this.localKartId)));
+    this.text('position-total', `/ ${state.karts.length}`);
     this.text('lap-value', String(Math.min(TOTAL_LAPS, player.lap + 1)));
     this.text('total-time', formatTime(player.finishTime ?? state.time));
     this.text('lap-time', formatTime(Math.max(0, state.time - player.lapStartTime)));
@@ -197,9 +238,9 @@ export class GameUI {
 
     if (this.lastItem !== player.item) {
       this.lastItem = player.item;
-      this.text('item-name', player.item ? itemNames[player.item] : 'ボックスを取ろう');
-      this.text('item-button-name', player.item ? itemShortNames[player.item] : 'ITEM');
-      const art = player.item ? itemIcons[player.item] : emptyItem;
+      this.text('item-name', player.item ? itemName(player.item) : 'ボックスを取ろう');
+      this.text('item-button-name', player.item ? itemShortName(player.item) : 'ITEM');
+      const art = player.item ? itemIcon(player.item) : emptyItem;
       this.get('item-hud-icon').innerHTML = art;
       this.get('item-button-icon').innerHTML = art;
       this.get('item-hud-icon').classList.toggle('has-item', player.item !== null);
@@ -209,7 +250,7 @@ export class GameUI {
         button.classList.remove('is-pressed');
         button.dispatchEvent(new Event('control-disabled'));
       }
-      button.setAttribute('aria-label', player.item ? `${itemNames[player.item]}を使う` : 'アイテムを持っていません');
+      button.setAttribute('aria-label', player.item ? `${itemName(player.item)}を使う` : 'アイテムを持っていません');
     }
     if (state.tick !== this.lastMapTick && (state.tick % 4 === 0 || this.lastMapTick < 0)) {
       this.lastMapTick = state.tick;
@@ -218,9 +259,9 @@ export class GameUI {
   }
 
   showResults(state: RaceState, best: number | null, isRecord: boolean): void {
-    const player = state.karts.find((kart) => kart.id === 0);
+    const player = state.karts.find((kart) => kart.id === this.localKartId);
     if (!player) return;
-    const rank = getRank(state, 0);
+    const rank = getRank(state, this.localKartId);
     const didFinish = player.finishTime !== null;
     this.text('results-heading', didFinish ? 'FINISH!' : 'RACE OVER');
     this.get('result-position').innerHTML = `${rank}<span>位</span>`;
@@ -232,7 +273,7 @@ export class GameUI {
     const order = [...state.karts].sort((a, b) => getRank(state, a.id) - getRank(state, b.id));
     for (const [index, kart] of order.entries()) {
       const row = document.createElement('li');
-      row.className = kart.id === 0 ? 'leaderboard-row is-player' : 'leaderboard-row';
+      row.className = kart.id === this.localKartId ? 'leaderboard-row is-player' : 'leaderboard-row';
       const position = document.createElement('span');
       position.className = 'leaderboard-position';
       position.textContent = String(index + 1).padStart(2, '0');
@@ -242,7 +283,7 @@ export class GameUI {
       const name = document.createElement('span');
       name.className = 'racer-name';
       name.textContent = kart.name;
-      if (kart.id === 0) {
+      if (kart.id === this.localKartId) {
         const badge = document.createElement('small');
         badge.textContent = 'YOU';
         name.append(badge);
@@ -279,7 +320,7 @@ export class GameUI {
   }
 
   private isPlaying(): boolean {
-    return this.screen === 'race' && !this.paused && this.get('error-dialog').hidden;
+    return this.screen === 'race' && !this.paused && this.get('error-dialog').hidden && this.get('net-dialog').hidden;
   }
 
   private get<T extends HTMLElement = HTMLElement>(id: string): T {
@@ -350,12 +391,12 @@ export class GameUI {
       context.lineWidth = 2;
       context.stroke();
     }
-    const karts = [...state.karts].sort((a, b) => Number(a.id === 0) - Number(b.id === 0));
+    const karts = [...state.karts].sort((a, b) => Number(a.id === this.localKartId) - Number(b.id === this.localKartId));
     for (const kart of karts) {
       const x = kart.x * this.mapScale + this.mapOffsetX;
       const y = kart.z * this.mapScale + this.mapOffsetZ;
       context.beginPath();
-      if (kart.id === 0) {
+      if (kart.id === this.localKartId) {
         context.save();
         context.translate(x, y);
         context.rotate(Math.PI - kart.heading);
@@ -367,8 +408,8 @@ export class GameUI {
         context.restore();
       } else context.arc(x, y, 3.4, 0, Math.PI * 2);
       context.fillStyle = `#${kart.color.toString(16).padStart(6, '0')}`;
-      context.strokeStyle = kart.id === 0 ? '#ffffff' : '#173d35';
-      context.lineWidth = kart.id === 0 ? 1.8 : 1;
+      context.strokeStyle = kart.id === this.localKartId ? '#ffffff' : '#173d35';
+      context.lineWidth = kart.id === this.localKartId ? 1.8 : 1;
       context.fill();
       context.stroke();
     }

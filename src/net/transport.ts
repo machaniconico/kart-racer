@@ -10,7 +10,11 @@ export interface PeerLink {
 }
 
 export interface TransportHost {
+  /** Actual normalized code; a broker ID collision can regenerate the requested one. */
+  readonly roomCode: string;
   onJoin(handler: (link: PeerLink) => void): void;
+  /** Reconnection failed; existing P2P links remain usable. Replayed to late subscribers. */
+  onBrokerLost(handler: (error: TransportError) => void): void;
   close(): void;
 }
 
