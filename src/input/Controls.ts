@@ -1,4 +1,5 @@
 import type { InputFrame, InputSource, RaceState } from '../sim/types';
+import { playerSteerToSim } from '../sim/steer';
 
 type TouchAction = 'steer' | 'throttle' | 'brake' | 'drift' | 'item';
 
@@ -124,7 +125,7 @@ export class Controls implements InputSource {
     const brake = this.keys.has('ArrowDown') || this.keys.has('KeyS') || this.hasPointer('brake') || gamepad.brake;
     const accelerating = this.auto || this.keys.has('ArrowUp') || this.keys.has('KeyW') || this.hasPointer('throttle');
     const frame: InputFrame = {
-      steer: clamp(steer, -1, 1),
+      steer: playerSteerToSim(clamp(steer, -1, 1)),
       throttle: brake ? 0 : Math.max(Number(accelerating), gamepad.throttle),
       brake,
       drift: this.keys.has('Space') || this.hasPointer('drift') || gamepad.drift,

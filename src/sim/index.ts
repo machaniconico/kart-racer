@@ -7,3 +7,4 @@ export { random } from './random';
 export * from './items';
 export * from './itemTypes';
 export * from './itemAi';
+export * from './steer';
