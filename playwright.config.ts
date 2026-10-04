@@ -2,12 +2,11 @@ import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: 'multiplayer.spec.ts',
+  testMatch: ['multiplayer.spec.ts', 'courses.spec.ts'],
   fullyParallel: false,
   workers: 1,
   forbidOnly: !!process.env.CI,
-  // Each retry reconnects two fresh contexts to the public broker.
-  retries: 2,
+  retries: 0,
   // Locally a pass that needed a retry still fails, so flakiness is not hidden behind "3 green runs".
   failOnFlakyTests: !process.env.CI,
   timeout: 120_000,

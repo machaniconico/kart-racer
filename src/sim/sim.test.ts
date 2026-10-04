@@ -1,14 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
-  BOX_RESPAWN_TIME, CHECKPOINT_COUNT, DRIFT_BLUE_TIME, DRIFT_ORANGE_TIME, FIXED_DT,
-  KART_RADIUS, NEUTRAL_INPUT, ROAD_HALF_WIDTH, TOTAL_LAPS, TRACK_LENGTH,
-  WALL_HALF_WIDTH, chooseItem, createRace, getAIInput, getRank, projectToTrack,
-  sampleTrack, stepRace, updateLapTracking, TRACK_SAMPLES, RACE_FINISH_TIMEOUT,
+  BOX_RESPAWN_TIME, DRIFT_BLUE_TIME, DRIFT_ORANGE_TIME, FIXED_DT,
+  KART_RADIUS, NEUTRAL_INPUT, TOTAL_LAPS,
+  chooseItem, createRace, getAIInput, getRank, projectToTrack,
+  sampleTrack, stepRace, updateLapTracking, RACE_FINISH_TIMEOUT,
   getFinishTimeRemaining, isRaceTimedOut, KART_EFFECT_LAYOUT, ENTITY_KINDS,
   decideItemUse, getKartModifiers, onKartContact, hitKart, useItem, advanceItems,
 } from './index';
 import type { InputFrame, KartState, RaceState } from './types';
 import { formatResultTime } from '../ui/GameUI';
+import { getTrack } from './tracks';
+
+const track = getTrack('meadow');
 
 const accelerate: InputFrame = { ...NEUTRAL_INPUT, throttle: 1 };
 
@@ -19,7 +22,7 @@ function startRace(seed = 42): RaceState {
 }
 
 function place(kart: KartState, distance: number, offset = 0): void {
-  const sample = sampleTrack(distance);
+  const sample = sampleTrack(track, distance);
   kart.x = sample.x + sample.nx * offset;
   kart.y = sample.y;
   kart.z = sample.z + sample.nz * offset;
@@ -33,18 +36,18 @@ function trackMove(state: RaceState, distance: number, time: number, offset = 0)
   const previous = { x: kart.x, z: kart.z, trackDistance: kart.trackDistance };
   place(kart, distance, offset);
   state.time = time;
-  updateLapTracking(state, kart, previous);
+  updateLapTracking(track, state, kart, previous);
 }
 
 function armLap(state: RaceState): void {
-  place(state.karts[0]!, TRACK_LENGTH - 0.5);
+  place(state.karts[0]!, track.length - 0.5);
   trackMove(state, 0.5, 0.5);
 }
 
 function travelLap(state: RaceState, lapTime: number): void {
   const startTime = state.time;
-  const steps = Math.ceil(TRACK_LENGTH);
-  for (let i = 1; i <= steps; i++) trackMove(state, 0.5 + i / steps * TRACK_LENGTH, startTime + i / steps * lapTime);
+  const steps = Math.ceil(track.length);
+  for (let i = 1; i <= steps; i++) trackMove(state, 0.5 + i / steps * track.length, startTime + i / steps * lapTime);
 }
 
 function minimumRadius(points: readonly { x: number; z: number }[]): number {
@@ -58,7 +61,7 @@ function minimumRadius(points: readonly { x: number; z: number }[]): number {
 }
 
 function expectSafeRadius(points: readonly { x: number; z: number }[]): void {
-  expect(minimumRadius(points)).toBeGreaterThan(WALL_HALF_WIDTH);
+  expect(minimumRadius(points)).toBeGreaterThan(track.def.wallHalfWidth);
   expect(minimumRadius(points)).toBeGreaterThanOrEqual(13);
 }
 
@@ -85,7 +88,7 @@ describe('eight racer roster and grid', () => {
   it('places every grid slot inside the road, tangent-aligned and at least 2.2m apart', () => {
     const { karts } = createRace(42);
     for (const kart of karts) {
-      const projection = projectToTrack(kart.x, kart.z);
+      const projection = projectToTrack(track, kart.x, kart.z);
       expect(Math.abs(kart.lateralOffset)).toBeLessThanOrEqual(2.5);
       expect(Math.abs(projection.offset)).toBeLessThanOrEqual(2.5);
       const angle = kart.heading - projection.heading;
@@ -195,11 +198,11 @@ describe('human roster completion', () => {
     state.karts[2]!.finishTime = 0;
     state.racingTicks = 45 / FIXED_DT - 1;
     const last = state.karts[5]!;
-    place(last, TRACK_LENGTH - 0.1);
+    place(last, track.length - 0.1);
     last.startedLap = true;
     last.lap = 2;
     last.nextCheckpoint = 0;
-    last.lapProgress = TRACK_LENGTH - 0.1;
+    last.lapProgress = track.length - 0.1;
     last.speed = 20;
     stepRace(state, state.karts.map(() => accelerate));
     expect(last.finishTime).toBe(45);
@@ -223,7 +226,7 @@ describe('human roster completion', () => {
 
 describe('course and clock', () => {
   it('keeps the minimum course radius at least 13 metres and beyond the guardrails', () => {
-    expectSafeRadius(TRACK_SAMPLES);
+    expectSafeRadius(track.samples);
   });
 
   it('rejects the original self-intersecting hairpin with the same radius assertion', () => {
@@ -246,11 +249,11 @@ describe('course and clock', () => {
   it('projects continuous half-metre steps around the entire course at offsets from -10 to +10', () => {
     for (let offset = -10; offset <= 10; offset++) {
       let previousDistance = 0;
-      for (let distance = 0; distance < TRACK_LENGTH + 1; distance += 0.5) {
-        const sample = sampleTrack(distance);
-        const projection = projectToTrack(sample.x + sample.nx * offset, sample.z + sample.nz * offset, previousDistance);
-        const delta = Math.atan2(Math.sin((projection.distance - previousDistance) / TRACK_LENGTH * Math.PI * 2),
-          Math.cos((projection.distance - previousDistance) / TRACK_LENGTH * Math.PI * 2)) * TRACK_LENGTH / (Math.PI * 2);
+      for (let distance = 0; distance < track.length + 1; distance += 0.5) {
+        const sample = sampleTrack(track, distance);
+        const projection = projectToTrack(track, sample.x + sample.nx * offset, sample.z + sample.nz * offset, previousDistance);
+        const delta = Math.atan2(Math.sin((projection.distance - previousDistance) / track.length * Math.PI * 2),
+          Math.cos((projection.distance - previousDistance) / track.length * Math.PI * 2)) * track.length / (Math.PI * 2);
         expect(Math.abs(delta), `offset ${offset}, distance ${distance}`).toBeLessThan(2);
         previousDistance = projection.distance;
       }
@@ -261,11 +264,11 @@ describe('course and clock', () => {
     const state = startRace();
     armLap(state);
     const kart = state.karts[0]!;
-    const target = sampleTrack(TRACK_LENGTH * 0.6);
+    const target = sampleTrack(track, track.length * 0.6);
     kart.x = target.x + target.nx * 3;
     kart.z = target.z + target.nz * 3;
-    const global = projectToTrack(kart.x, kart.z);
-    expect(projectToTrack(kart.x, kart.z, kart.trackDistance)).toEqual(global);
+    const global = projectToTrack(track, kart.x, kart.z);
+    expect(projectToTrack(track, kart.x, kart.z, kart.trackDistance)).toEqual(global);
     stepRace(state, []);
     expect(kart.trackDistance).toBeCloseTo(target.distance, 1);
     expect(kart.lapValid).toBe(false);
@@ -274,14 +277,14 @@ describe('course and clock', () => {
   });
 
   it('builds an elevated closed course with consistent tangent and projection', () => {
-    expect(TRACK_LENGTH).toBeGreaterThan(500);
-    expect(TRACK_LENGTH).toBeLessThan(750);
-    expect(sampleTrack(TRACK_LENGTH)).toEqual(sampleTrack(0));
+    expect(track.length).toBeGreaterThan(500);
+    expect(track.length).toBeLessThan(750);
+    expect(sampleTrack(track, track.length)).toEqual(sampleTrack(track, 0));
     const heights: number[] = [];
-    for (let d = 0; d < TRACK_LENGTH; d += 17) {
-      const point = sampleTrack(d);
+    for (let d = 0; d < track.length; d += 17) {
+      const point = sampleTrack(track, d);
       heights.push(point.y);
-      const projected = projectToTrack(point.x + point.nx * 3, point.z + point.nz * 3);
+      const projected = projectToTrack(track, point.x + point.nx * 3, point.z + point.nz * 3);
       expect(projected.offset).toBeCloseTo(3, 1);
       expect(Math.hypot(point.tx, point.tz)).toBeCloseTo(1, 10);
       expect(point.tx * point.nx + point.tz * point.nz).toBeCloseTo(0, 10);
@@ -310,20 +313,20 @@ describe('ordered directional checkpoints and lap timing', () => {
   it.each([8.5, 9, 9.5, 10])('finishes three laps along the inside hairpin at offset %s without projection jumps', (offset) => {
     const state = startRace();
     const kart = state.karts[0]!;
-    place(kart, TRACK_LENGTH - 0.5, offset);
+    place(kart, track.length - 0.5, offset);
     let elapsed = 0;
-    for (let distance = 0; distance <= TRACK_LENGTH * TOTAL_LAPS + 1; distance += 0.5) {
+    for (let distance = 0; distance <= track.length * TOTAL_LAPS + 1; distance += 0.5) {
       const previous = { x: kart.x, z: kart.z, trackDistance: kart.trackDistance };
-      const point = sampleTrack(distance);
+      const point = sampleTrack(track, distance);
       kart.x = point.x + point.nx * offset;
       kart.z = point.z + point.nz * offset;
-      const projection = projectToTrack(kart.x, kart.z, previous.trackDistance);
+      const projection = projectToTrack(track, kart.x, kart.z, previous.trackDistance);
       kart.trackDistance = projection.distance;
       kart.lateralOffset = projection.offset;
       kart.heading = Math.atan2(point.tx, point.tz);
       kart.speed = 12;
       state.time = elapsed += 0.5 / kart.speed;
-      updateLapTracking(state, kart, previous);
+      updateLapTracking(track, state, kart, previous);
       expect(kart.lapValid, `inside hairpin at ${point.distance.toFixed(1)}m`).toBe(true);
     }
     expect(kart.lap).toBe(TOTAL_LAPS);
@@ -336,9 +339,9 @@ describe('ordered directional checkpoints and lap timing', () => {
     const kart = state.karts[0]!;
     state.karts = [kart];
     state.boxes = [];
-    place(kart, TRACK_LENGTH - 1, offset);
+    place(kart, track.length - 1, offset);
     for (let tick = 0; tick < 60 * 360 && state.phase !== 'finished'; tick++) {
-      const target = sampleTrack(kart.trackDistance + 4);
+      const target = sampleTrack(track, kart.trackDistance + 4);
       const heading = Math.atan2(target.x + target.nx * offset - kart.x, target.z + target.nz * offset - kart.z);
       const error = Math.atan2(Math.sin(heading - kart.heading), Math.cos(heading - kart.heading));
       stepRace(state, [{ ...NEUTRAL_INPUT, throttle: kart.speed < 12 ? 1 : 0, steer: error * 3 }]);
@@ -376,7 +379,7 @@ describe('ordered directional checkpoints and lap timing', () => {
     expect(kart.lap).toBe(0);
     expect(kart.nextCheckpoint).toBe(1);
     // The second checkpoint cannot replace the first, even on a forward crossing.
-    const distance = TRACK_LENGTH * 2 / CHECKPOINT_COUNT;
+    const distance = track.length * 2 / track.def.checkpointCount;
     place(kart, distance - 0.4);
     trackMove(state, distance + 0.4, 5);
     expect(kart.nextCheckpoint).toBe(1);
@@ -387,17 +390,17 @@ describe('ordered directional checkpoints and lap timing', () => {
     const state = startRace();
     armLap(state);
     const kart = state.karts[0]!;
-    trackMove(state, TRACK_LENGTH * 0.65, 1);
+    trackMove(state, track.length * 0.65, 1);
     expect(kart.lapValid).toBe(false);
-    trackMove(state, TRACK_LENGTH - 0.5, 1.5);
-    trackMove(state, TRACK_LENGTH + 0.5, 2);
+    trackMove(state, track.length - 0.5, 1.5);
+    trackMove(state, track.length + 0.5, 2);
     expect(kart.lap).toBe(0);
     expect(kart.nextCheckpoint).toBe(1);
     expect(kart.lapValid).toBe(true);
     // Crossing a finite gate outside the track does not satisfy it.
-    const checkpoint = TRACK_LENGTH / CHECKPOINT_COUNT;
-    place(kart, checkpoint - 0.4, WALL_HALF_WIDTH + 2);
-    trackMove(state, checkpoint + 0.4, 5, WALL_HALF_WIDTH + 2);
+    const checkpoint = track.length / track.def.checkpointCount;
+    place(kart, checkpoint - 0.4, track.def.wallHalfWidth + 2);
+    trackMove(state, checkpoint + 0.4, 5, track.def.wallHalfWidth + 2);
     expect(kart.nextCheckpoint).toBe(1);
   });
 
@@ -486,7 +489,7 @@ describe('driving and items', () => {
     useItem(state, kart, { ...NEUTRAL_INPUT, useItem: true });
     expect(entities).toHaveLength(1);
     expect(kart.item).toBe(item);
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     expect(entities[0]!.life).toBeCloseTo(life - FIXED_DT, 10);
     expect(kart.spinTime).toBe(0);
     useItem(state, kart, NEUTRAL_INPUT);
@@ -549,18 +552,18 @@ describe('driving and items', () => {
     const road = startRace();
     const grass = startRace();
     place(road.karts[0]!, 25);
-    place(grass.karts[0]!, 25, ROAD_HALF_WIDTH + 0.5);
+    place(grass.karts[0]!, 25, track.def.roadHalfWidth + 0.5);
     road.karts[0]!.speed = 30;
     grass.karts[0]!.speed = 30;
     for (let i = 0; i < 20; i++) { stepRace(road, [accelerate]); stepRace(grass, [accelerate]); }
     expect(grass.karts[0]!.speed).toBeLessThan(road.karts[0]!.speed - 8);
     const wall = startRace();
     const kart = wall.karts[0]!;
-    place(kart, 25, WALL_HALF_WIDTH - KART_RADIUS - 0.05);
+    place(kart, 25, track.def.wallHalfWidth - KART_RADIUS - 0.05);
     kart.heading += Math.PI / 2;
     kart.speed = 25;
     stepRace(wall, [accelerate]);
-    expect(Math.abs(kart.lateralOffset)).toBeLessThanOrEqual(WALL_HALF_WIDTH - KART_RADIUS + 0.01);
+    expect(Math.abs(kart.lateralOffset)).toBeLessThanOrEqual(track.def.wallHalfWidth - KART_RADIUS + 0.01);
     expect(kart.speed).toBeLessThan(20);
     const contact = startRace();
     place(contact.karts[0]!, 40);
@@ -606,7 +609,7 @@ describe('driving and items', () => {
 
   it('reflects bolts at rails and expires them after four bounces', () => {
     const state = startRace();
-    const sample = sampleTrack(35);
+    const sample = sampleTrack(track, 35);
     const bolt = { kind: 'bolt' as const, id: 999, ownerId: 0, x: sample.x + sample.nx * 9.8, y: sample.y,
       z: sample.z + sample.nz * 9.8, heading: Math.atan2(sample.nx, sample.nz), life: 5, bounces: 0 };
     state.projectiles.push(bolt);
@@ -819,7 +822,7 @@ describe('wall contact velocity', () => {
       stepRace(state, [accelerate]);
       return state;
     };
-    const limit = WALL_HALF_WIDTH - KART_RADIUS;
+    const limit = track.def.wallHalfWidth - KART_RADIUS;
     const free = impact(0.12, limit - 1);
     const shallow = impact(0.12, limit - 0.01);
     const steep = impact(1.2, limit - 0.01);
@@ -828,7 +831,7 @@ describe('wall contact velocity', () => {
     expect(steep.events).toContainEqual({ type: 'hit', kartId: 0 });
     for (const state of [shallow, steep]) {
       const kart = state.karts[0]!;
-      const sample = sampleTrack(kart.trackDistance);
+      const sample = sampleTrack(track, kart.trackDistance);
       const normal = Math.sin(kart.heading) * sample.nx + Math.cos(kart.heading) * sample.nz;
       expect(normal).toBeCloseTo(0, 8);
       const speed = kart.speed;
@@ -841,12 +844,12 @@ describe('wall contact velocity', () => {
   it.each([false, true])('slides along the rail under sustained outward steering (drift=%s)', (drift) => {
     const state = startRace();
     const kart = state.karts[0]!;
-    place(kart, 25, WALL_HALF_WIDTH - KART_RADIUS - 0.01);
+    place(kart, 25, track.def.wallHalfWidth - KART_RADIUS - 0.01);
     kart.heading += 0.12;
     kart.speed = 14;
     for (let tick = 0; tick < 120; tick++) {
       stepRace(state, [{ ...accelerate, steer: 0.15, drift }]);
-      expect(Math.abs(kart.lateralOffset)).toBeLessThanOrEqual(WALL_HALF_WIDTH - KART_RADIUS + 0.01);
+      expect(Math.abs(kart.lateralOffset)).toBeLessThanOrEqual(track.def.wallHalfWidth - KART_RADIUS + 0.01);
     }
     expect(kart.speed).toBeGreaterThan(11);
     expect(kart.trackDistance).toBeGreaterThan(45);

@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import * as THREE from 'three';
+import { attachKartEffects, createEntityMesh, entityPose, updateKartEffects } from '../render/itemVisuals';
 import { getAIInput } from '../sim/ai';
 import { ENTITY_KINDS, KART_EFFECT_LAYOUT } from '../sim/itemTypes';
 import type { ItemType, ProjectileState } from '../sim/itemTypes';
@@ -12,19 +14,22 @@ import {
   decodeSnapshot, encodeSnapshot, MAX_SNAPSHOT_ENTITIES, SNAPSHOT_BOX_COUNT,
   SNAPSHOT_ENTITY_BYTES, SNAPSHOT_HEADER_BYTES, SNAPSHOT_KART_BYTES, SNAPSHOT_LAYOUT,
 } from './snapshotCodec';
+import { COURSE_FINGERPRINT, getTrack, TRACK_IDS, TRACKS } from '../sim/tracks';
+
+const track = getTrack('meadow');
 
 const inputs: InputFrame[] = Array.from({ length: 8 }, (_, id) => ({
   steer: (id - 3.5) / 3.5, throttle: id / 7,
   brake: (id & 1) !== 0, drift: (id & 2) !== 0, useItem: (id & 4) !== 0,
 }));
-const ENTITY_OFFSET = 496;
+const ENTITY_OFFSET = 504;
 
 function projectile(id: number, x = id): Projectile {
   return { kind: 'bolt', id, ownerId: id % 8, x, y: 3.123456, z: -12.765432,
     heading: Math.PI - 0.00001, life: 4.716, bounces: id % 4 };
 }
 
-function fixture(entityCount = 28): RaceState {
+function fixture(entityCount = MAX_SNAPSHOT_ENTITIES): RaceState {
   const state = createRace(98765);
   Object.assign(state, { tick: 780, racingTicks: 600, time: 10, phase: 'racing', nextEntityId: 900 });
   state.karts.forEach((kart, id) => {
@@ -35,7 +40,7 @@ function fixture(entityCount = 28): RaceState {
       finishTime: id % 2 ? 9.234567 : null, lateralOffset: -3.1245 + id,
       lap: id % 4, nextCheckpoint: id % 5, driftTime: 10.0049 + id * 0.01,
       driftDirection: id % 3 - 1, boostTime: 0.457, spinTime: 1.347,
-      hopTime: 0.157, hitCooldown: 0.657, item: [null, 'dash', 'trap', 'bolt'][id % 4],
+      hopTime: 0.157, airTime: 0.783 - id * 0.07, hitCooldown: 0.657, item: [null, 'dash', 'trap', 'bolt'][id % 4],
       wrongWay: !!(id & 1), startedLap: !!(id & 2), lapValid: !!(id & 4),
       previousDrift: !!(id & 2), previousItem: !!(id & 1), human: id === 0 || id === 7,
       effects: { rapidTime: 6.127, rapidUnused: 0, auraTime: 7.532, shrinkTime: 8.132, inkTime: 4.124,
@@ -69,19 +74,19 @@ function expectPose(actual: Pose, original: Pose) {
 }
 
 describe('snapshot codec', () => {
-  it('fits eight karts, twelve boxes and 28 entities below 1,200 bytes; two bolts below 600', () => {
+  it('fits eight karts, twelve boxes and 27 entities below 1,200 bytes; two bolts below 600', () => {
     const state = fixture();
     expect(state.karts).toHaveLength(8);
     expect(state.boxes).toHaveLength(12);
-    expect(encodeSnapshot(state, 0, 0).byteLength).toBe(1196);
+    expect(encodeSnapshot(state, 0, 0).byteLength).toBe(1179);
     expect(encodeSnapshot(state, 0, 0).byteLength).toBeLessThanOrEqual(1200);
     state.projectiles = [projectile(200), projectile(201)];
     state.traps = [];
-    expect(encodeSnapshot(state, 0, 0).byteLength).toBe(546);
+    expect(encodeSnapshot(state, 0, 0).byteLength).toBe(554);
     expect(encodeSnapshot(state, 0, 0).byteLength).toBeLessThanOrEqual(600);
-    expect(MAX_SNAPSHOT_ENTITIES).toBe(28);
+    expect(MAX_SNAPSHOT_ENTITIES).toBe(27);
     expect(SNAPSHOT_BOX_COUNT).toBe(12);
-    expect([SNAPSHOT_HEADER_BYTES, SNAPSHOT_KART_BYTES, SNAPSHOT_ENTITY_BYTES]).toEqual([28, 57, 25]);
+    expect([SNAPSHOT_HEADER_BYTES, SNAPSHOT_KART_BYTES, SNAPSHOT_ENTITY_BYTES]).toEqual([28, 58, 25]);
   });
 
   it('round-trips all moving poses within tolerance, including a ten-second drift', () => {
@@ -104,6 +109,7 @@ describe('snapshot codec', () => {
       else expect(kart.finishTime).toBeCloseTo(source.finishTime, 4);
       expect(kart.speed).toBeCloseTo(source.speed, 2);
       expect(kart.steer).toBeCloseTo(source.steer, 2);
+      expect(kart.airTime).toBe(Math.round(source.airTime * 100) / 100);
       expect(kart.lateralOffset).toBeCloseTo(source.lateralOffset, 2);
       for (const key of ['boostTime', 'spinTime', 'hopTime', 'hitCooldown'] as const) {
         expect(Math.abs(kart[key] - source[key])).toBeLessThanOrEqual(0.01);
@@ -130,9 +136,9 @@ describe('snapshot codec', () => {
     });
   });
 
-  it('inherits profile, lap history, AI phase and box poses from a template without aliasing it', () => {
+  it.each(TRACK_IDS)('inherits %s and static state from a template without aliasing it', trackId => {
     const original = fixture();
-    const template = createRace(222);
+    const template = createRace(222, { trackId });
     template.karts.forEach((kart, id) => Object.assign(kart, {
       name: `Guest${id}`, color: 0x123456 + id, aiPhase: 0.789 + id, lapTimes: [12.345 + id, 14.56],
     }));
@@ -141,6 +147,8 @@ describe('snapshot codec', () => {
     const beforeState = structuredClone(original);
     const beforeTemplate = structuredClone(template);
     const decoded = roundTrip(original, template).state;
+    expect(decoded.trackId).toBe(trackId);
+    expect(Object.keys(decoded)).toEqual(Object.keys(template));
     decoded.karts.forEach(kart => {
       const source = template.karts.find(entry => entry.id === kart.id)!;
       expect(kart).toMatchObject({ name: source.name, color: source.color, aiPhase: source.aiPhase, lapTimes: source.lapTimes });
@@ -156,7 +164,24 @@ describe('snapshot codec', () => {
     expect(template).toEqual(beforeTemplate);
   });
 
-  it.each([29, 40, 80, 512])('retains the closest 28 of %i entities to any human, ignoring nearer CPUs', count => {
+  it.each([0, 0.004, 0.005, 0.8, 2.55, 3])('carries airTime %s as a clamped centisecond byte', airTime => {
+    const state = createRace(17, { trackId: 'canyon' });
+    state.karts.forEach(kart => { kart.airTime = airTime; });
+    const template = createRace(17, { trackId: 'canyon' });
+    template.karts.forEach(kart => { kart.airTime = 1.23; });
+    const packet = encodeSnapshot(state, 0, 0);
+    const decoded = decodeSnapshot(packet, template)!.state;
+    const byte = Math.min(255, Math.round(airTime * 100));
+    state.karts.forEach((kart, id) => {
+      expect(new DataView(packet).getUint8(SNAPSHOT_HEADER_BYTES + id * SNAPSHOT_KART_BYTES + 57)).toBe(byte);
+      expect(decoded.karts[id].airTime).toBe(byte / 100);
+      expect(kart.airTime).toBe(airTime);
+      expect(template.karts[id].airTime).toBe(1.23);
+    });
+    expect(new Uint8Array(encodeSnapshot(decoded, 0, 0))).toEqual(new Uint8Array(packet));
+  });
+
+  it.each([28, 40, 80, 512])('retains the closest 27 of %i entities to any human, ignoring nearer CPUs', count => {
     const state = fixture(0);
     state.karts.forEach((kart, index) => Object.assign(kart, { x: index === 7 ? count * 10 : 0, y: 0, z: 0, human: index === 7 }));
     state.projectiles = Array.from({ length: count }, (_, index) => ({ ...projectile(200 + index), x: index * 10, z: 0 }));
@@ -164,7 +189,7 @@ describe('snapshot codec', () => {
     state.traps = [{ ...nearest, kind: 'trap', age: 0 }];
     const decoded = roundTrip(state).state;
     const ids = [...decoded.projectiles, ...decoded.traps].map(entity => entity.id).sort((a, b) => a - b);
-    expect(ids).toEqual(Array.from({ length: 28 }, (_, index) => 200 + count - 28 + index));
+    expect(ids).toEqual(Array.from({ length: MAX_SNAPSHOT_ENTITIES }, (_, index) => 200 + count - MAX_SNAPSHOT_ENTITIES + index));
     expect(decoded.traps).toHaveLength(1);
   });
 
@@ -172,9 +197,9 @@ describe('snapshot codec', () => {
     const state = fixture(0);
     state.karts.forEach((kart, id) => Object.assign(kart, { x: id === 7 ? 1000 : 0, y: 0, z: 0, human: id === 0 || id === 7 }));
     state.projectiles = Array.from({ length: 30 }, (_, id) => ({ ...projectile(229 - id), x: id % 2 ? 1000 : 0, z: 0 }));
-    expect(roundTrip(state).state.projectiles.map(entity => entity.id)).toEqual(Array.from({ length: 28 }, (_, id) => 200 + id));
+    expect(roundTrip(state).state.projectiles.map(entity => entity.id)).toEqual(Array.from({ length: MAX_SNAPSHOT_ENTITIES }, (_, id) => 200 + id));
     state.karts.forEach(kart => { kart.human = false; });
-    expect(roundTrip(state).state.projectiles.map(entity => entity.id)).toEqual(Array.from({ length: 28 }, (_, id) => 200 + id));
+    expect(roundTrip(state).state.projectiles.map(entity => entity.id)).toEqual(Array.from({ length: MAX_SNAPSHOT_ENTITIES }, (_, id) => 200 + id));
   });
 
   it('preserves quantization at boundaries and across a deterministic sweep of headings and timers', () => {
@@ -269,7 +294,7 @@ describe('snapshot codec', () => {
     const resumed = roundTrip(state).state;
     const kart = resumed.karts[0];
     expect(kart.effects).toMatchObject({ rapidTime: 0, rapidUnused: 1 });
-    advanceItems(resumed, FIXED_DT);
+    advanceItems(track, resumed, FIXED_DT);
     expect(kart.item).toBe('rapidDash');
     useItem(resumed, kart, { ...NEUTRAL_INPUT, useItem: true });
     expect(kart.effects).toMatchObject({ rapidTime: 8, rapidUnused: 0 });
@@ -286,11 +311,11 @@ describe('snapshot codec', () => {
     const kart = resumed.karts[0];
     expect(kart.effects).toMatchObject({ rapidTime: 0, rapidUnused: 0 });
     if (action === 'press') useItem(resumed, kart, { ...NEUTRAL_INPUT, useItem: true });
-    else advanceItems(resumed, FIXED_DT);
+    else advanceItems(track, resumed, FIXED_DT);
     expect(kart.item).toBeNull();
     useItem(resumed, kart, NEUTRAL_INPUT);
     useItem(resumed, kart, { ...NEUTRAL_INPUT, useItem: true });
-    advanceItems(resumed, FIXED_DT);
+    advanceItems(track, resumed, FIXED_DT);
     expect(kart.effects).toMatchObject({ rapidTime: 0, rapidUnused: 0 });
     expect(kart.boostTime).toBe(0);
     expect(resumed.events).toEqual([]);
@@ -382,7 +407,7 @@ describe('snapshot codec', () => {
   it.each([128, 143])('expires a float32 bomb fuse on the same tick as the host with %i ticks remaining', ticks => {
     const state = createRace(42);
     state.boxes.forEach(box => { box.respawnTime = 5; });
-    const sample = sampleTrack(350);
+    const sample = sampleTrack(track, 350);
     const fuse = ticks * FIXED_DT;
     state.projectiles = [{ kind: 'bomb', id: state.nextEntityId++, ownerId: 0,
       x: sample.x, y: sample.y, z: sample.z, heading: 0, life: fuse, aux: fuse, speed: 0, bounces: 0 } as Projectile & ProjectileState];
@@ -391,7 +416,7 @@ describe('snapshot codec', () => {
     expect(restored.aux! - fuse).toBeGreaterThan(1e-7);
     for (let tick = 1; tick <= ticks; tick++) {
       for (const race of [state, resumed]) {
-        advanceItems(race, FIXED_DT);
+        advanceItems(track, race, FIXED_DT);
         expect(race.projectiles, `remaining at tick ${tick}`).toHaveLength(tick === ticks ? 0 : 1);
         expect(race.events.filter(event => event.type === 'explode')).toHaveLength(tick === ticks ? 1 : 0);
       }
@@ -401,7 +426,7 @@ describe('snapshot codec', () => {
   it('arms bomb proximity on the same tick after restoring a float32 fuse', () => {
     const state = createRace(42);
     state.boxes.forEach(box => { box.respawnTime = 5; });
-    const sample = sampleTrack(350);
+    const sample = sampleTrack(track, 350);
     const fuse = 143 * FIXED_DT; // Seven ticks elapsed; eleven remain until the 0.3 s arming time.
     Object.assign(state.karts[1], { x: sample.x + 1, z: sample.z });
     state.projectiles = [{ kind: 'bomb', id: state.nextEntityId++, ownerId: 0,
@@ -409,7 +434,7 @@ describe('snapshot codec', () => {
     const resumed = roundTrip(state, state).state;
     for (let tick = 1; tick <= 11; tick++) {
       for (const race of [state, resumed]) {
-        advanceItems(race, FIXED_DT);
+        advanceItems(track, race, FIXED_DT);
         expect(race.projectiles, `remaining at tick ${tick}`).toHaveLength(tick === 11 ? 0 : 1);
         expect(race.events.filter(event => event.type === 'explode')).toHaveLength(tick === 11 ? 1 : 0);
       }
@@ -431,7 +456,7 @@ describe('snapshot codec', () => {
     expect(view.getUint32(14, true)).toBe(0xffffffff);
     expect(view.getUint32(21, true)).toBe(state.racingTicks);
     expect(view.getUint16(25, true)).toBe(state.nextEntityId);
-    expect(view.getUint8(27)).toBe(28);
+    expect(view.getUint8(27)).toBe(27);
     for (let length = 0; length < buffer.byteLength; length++) {
       expect(decodeSnapshot(buffer.slice(0, length), state)).toBeNull();
     }
@@ -487,7 +512,9 @@ describe('protocol layout fingerprint', () => {
   }
 
   it('matches the actual sim descriptors to the pinned protocol version', () => {
-    const pinned: Record<number, string> = { 1: '584a661e', 2: '0af985f8', 3: 'fbe993cf', 4: '2daf5fc7', 5: 'bc5d9d9d' };
+    const pinned: Record<number, string> = {
+      1: '584a661e', 2: '0af985f8', 3: 'fbe993cf', 4: '2daf5fc7', 5: 'bc5d9d9d', 6: '53ab24b2',
+    };
     expect(SNAPSHOT_LAYOUT.slice(0, 2)).toEqual([KART_EFFECT_LAYOUT, ENTITY_KINDS]);
     expect(fingerprint(SNAPSHOT_LAYOUT)).toBe(LAYOUT_FINGERPRINT);
     expect(LAYOUT_FINGERPRINT).toBe(pinned[PROTOCOL_VERSION]);
@@ -504,29 +531,41 @@ describe('protocol layout fingerprint', () => {
     }
     expect(fingerprint([...SNAPSHOT_LAYOUT.slice(0, 5), {
       ...SNAPSHOT_LAYOUT[5], bombSpeedScale: 1,
-    }])).not.toBe(LAYOUT_FINGERPRINT);
+    }, ...SNAPSHOT_LAYOUT.slice(6)])).not.toBe(LAYOUT_FINGERPRINT);
+    expect(fingerprint([...SNAPSHOT_LAYOUT.slice(0, 6), {
+      ...SNAPSHOT_LAYOUT[6], scale: 50,
+    }, ...SNAPSHOT_LAYOUT.slice(7)])).not.toBe(LAYOUT_FINGERPRINT);
+  });
+
+  it('pins the complete course registry to the protocol version', () => {
+    const pinned: Record<number, number> = { 6: 1575332991 };
+    const definitions = TRACK_IDS.map(id => TRACKS[id]);
+    expect(COURSE_FINGERPRINT).toBe(Number.parseInt(fingerprint(definitions), 16));
+    expect(COURSE_FINGERPRINT).toBe(pinned[PROTOCOL_VERSION]);
+    expect(fingerprint(definitions.map((def, index) => index === 0 ? { ...def, roadHalfWidth: 8 } : def)))
+      .not.toBe(fingerprint(definitions));
   });
 });
 
 describe('I5 orbit snapshots', () => {
   it('synchronizes orbit kind and count in two effect bytes without consuming entity capacity', () => {
-    const state = fixture(28);
+    const state = fixture(MAX_SNAPSHOT_ENTITIES);
     for (const kart of state.karts) {
       kart.item = 'barrier';
       Object.assign(kart.effects, { orbitKind: kart.id % 2 + 1, orbitCount: 3 });
     }
     const buffer = encodeSnapshot(state, 0, 0);
-    expect(buffer.byteLength).toBe(1196);
-    expect(new DataView(buffer).getUint8(27)).toBe(28);
+    expect(buffer.byteLength).toBe(1179);
+    expect(new DataView(buffer).getUint8(27)).toBe(27);
     const orbitFields = KART_EFFECT_LAYOUT.filter(field => field.field.startsWith('orbit'));
     expect(new Set(orbitFields.map(field => field.byteOffset)).size).toBe(2);
     const decoded = roundTrip(state).state;
-    expect(decoded.projectiles.length + decoded.traps.length).toBe(28);
+    expect(decoded.projectiles.length + decoded.traps.length).toBe(27);
     expect(decoded.karts.map(kart => [kart.effects.orbitKind, kart.effects.orbitCount]))
       .toEqual(state.karts.map(kart => [kart.effects.orbitKind, kart.effects.orbitCount]));
     state.projectiles = []; state.traps = [];
     const empty = encodeSnapshot(state, 0, 0);
-    expect(empty.byteLength).toBe(496);
+    expect(empty.byteLength).toBe(504);
     expect(new DataView(empty).getUint8(27)).toBe(0);
     for (const kind of [1, 2]) {
       for (const count of [0, 1, 2, 3]) {
@@ -555,7 +594,7 @@ describe('I5 orbit snapshots', () => {
     expect(guest.time).toBe(host.time);
     expect(orbitPosition(guest.time, 1)).toEqual(offset);
     for (const state of [host, guest]) {
-      advanceItems(state, FIXED_DT);
+      advanceItems(track, state, FIXED_DT);
       expect(state.karts[1].spinTime).toBe(1.05);
       expect(state.karts[0].effects.orbitCount).toBe(1);
       useItem(state, state.karts[0], { ...NEUTRAL_INPUT, useItem: true });
@@ -586,4 +625,59 @@ describe('I5 orbit snapshots', () => {
     new DataView(buffer).setUint8(ENTITY_OFFSET + 19, 0x80);
     expect(decodeSnapshot(buffer, state)).toBeNull();
   });
+});
+
+// Visual integration checks live outside the three-independent simulation.
+describe('snapshot item visuals', () => {
+  it('matches collision and rendered world positions at any heading, scale and local animation time', () => {
+    const state = decodeSnapshot(encodeSnapshot(createRace(42), 0, 0), createRace(42))!.state;
+    const owner = state.karts[0]!;
+    owner.item = 'barrier';
+    Object.assign(owner.effects, { orbitKind: 2, orbitCount: 3 });
+    state.time = 12.375;
+    owner.effects.shrinkTime = 5;
+    owner.effects.auraTime = 7;
+    const root = new THREE.Group();
+    const material = new THREE.MeshLambertMaterial();
+    root.add(new THREE.Mesh(new THREE.BoxGeometry(), material));
+    root.position.set(owner.x, owner.y, owner.z);
+    root.rotation.y = 2.16;
+    const visuals = attachKartEffects(root);
+    for (const elapsed of [1, 100]) {
+      updateKartEffects(visuals, owner, elapsed, state.time, true);
+      root.updateMatrixWorld(true);
+      for (let index = 0; index < 3; index++) {
+        const position = visuals.orbit[index].getWorldPosition(new THREE.Vector3());
+        const offset = orbitPosition(state.time, index);
+        expect(position.x).toBeCloseTo(owner.x + offset.x, 10);
+        expect(position.z).toBeCloseTo(owner.z + offset.z, 10);
+        expect(position.y).toBeCloseTo(owner.y + 0.7, 10);
+        expect(visuals.orbit[index].rotation.y).toBe(0);
+      }
+      expect(material.emissiveIntensity).toBe(0.6);
+    }
+    const before = visuals.orbit[0].position.clone();
+    updateKartEffects(visuals, owner, 100, state.time + 0.1, true);
+    expect(visuals.orbit[0].position.equals(before)).toBe(false);
+  });
+
+  it('keeps the decoy box silhouette, mint shell and height identical to a pickup box', () => {
+    const decoy = createEntityMesh('decoy');
+    const expected = new THREE.BoxGeometry(1.3, 1.3, 1.3).applyMatrix4(new THREE.Matrix4()
+      .makeRotationFromEuler(new THREE.Euler(Math.PI / 5, 0, Math.PI / 4))).toNonIndexed();
+    const shell = expected.getAttribute('position');
+    const positions = decoy.geometry.getAttribute('position');
+    const colors = decoy.geometry.getAttribute('color');
+    const mint = new THREE.Color(0x9ce9d2);
+    for (let i = 0; i < shell.count; i++) {
+      expect(new THREE.Vector3().fromBufferAttribute(positions, i).toArray())
+        .toEqual(new THREE.Vector3().fromBufferAttribute(shell, i).toArray());
+      expect(colors.getX(i)).toBeCloseTo(mint.r);
+      expect(colors.getY(i)).toBeCloseTo(mint.g);
+      expect(colors.getZ(i)).toBeCloseTo(mint.b);
+    }
+    expect(entityPose(decoy).lift).toBe(1.5);
+    expect(decoy.geometry.groups).toHaveLength(0);
+  });
+
 });

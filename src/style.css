@@ -78,6 +78,13 @@ h1 span { color: var(--lime); }
 .course-strip > div:first-child > span:last-child { display: flex; flex-direction: column; gap: 6px; }
 .course-strip small { font-size: 7px; font-weight: 650; letter-spacing: 1.4px; color: #ffffffb0; }
 .course-strip strong { font-size: 12px; font-weight: 750; letter-spacing: 1px; }
+.course-select { display: flex; gap: 6px; }
+.course-option { position: relative; display: block; }
+.course-option input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.course-option span { display: grid; place-items: center; width: 44px; height: 32px; border: 1px solid #ffffff60; border-radius: 5px; background: #173d35a6; font-size: 12px; font-weight: 800; font-variant-numeric: tabular-nums; transition: background 150ms; }
+.course-option input:hover + span { background: #326957; }
+.course-option input:checked + span { background: var(--lime); border-color: var(--lime); color: var(--ink); }
+.course-option input:focus-visible + span { outline: 3px solid var(--lime); outline-offset: 2px; }
 .course-footnote { margin-left: auto; font-size: 8px; font-weight: 600; letter-spacing: 1.6px; opacity: .75; }
 
 .race-screen { pointer-events: none; text-shadow: 0 2px 10px #173d3580; touch-action: none; }
@@ -256,6 +263,12 @@ h1 span { color: var(--lime); }
   .course-index { display: none; }
   .course-strip small { font-size: 6px; letter-spacing: .7px; }
   .course-strip strong { font-size: 9px; letter-spacing: .4px; }
+  /* The course picker takes the place of the fixed grid/lap facts on narrow portrait screens. */
+  .course-strip:has(.course-picker) { gap: 14px; padding-top: 14px; }
+  .course-picker { margin-left: auto; }
+  .course-picker small, .course-picker ~ div { display: none; }
+  .course-select { gap: 5px; }
+  .course-option span { width: 36px; height: 30px; }
   [data-screen="race"] .topbar { top: 18px; right: 16px; }
   .race-position { left: 17px; top: 21px; gap: 14px; }
   .position-group .hud-eyebrow, .lap-group .hud-eyebrow { font-size: 7px; }
@@ -339,6 +352,8 @@ h1 span { color: var(--lime); }
   .course-strip small { font-size: 5px; }
   .course-strip strong { font-size: 9px; }
   .course-strip > div, .course-strip > div:first-child > span:last-child { gap: 3px; }
+  .course-picker small { display: none; }
+  .course-option span { width: 40px; height: 30px; }
   [data-screen="race"] .topbar { top: 13px; right: max(16px, env(safe-area-inset-right)); }
   .race-position { top: 15px; left: max(19px, env(safe-area-inset-left)); gap: 17px; }
   .hud-eyebrow { font-size: 7px; }

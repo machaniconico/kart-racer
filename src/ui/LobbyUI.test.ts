@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { COLORS, isPlayerName, LobbyUI, normalizeCode, pastedCode, ROOM_CODE } from './LobbyUI';
+import { COLORS, courseView, isPlayerName, LobbyUI, normalizeCode, pastedCode, ROOM_CODE } from './LobbyUI';
+import { getTrack, TRACK_IDS } from '../sim/tracks';
 import type { RosterView } from '../net/session';
 import { createRace } from '../sim/race';
 import { isRoomCode, ROOM_ALPHABET, ROOM_CODE_LENGTH } from '../net/roomCode';
@@ -245,5 +246,26 @@ describe('LobbyUI render state', () => {
     ui.render(roster, 'lobby');
     expect(swatches[2].getAttribute('aria-pressed')).toBe('true');
     expect(onProfile).toHaveBeenCalledWith('NEW', COLORS[2]);
+  });
+});
+
+describe('LobbyUI course view model', () => {
+  const courses = TRACK_IDS.map(id => ({ id, name: getTrack(id).def.name }));
+
+  it('gives the host an editable selector and the guest read-only text for the same course', () => {
+    const host = courseView(courses, 'neon', 'host');
+    const guest = courseView(courses, 'neon', 'guest');
+    expect(host).toEqual({ editable: true, index: 3, label: '04 NEON NIGHTLINE' });
+    expect(guest).toEqual({ ...host, editable: false });
+  });
+
+  it.each(TRACK_IDS.map((id, index) => [id, index] as const))('numbers %s by registry order', (id, index) => {
+    expect(courseView(courses, id, 'guest')).toMatchObject({ index, label: `0${index + 1} ${getTrack(id).def.name}` });
+  });
+
+  it.each(['', 'unknown', 'MEADOW', '__proto__'])('marks an unknown course %j without guessing one', id => {
+    expect(courseView(courses, id, 'guest')).toEqual({ editable: false, index: -1, label: '不明なコース' });
+    expect(courseView(courses, id, 'host')).toEqual({ editable: true, index: -1, label: '不明なコース' });
+    expect(courseView([], 'meadow', 'guest').index).toBe(-1);
   });
 });

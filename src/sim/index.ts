@@ -1,5 +1,6 @@
 export * from './types';
 export * from './track';
+export * from './tracks';
 export * from './race';
 export * from './ai';
 export * from './laps';

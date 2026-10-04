@@ -8,7 +8,7 @@ import type { Snapshot } from './snapshotCodec';
 export const MAX_REPLAY_TICKS = 40;
 export const VISUAL_DECAY_SECONDS = 0.08;
 export const VISUAL_SNAP_METRES = 1.5;
-const TIMER_SCALES = { boostTime: 50, spinTime: 50, hopTime: 100, hitCooldown: 100, driftTime: 100 } as const;
+const TIMER_SCALES = { boostTime: 50, spinTime: 50, hopTime: 100, airTime: 100, hitCooldown: 100, driftTime: 100 } as const;
 type Timers = Pick<KartState, keyof typeof TIMER_SCALES> & { id: number };
 
 /** Owns a disposable simulation. Only host events may leave GuestSession. */
@@ -142,8 +142,8 @@ export class Predictor {
   }
 
   private rememberTimers(): void {
-    this.timerHistory.set(this.tick, this.predicted.karts.map(({ id, boostTime, spinTime, hopTime, hitCooldown, driftTime }) =>
-      ({ id, boostTime, spinTime, hopTime, hitCooldown, driftTime })));
+    this.timerHistory.set(this.tick, this.predicted.karts.map(({ id, boostTime, spinTime, hopTime, airTime, hitCooldown, driftTime }) =>
+      ({ id, boostTime, spinTime, hopTime, airTime, hitCooldown, driftTime })));
     for (const tick of this.timerHistory.keys()) if (tick < this.tick - MAX_REPLAY_TICKS) this.timerHistory.delete(tick);
   }
 

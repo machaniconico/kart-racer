@@ -1,12 +1,21 @@
 import { sampleTrack } from './track';
+import { getTrack } from './tracks';
+import { racingLineOffset } from './surfaces';
 import { getRank } from './laps';
 import type { ProjectileState } from './itemTypes';
 import type { KartState, RaceState } from './types';
 
 /** Shared by steering and item decisions so both use the same driving line. */
 export function getSteeringError(state: RaceState, kart: KartState): number {
-  const target = sampleTrack(kart.trackDistance + 7.5 + Math.max(0, kart.speed) * 0.24);
-  const lineOffset = Math.sin(kart.aiPhase + state.time * 0.12) * 1.25;
+  const track = getTrack(state.trackId);
+  const targetDistance = kart.trackDistance + 7.5 + Math.max(0, kart.speed) * 0.24;
+  const target = sampleTrack(track, targetDistance);
+  let lineOffset = Math.sin(kart.aiPhase + state.time * 0.12) * 1.25;
+  if (track.def.racingLine.length > 0) {
+    lineOffset += racingLineOffset(track, targetDistance);
+    const limit = Math.max(0, track.def.roadHalfWidth - 1);
+    lineOffset = Math.max(-limit, Math.min(limit, lineOffset));
+  }
   const desired = Math.atan2(target.x + target.nx * lineOffset - kart.x, target.z + target.nz * lineOffset - kart.z);
   const travelHeading = kart.heading - kart.driftDirection * Math.min(0.23, kart.driftTime * 0.35);
   return Math.atan2(Math.sin(desired - travelHeading), Math.cos(desired - travelHeading));

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { COURSE_FINGERPRINT, TRACK_IDS } from '../sim/tracks';
 import { getAIInput } from '../sim/ai';
 import { createRace, stepRace } from '../sim/race';
 import type { InputFrame, RaceState } from '../sim/types';
@@ -47,7 +48,7 @@ async function setup(options: MockTransportOptions = {}, hostOffset = 0, autoWel
         const message = parseControlMessage(data);
         if (message) controls.push(message);
         if (message?.type === 'hello' && autoWelcome) peer.send('reliable', encodeControlMessage({
-          type: 'welcome', slot: 1, roster, hostTime: network.now + hostOffset,
+          type: 'welcome', trackId: 'meadow', slot: 1, roster, hostTime: network.now + hostOffset,
         }));
       } else {
         const clock = unpackClock(data);
@@ -66,7 +67,7 @@ async function setup(options: MockTransportOptions = {}, hostOffset = 0, autoWel
   await guest.join('ab2x ');
   const send = (message: ControlMessage) => link.send('reliable', encodeControlMessage(message));
   const start = (raceId = 1, startAtHostTime = network.now + hostOffset, seed = 1) => {
-    send({ type: 'race_start', raceId, seed, roster, startAtHostTime });
+    send({ type: 'race_start', trackId: 'meadow', raceId, seed, roster, startAtHostTime });
     network.advance(options.latencyMs ?? 0);
   };
   const sendSnapshot = (value: Snapshot) => link.send('unreliable',
@@ -193,11 +194,83 @@ describe('SnapshotBuffer and interpolation', () => {
 });
 
 describe('GuestSession', () => {
+  it.each(TRACK_IDS)('uses %s from welcome and course updates for race creation and rematches', async trackId => {
+    const h = await setup({}, 0, false);
+    try {
+      h.send({ type: 'course', trackId: 'neon' });
+      h.network.advance(0);
+      expect(h.guest.phase).toBe('connecting');
+      expect(h.guest.course).toBe('meadow');
+      h.send({ type: 'welcome', slot: 1, roster, hostTime: 0, trackId });
+      h.network.advance(0);
+      expect(h.guest.course).toBe(trackId);
+      const changed = vi.fn();
+      h.guest.onChange(changed);
+      h.send({ type: 'course', trackId: 'snowpeak' });
+      h.network.advance(0);
+      expect(h.guest.course).toBe('snowpeak');
+      expect(changed).toHaveBeenCalledOnce();
+      h.send({ type: 'course', trackId });
+      h.network.advance(0);
+      const start = { type: 'race_start', trackId, seed: 42, raceId: 1, roster, startAtHostTime: 0 } as const;
+      h.send(start);
+      h.network.advance(0);
+      expect(h.guest.phase).toBe('countdown');
+      expect(h.guest.frame()!.state).toEqual(createRace(42, { trackId, racers: roster.map(player => ({
+        name: player.name, color: player.color, human: player.kind !== 'cpu',
+      })) }));
+      h.send({ type: 'course', trackId: trackId === 'neon' ? 'canyon' : 'neon' });
+      h.network.advance(0);
+      expect(h.guest.course).toBe(trackId);
+      const airborne = snapshot(3, 50, 1);
+      airborne.state.trackId = trackId;
+      airborne.state.karts[1].airTime = 0.8;
+      h.sendSnapshot(airborne);
+      h.network.advance(150);
+      expect(h.guest.frame()!.state).toMatchObject({ trackId, karts: expect.arrayContaining([
+        expect.objectContaining({ id: 1, airTime: 0.8 }),
+      ]) });
+      h.send({ type: 'return_lobby' });
+      h.network.advance(0);
+      expect(h.guest.course).toBe(trackId);
+      h.send({ ...start, raceId: 2 });
+      h.network.advance(0);
+      expect(h.guest.frame()!.state.trackId).toBe(trackId);
+    } finally { h.host.close(); }
+  });
+
+  it('ignores starts and results for a different course, plus unknown or extra course fields', async () => {
+    const h = await setup();
+    try {
+      h.network.advance(0);
+      h.send({ type: 'course', trackId: 'canyon' });
+      h.network.advance(0);
+      const start = { type: 'race_start', trackId: 'neon', seed: 42, raceId: 1, roster, startAtHostTime: 0 } as const;
+      h.send(start);
+      for (const message of [
+        { type: 'course', trackId: 'unknown' }, { type: 'course', trackId: 'neon', extra: true },
+        { ...start, trackId: 'unknown' }, { ...start, trackId: 'canyon', extra: true },
+      ]) h.link.send('reliable', JSON.stringify(message));
+      h.network.advance(0);
+      expect(h.guest.course).toBe('canyon');
+      expect(h.guest.phase).toBe('lobby');
+      expect(h.guest.frame()).toBeNull();
+      h.send({ ...start, trackId: 'canyon' });
+      h.network.advance(0);
+      expect(h.guest.phase).toBe('countdown');
+      h.send({ type: 'race_end', raceId: 1, finalState: createRace(42, { trackId: 'neon' }) });
+      h.network.advance(0);
+      expect(h.guest.phase).toBe('countdown');
+      expect(h.guest.finalState).toBeNull();
+      expect(h.guest.frame()!.state.trackId).toBe('canyon');
+    } finally { h.host.close(); }
+  });
+
   it('observes connection, welcome, lobby, countdown, racing and reliable results via NetPhase', async () => {
     const h = await setup();
     expect(h.guest.phase).toBe('connecting');
     h.network.advance(0);
-    expect(h.controls[0]).toEqual({ type: 'hello', protocol: PROTOCOL_VERSION, name: 'Guest', color: roster[1].color });
+    expect(h.controls[0]).toEqual({ type: 'hello', protocol: PROTOCOL_VERSION, course: COURSE_FINGERPRINT, name: 'Guest', color: roster[1].color });
     expect(h.guest.phase).toBe('lobby');
     expect(h.guest.roster).toEqual({ roomCode: 'AB2X', localSlot: 1, players: roster });
     h.start();
@@ -523,7 +596,7 @@ describe('GuestSession', () => {
     expect(h.guest.updateProfile('New name', 0xff00ff)).toBe(true);
     h.link.send('reliable', '{not json');
     h.link.send('unreliable', new ArrayBuffer(1));
-    h.link.send('reliable', JSON.stringify({ type: 'race_start', raceId: -1 }));
+    h.link.send('reliable', JSON.stringify({ type: 'race_start', trackId: 'meadow', raceId: -1 }));
     h.network.advance(0);
     expect(h.guest.phase).toBe('lobby');
     expect(h.controls.at(-1)).toEqual({ type: 'profile', name: 'New name', color: 0xff00ff });

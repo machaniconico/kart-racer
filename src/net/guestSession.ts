@@ -1,7 +1,8 @@
 import { captureRenderSnapshot } from '../render/snapshot';
 import type { RenderSnapshot } from '../render/snapshot';
 import { createRace } from '../sim/race';
-import type { InputFrame, RaceEvent, RaceState } from '../sim/types';
+import { COURSE_FINGERPRINT } from '../sim/tracks';
+import type { InputFrame, RaceEvent, RaceState, TrackId } from '../sim/types';
 import { ClockSync, packPing, packPong, TICK_MS, TickMap, unpackClock } from './clock';
 import { INPUT_HISTORY, NEUTRAL_INPUT, pack, quantizeInput } from './inputBuffer';
 import { INTERPOLATION_DELAY_MS, SnapshotBuffer } from './interpolation';
@@ -44,6 +45,7 @@ export class GuestSession {
   private link: PeerLink | null = null;
   private generation = 0;
   private currentPhase: NetPhase = 'idle';
+  private selectedTrackId: TrackId = 'meadow';
   private closeReason: GuestCloseReason | null = null;
   private isStalled = false;
   private code = '';
@@ -59,6 +61,8 @@ export class GuestSession {
   private pendingEvents: RaceEvent[] = [];
   private lastSnapshotAt = 0;
   private lastPongAt = 0;
+  private lastPollAt: number | null = null;
+  private stallExcused = false;
   private joinedAt = 0;
   private fallbackOffset = 0;
   private nextPingAt = 0;
@@ -77,6 +81,7 @@ export class GuestSession {
   }
 
   get phase(): NetPhase { return this.currentPhase; }
+  get course(): TrackId { return this.selectedTrackId; }
   get reason(): GuestCloseReason | null { return this.closeReason; }
   get stalled(): boolean { return this.isStalled; }
   get localSlot(): number { return this.slot; }
@@ -112,6 +117,7 @@ export class GuestSession {
     this.code = code;
     this.slot = -1;
     this.players = [];
+    this.selectedTrackId = 'meadow';
     this.closeReason = null;
     this.raceId = null;
     this.clearRace();
@@ -134,7 +140,8 @@ export class GuestSession {
         if (generation === this.generation && this.phase !== 'closed') this.receive(kind, data);
       });
       if (this.phase === 'closed') return;
-      this.send('reliable', encodeControlMessage({ type: 'hello', protocol: PROTOCOL_VERSION, name: this.name, color: this.color }));
+      this.send('reliable', encodeControlMessage({ type: 'hello', protocol: PROTOCOL_VERSION,
+        course: COURSE_FINGERPRINT, name: this.name, color: this.color }));
       this.poll();
     } catch (error) {
       if (generation === this.generation) this.finish(error instanceof TransportError ? error.code : 'host_lost');
@@ -192,7 +199,7 @@ export class GuestSession {
     this.clearRace();
     this.raceId = message.raceId;
     this.players = message.roster;
-    this.template = createRace(message.seed);
+    this.template = createRace(message.seed, { trackId: message.trackId });
     for (const kart of this.template.karts) {
       const player = this.players.find(entry => entry.slot === kart.id);
       kart.human = !!player && player.kind !== 'cpu';
@@ -266,12 +273,18 @@ export class GuestSession {
         if (this.phase !== 'connecting') return;
         this.slot = message.slot;
         this.players = message.roster;
+        this.selectedTrackId = message.trackId;
         this.fallbackOffset = message.hostTime - now;
         this.lastPongAt = now;
         this.setPhase('lobby');
         break;
       case 'reject':
         if (this.phase === 'connecting') this.finish(message.reason);
+        break;
+      case 'course':
+        if (this.phase !== 'lobby') return;
+        this.selectedTrackId = message.trackId;
+        this.notify();
         break;
       case 'roster':
         if (this.slot < 0) return;
@@ -280,7 +293,12 @@ export class GuestSession {
         this.notify();
         break;
       case 'race_start':
-        if (this.phase === 'lobby' && (this.raceId === null || message.raceId > this.raceId) &&
+        if (this.phase === 'lobby' && message.trackId !== this.selectedTrackId) {
+          // The guest stays in the lobby; make the otherwise silent mismatch visible.
+          console.warn(`Ignored race_start for course ${message.trackId}; the lobby course is ${this.selectedTrackId}.`);
+        }
+        if (this.phase === 'lobby' && message.trackId === this.selectedTrackId &&
+          (this.raceId === null || message.raceId > this.raceId) &&
           message.roster.some(player => player.slot === this.slot)) this.start(message, now);
         break;
       case 'events':
@@ -289,7 +307,8 @@ export class GuestSession {
         this.pendingEvents.push(...message.events);
         break;
       case 'race_end':
-        if (!this.activeRace || message.raceId !== this.raceId || message.finalState.tick < this.latestTick) return;
+        if (!this.activeRace || message.raceId !== this.raceId || message.finalState.tick < this.latestTick ||
+          message.finalState.trackId !== this.selectedTrackId) return;
         this.result = message.finalState;
         this.predictor = null;
         this.pendingSnapshot = null;
@@ -305,8 +324,22 @@ export class GuestSession {
     }
   }
 
+  /** The caller blocked the main thread since the last poll (e.g. rebuilding the renderer).
+   * That time is not host silence: no PONG or snapshot could be handled meanwhile. */
+  excuseStall(): void { this.stallExcused = true; }
+
   private poll(): number {
     const now = this.now();
+    if (this.stallExcused && this.lastPollAt !== null) {
+      const gap = Math.max(0, now - this.lastPollAt);
+      // Shift by the stall but never past now: a PONG or snapshot handled after the stall already
+      // carries a fresh time. A deadline already in the future (the scheduled race start) is kept.
+      const excuse = (at: number): number => at > now ? at : Math.min(now, at + gap);
+      this.lastPongAt = excuse(this.lastPongAt);
+      this.lastSnapshotAt = excuse(this.lastSnapshotAt);
+    }
+    this.stallExcused = false;
+    this.lastPollAt = now;
     // Never pass rAF's older frame timestamp into ClockSync.expire/sample.
     this.clock.expire(now);
     if (this.phase === 'connecting' && now - this.joinedAt >= 5000) this.finish('timeout');

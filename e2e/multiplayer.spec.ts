@@ -1,9 +1,8 @@
 import { mkdir } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
 import { test as base, expect } from '@playwright/test';
 import type { Page, TestInfo } from '@playwright/test';
 import type { NetPhase, RosterView } from '../src/net/session';
-import type { RaceState } from '../src/sim/types';
+import type { RaceState, TrackId } from '../src/sim/types';
 
 declare global {
   interface Window {
@@ -11,6 +10,10 @@ declare global {
       screen: 'title' | 'lobby' | 'race' | 'results';
       mode: 'solo' | 'host' | 'guest';
       state: RaceState;
+      course: TrackId;
+      render: { drawCalls: number; trackId: TrackId | null };
+      rendererInfo: { memory: { geometries: number } } | undefined;
+      selectCourse(id: TrackId): void;
       net: { phase: NetPhase; slot: number; roster: RosterView | null };
       advance(ticks: number, autopilot?: boolean): void;
     };
@@ -19,7 +22,6 @@ declare global {
 
 const CONNECTION_TIMEOUT = 40_000;
 const RACE_TIMEOUT = 20_000;
-const screenshotDir = fileURLToPath(new URL('./__screenshots__/', import.meta.url));
 const viewports = [
   { width: 375, height: 667 },
   { width: 667, height: 375 },
@@ -89,11 +91,12 @@ async function connect(host: Page, guest: Page): Promise<void> {
   expect(await guest.evaluate(() => window.__kartDebug.net.slot)).toBe(1);
 }
 
-async function startRace(host: Page, guest: Page): Promise<void> {
+async function startRace(host: Page, guest: Page, trackId?: TrackId): Promise<void> {
   await test.step('Both clients count down and race within 20 seconds', async () => {
     await host.locator('#lobby-start').click();
     await Promise.all([host, guest].map(async page => {
       await expect.poll(() => page.evaluate(() => window.__kartDebug.net.phase)).toBe('countdown');
+      if (trackId) expect(await page.evaluate(() => window.__kartDebug.state.trackId)).toBe(trackId);
       await expect(page.locator('#countdown-display')).toBeVisible();
       await expect(page.locator('#countdown-display')).toHaveText(/^[123]$/);
       await expect.poll(() => page.evaluate(() => ({
@@ -101,6 +104,12 @@ async function startRace(host: Page, guest: Page): Promise<void> {
         state: window.__kartDebug.state.phase,
         screen: window.__kartDebug.screen,
       })), { timeout: RACE_TIMEOUT }).toEqual({ phase: 'racing', state: 'racing', screen: 'race' });
+      if (trackId) {
+        expect(await page.evaluate(() => ({
+          state: window.__kartDebug.state.trackId,
+          render: window.__kartDebug.render.trackId,
+        }))).toEqual({ state: trackId, render: trackId });
+      }
     }));
   }, { timeout: RACE_TIMEOUT });
 }
@@ -151,6 +160,40 @@ test('§8.2 1–4: room, profile, racing inputs, and guest disconnect', async ({
   });
 });
 
+test('C-010: host course selection reaches the guest within one second and starts neon', async ({ page: host, guest }, testInfo) => {
+  await connect(host, guest);
+  await expect(guest.locator('#lobby-course-select')).toBeHidden();
+  await expect(guest.locator('#lobby-course-name')).toBeVisible();
+  // Timestamp the actual change event and guest DOM update in the browsers.
+  // Automation actionability waits and protocol round trips are outside the deadline.
+  await host.locator('#lobby-course-select').evaluate(select => {
+    select.addEventListener('change', () => {
+      (select as HTMLElement).dataset.selectedAt = String(performance.timeOrigin + performance.now());
+    }, { capture: true, once: true });
+  });
+  await guest.locator('#lobby-course-name').evaluate(output => {
+    const observer = new MutationObserver(() => {
+      if (output.textContent !== '04 NEON NIGHTLINE') return;
+      (output as HTMLElement).dataset.displayedAt = String(performance.timeOrigin + performance.now());
+      observer.disconnect();
+    });
+    observer.observe(output, { childList: true, characterData: true, subtree: true });
+  });
+  await host.locator('#lobby-course-select').selectOption('neon');
+  await expect(guest.locator('#lobby-course-name')).toHaveText('04 NEON NIGHTLINE');
+  const selectedAt = Number(await host.locator('#lobby-course-select').getAttribute('data-selected-at'));
+  const displayedAt = Number(await guest.locator('#lobby-course-name').getAttribute('data-displayed-at'));
+  expect(selectedAt).toBeGreaterThan(0);
+  const elapsedMs = displayedAt - selectedAt;
+  expect(elapsedMs).toBeGreaterThanOrEqual(0);
+  expect(elapsedMs).toBeLessThanOrEqual(1_000);
+  expect(await guest.evaluate(() => window.__kartDebug.course)).toBe('neon');
+  await testInfo.attach('course-propagation', {
+    body: JSON.stringify({ elapsedMs }), contentType: 'application/json',
+  });
+  await startRace(host, guest, 'neon');
+});
+
 test('§8.2 5: host context loss returns the guest to the title', async ({ page: host, guest }) => {
   await connect(host, guest);
   await startRace(host, guest);
@@ -165,6 +208,7 @@ test('§8.2 5: host context loss returns the guest to the title', async ({ page:
 });
 
 async function captureLayouts(page: Page, screen: 'lobby' | 'results', testInfo: TestInfo): Promise<void> {
+  const screenshotDir = testInfo.outputPath('screenshots');
   await mkdir(screenshotDir, { recursive: true });
   for (const viewport of viewports) {
     await page.setViewportSize(viewport);
@@ -172,7 +216,7 @@ async function captureLayouts(page: Page, screen: 'lobby' | 'results', testInfo:
     await expect(page.locator(screen === 'lobby' ? '#lobby-roster li' : '#leaderboard li')).toHaveCount(8);
     await page.evaluate(() => document.fonts.ready);
     const filename = `${screen}-${viewport.width}x${viewport.height}.png`;
-    const path = `${screenshotDir}${filename}`;
+    const path = `${screenshotDir}/${filename}`;
     await page.screenshot({ path, animations: 'disabled' });
     await testInfo.attach(filename, { path, contentType: 'image/png' });
   }

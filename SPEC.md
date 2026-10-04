@@ -33,7 +33,7 @@
 
 ## 入力
 - PC: 矢印キー / WASD でステア・アクセル・ブレーキ、Space でドリフト（ジャンプ）、Shift または E でアイテム。ゲームパッド（Gamepad API）も対応できれば尚良し。
-- スマホ: 横画面推奨（縦なら「横にしてね」表示）。左に仮想スティック（ステア）、右にアクセル（常時押し or 自動アクセル切替）・ドリフト・アイテムボタン。マルチタッチ対応、ピンチズーム・スクロール・長押しメニューを抑止。
+- スマホ: 横画面推奨（縦画面向けの「横にしてね」表示は v3 で削除済み）。左に仮想スティック（ステア）とその上の自動アクセル切替、右にアクセル・ブレーキ・ドリフト・アイテムボタン。マルチタッチ対応、ピンチズーム・スクロール・長押しメニューを抑止。
 - 画面サイズに応じて HUD とボタンを拡縮。devicePixelRatio は上限 2 程度に制限。
 
 ## 性能
@@ -77,3 +77,48 @@ v1 の設計制約（sim と描画の分離、固定 60Hz、`InputFrame`、seed 
 - 通信は PeerJS 既定の公開 STUN/TURN サーバを利用する（無償の公開サービスなので可用性は保証されない）。それでもつながらない環境がある（同じ Wi-Fi か別の回線で試す）。
 - ホストは画面を閉じたり、アプリを切り替えたりしない。ホストの sim が止まると全員が止まる。iOS でホストが画面を離れて通信が止まると、ICE が `disconnected` の状態が 8 秒続いた時点、またはレース中にホストからのスナップショットが 5 秒止まった時点（ホスト喪失）で切断される。
 - ホスト移譲、観戦、途中参加は v2 では扱わない。
+
+## v3（コース 4 本）
+v1・v2 の設計制約はそのまま維持する。設計の詳細は `.omc/plans/courses.md`。実装と食い違う箇所は実装を正とする。
+
+### コース
+| ID | 表示名 | 長さ（概算） | 路面特性 |
+| --- | --- | --- | --- |
+| `meadow` | MEADOW LOOP | 652 m | なし |
+| `canyon` | SUNSCAR CANYON | 665 m | `jump` ×2 |
+| `snowpeak` | FROSTBITE PEAK | 623 m | `ice` ×3 |
+| `neon` | NEON NIGHTLINE | 658 m | `boost` ×1（トンネル入口） |
+
+- 定義は `src/sim/tracks/*.ts`、登録と `getTrack(id)` は `src/sim/tracks/index.ts`（`TRACK_IDS`）。ID の型は `src/sim/types.ts` の `TrackId`。
+- コース選択: 1 人用はタイトル（`src/ui/GameUI.ts`）。オンラインはホストがロビー（`src/ui/LobbyUI.ts`）で選び、ゲストは読み取り専用で見る。選択は `course` メッセージ（`{ type: 'course', trackId }`）でゲストへ送り、`race_start` と `welcome` も `trackId` を持つ。許可する ID は `src/net/protocol.ts` の `PROTOCOL_TRACK_IDS`。
+- ベスト: `src/storage.ts` がコース別に保存する（キー `pocket-circuit.best.v2`、`KNOWN_TRACK_IDS` 以外は無視）。v1 のキー `pocket-circuit.best.v1` の単一記録は、v2 が無いときに MEADOW として移行する。
+
+### TrackDef の項目
+`src/sim/types.ts` の `TrackDef`。
+
+| 項目 | 内容 |
+| --- | --- |
+| `id` / `name` | コース ID / 表示名 |
+| `controlPoints` / `scale` / `samplesPerSegment` / `spline` | 閉じたスプラインの制御点と取り方（`spline` は `'uniform'` か `'centripetal'`、省略可） |
+| `roadHalfWidth` / `wallHalfWidth` | 路面の半幅 / 壁までの半幅 |
+| `checkpointCount` | チェックポイント数（全コース 12） |
+| `boxRows` / `boxLanes` | アイテムボックスの列位置（弧長比率）とレーンのオフセット |
+| `racingLine` | CPU が追うレーシングライン（距離とオフセットの組。空も可） |
+| `surfaces` | 路面区間 `SurfaceZone[]` |
+| `themeId` | 描画テーマ（`src/render/course/`） |
+
+### 路面特性
+`src/sim/surfaces.ts` と `src/sim/race.ts`。区間は弧長（`from`〜`to`）と、任意のオフセット範囲（`offsetMin` / `offsetMax`）で表す。路面は 2D のまま扱い、新しい状態は持たない（`airTime` 以外）。
+
+- `ice`: 区間内にいる間だけ効く連続修飾。旋回率 ×0.55、ステアの追従を遅くする（係数 12 → 6）、加速 22 → 15、惰性の減速 5.5 → 1.8、ブレーキ 42 → 18。
+- `boost`: `from` を前向きに跨いだ tick に 0.5 秒のブースト（`giveBoost`）。区間内に留まっている間は再発火しない。次の周や、押し戻されてから前向きに入り直したときは再び発火する。
+- `jump`: `from` を前向きに、速度 10 以上で跨いだ tick に `airTime` を `JUMP_DURATION`（0.8 秒）にする。滞空中は操舵と加減速を受けず、向きと速度を保つ。高さは最大 `JUMP_HEIGHT`（2）の放物線。ドリフト状態は解除される。壁との衝突は地上と同じ。後ろ向きに跨いでも発火しない。
+- `airTime` はカートの状態として JSON とスナップショットに含まれる（`/100` で量子化）。
+
+### アイテムボックスは 12 個固定
+スナップショットは `SNAPSHOT_BOX_COUNT = 12`（`src/net/snapshotCodec.ts`）の固定長なので、全コースでボックスは 12 個（`boxRows` 4 × `boxLanes` 3）。列の位置だけコースごとに変える。エンティティの上限は `MAX_SNAPSHOT_ENTITIES`（27）。
+
+### COURSE_FINGERPRINT と版数の運用
+- `COURSE_FINGERPRINT`（`src/sim/tracks/index.ts`）は、全コースの `TrackDef` を JSON にして FNV-1a32 でハッシュした値。`Hello.course` に載せて送り、ホストが自分の値と比べる。違うクライアントは参加できない。
+- 現在の `PROTOCOL_VERSION` は 6。`LAYOUT_FINGERPRINT` は v6 の値 `53ab24b2`。
+- **運用**: コースデータ（`src/sim/tracks/*.ts` など `TrackDef` に入る値）を変えたら `PROTOCOL_VERSION` を上げる。そのうえで `src/net/snapshotCodec.test.ts` の 2 つの pin（版数ごとの固定値）の両方に新しい版数を追加する。コースの pin には新しい `COURSE_FINGERPRINT` を、レイアウトの pin には `LAYOUT_FINGERPRINT` を入れる（レイアウトを変えていなければ前の版と同じ値）。さらに `src/sim/items.test.ts` の `PROTOCOL_VERSION` の assert も更新する。例外は、まだ公開していない版数のままコースを作っている間だけで、その間は同じ版数の pin の値を書き換えてよい（v6 はこの方法で 4 コースを作った）。pin テストは指紋の変化を検知するが、版数の上げ忘れまでは検知しない。公開済みの版数の pin を書き換えないこと。

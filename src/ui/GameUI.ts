@@ -1,7 +1,7 @@
 import { getRank, TOTAL_LAPS } from '../sim/laps';
 import { getFinishTimeRemaining, isRaceTimedOut } from '../sim/race';
-import { TRACK_SAMPLES } from '../sim/track';
-import type { ItemType, KartState, RaceState } from '../sim/types';
+import { getTrack, TRACK_IDS } from '../sim/tracks';
+import type { ItemType, KartState, RaceState, Track, TrackId } from '../sim/types';
 import { emptyItemIcon as emptyItem, icon, itemIcon, itemName, itemShortName } from './itemIcons';
 import { createInkOverlay, update as updateInkOverlay } from './inkOverlay';
 
@@ -17,6 +17,14 @@ export function formatTime(seconds: number): string {
   const hundredths = Math.max(0, Math.floor(seconds * 100));
   return `${String(Math.floor(hundredths / 6000)).padStart(2, '0')}:${String(Math.floor(hundredths / 100) % 60).padStart(2, '0')}.${String(hundredths % 100).padStart(2, '0')}`;
 }
+
+/** Two-digit course number shown in the title strip, e.g. 01 for the first course. */
+export function courseNumber(trackId: string): string {
+  const index = TRACK_IDS.indexOf(trackId as TrackId);
+  return index < 0 ? '--' : String(index + 1).padStart(2, '0');
+}
+
+const courseOptions = TRACK_IDS.map((id, index) => `<label class="course-option"><input type="radio" name="course" value="${id}" aria-label="${courseNumber(id)} ${getTrack(id).def.name}"${index === 0 ? ' checked' : ''}><span aria-hidden="true">${courseNumber(id)}</span></label>`).join('');
 
 export function formatResultTime(state: RaceState, kart: KartState): string {
   if (kart.finishTime !== null) return formatTime(kart.finishTime);
@@ -34,7 +42,8 @@ export class GameUI {
   private readonly pause: HTMLElement;
   private readonly map: HTMLCanvasElement;
   private readonly mapContext: CanvasRenderingContext2D | null;
-  private readonly trackPath = new Path2D();
+  private trackPath = new Path2D();
+  private mapTrack: Track | null = null;
   private readonly refs: Record<string, HTMLElement> = {};
   private screen: Screen = 'title';
   private paused = false;
@@ -48,8 +57,10 @@ export class GameUI {
   private inkMounted = false;
 
   constructor(private readonly root: HTMLElement, private localKartId: number) {
+    // Placeholder until setCourse(); the first registered course is the default selection.
+    const initialCourse = getTrack(TRACK_IDS[0]).def.name;
     root.innerHTML = `
-      <canvas id="game-canvas" tabindex="-1" aria-label="緑の丘を走る3Dカートレース"></canvas>
+      <canvas id="game-canvas" tabindex="-1" aria-label="${initialCourse} を走る3Dカートレース"></canvas>
       <header class="topbar">
         <div class="wordmark"><span class="flag-mark" aria-hidden="true"></span><span>POCKET CIRCUIT<span class="wordmark-edition">THE LITTLE RACING CLUB</span></span></div>
         <div class="utility-buttons">
@@ -73,7 +84,7 @@ export class GameUI {
           <p class="touch-help">左手で曲がる。右手でドリフト。<br>アクセルは自動でも、手動でも。</p>
           <p class="drift-tip">ドリフトをためて、離すとターボ。</p>
         </aside>
-        <footer class="course-strip"><div><span class="course-index">01</span><span><small>THE CIRCUIT</small><strong>MEADOW LOOP</strong></span></div><div><small>ON THE GRID</small><strong>8 RACERS</strong></div><div><small>TO THE FINISH</small><strong>3 LAPS</strong></div><span class="course-footnote">A FRESH LITTLE ESCAPE.</span></footer>
+        <footer class="course-strip"><div><span id="course-index" class="course-index">01</span><span><small>THE CIRCUIT</small><strong id="course-name">${initialCourse}</strong></span></div><div class="course-picker"><small aria-hidden="true">SELECT COURSE</small><div id="course-select" class="course-select" role="radiogroup" aria-label="コースを選ぶ">${courseOptions}</div></div><div><small>ON THE GRID</small><strong>8 RACERS</strong></div><div><small>TO THE FINISH</small><strong>3 LAPS</strong></div><span class="course-footnote">A FRESH LITTLE ESCAPE.</span></footer>
       </section>
 
       <section id="lobby-screen" class="screen lobby-screen" aria-label="ロビー" hidden></section>
@@ -85,7 +96,7 @@ export class GameUI {
         <div id="countdown-display" class="countdown-display" role="status" aria-live="polite" hidden>3</div>
         <div class="race-notices"><p id="finish-countdown" class="finish-countdown" role="timer" hidden></p><p id="wrong-way" class="wrong-way" role="status" hidden>↶ 逆走しています</p><p id="race-status" class="race-status" hidden></p><p id="net-status" class="race-status" role="status" hidden></p></div>
         <div class="speed-display"><strong id="speed-value">0</strong><span>km/h</span><div id="drift-meter" class="drift-meter" data-stage="0"><div class="drift-meter-label"><span id="drift-label">MINI TURBO</span><span class="drift-levels">Ⅰ / Ⅱ</span></div><div class="drift-track"><div id="drift-fill" class="drift-fill"></div><i class="drift-threshold"></i></div></div></div>
-        <div class="minimap"><span>MEADOW LOOP</span><canvas id="minimap-canvas" width="360" height="256" aria-label="コース全体図。明るい枠のマーカーがあなたです。"></canvas><span class="map-you"><i></i>YOU</span></div>
+        <div class="minimap"><span id="minimap-course">${initialCourse}</span><canvas id="minimap-canvas" width="360" height="256" aria-label="コース全体図。明るい枠のマーカーがあなたです。"></canvas><span class="map-you"><i></i>YOU</span></div>
         <div class="touch-controls" aria-label="タッチ操作">
           <div class="steering-area"><button id="auto-accelerate" class="auto-button" type="button" aria-pressed="false"><span class="auto-indicator"></span>自動アクセル</button><div id="steering-pad" class="steering-pad" aria-label="左右にドラッグしてハンドル操作"><span class="steering-label">STEER</span><span class="steering-arrow left">‹</span><span class="steering-arrow right">›</span><div id="steering-knob" class="steering-knob"><span></span></div></div></div>
           <div class="touch-actions"><button id="accelerate" class="touch-button accelerate-button" type="button" aria-label="アクセルを踏む">${icon('<path d="m6 14 6-6 6 6m-12 5 6-6 6 6"/>')}<span>アクセル</span></button><button id="brake" class="touch-button brake-button" type="button" aria-label="ブレーキを踏む">${icon('<path d="M6 8h12M6 15h12"/>')}<span>ブレーキ</span></button><button id="drift" class="touch-button drift-button" type="button" aria-label="長押ししてドリフト。離すとミニターボ">${driftIcon}<span>ドリフト</span></button><button id="use-item" class="touch-button item-button" type="button" aria-label="所持アイテムを使う"><span id="item-button-icon">${emptyItem}</span><span id="item-button-name">ITEM</span></button></div>
@@ -94,7 +105,7 @@ export class GameUI {
 
       <section id="results-screen" class="screen results-screen" aria-labelledby="results-heading" hidden>
         <div class="results-content">
-          <div class="results-heading-row"><div><span class="eyebrow">MEADOW LOOP · 3 LAPS</span><h2 id="results-heading">FINISH!</h2></div><span id="result-position" class="result-position">1<span>位</span></span></div>
+          <div class="results-heading-row"><div><span id="results-course" class="eyebrow">${initialCourse} · ${TOTAL_LAPS} LAPS</span><h2 id="results-heading">FINISH!</h2></div><span id="result-position" class="result-position">1<span>位</span></span></div>
           <div class="finish-summary"><div><span>YOUR TIME</span><strong id="finish-time">00:00.00</strong></div><span id="new-record" class="record-badge" hidden>NEW BEST!</span><div class="finish-best"><span>PERSONAL BEST</span><strong id="finish-best">—</strong></div></div>
           <ol id="leaderboard" class="leaderboard" aria-label="レース順位"></ol>
           <p id="result-laps" class="result-laps"></p>
@@ -115,7 +126,6 @@ export class GameUI {
     this.pause = this.get('pause-dialog');
     this.map = this.get<HTMLCanvasElement>('minimap-canvas');
     this.mapContext = this.map.getContext('2d');
-    this.prepareMap();
     this.pause.addEventListener('keydown', (event) => this.trapFocus(event));
     this.root.addEventListener('mousedown', (event) => {
       if (this.isPlaying() && event.target instanceof Element && event.target.closest('button')) {
@@ -214,6 +224,7 @@ export class GameUI {
     }
     updateInkOverlay(player?.effects.inkTime ?? 0);
     if (!player) return;
+    this.setCourseLabels(state.trackId);
     this.text('position-value', String(getRank(state, this.localKartId)));
     this.text('position-total', `/ ${state.karts.length}`);
     this.text('lap-value', String(Math.min(TOTAL_LAPS, player.lap + 1)));
@@ -271,6 +282,7 @@ export class GameUI {
     if (!player) return;
     const rank = getRank(state, this.localKartId);
     const didFinish = player.finishTime !== null;
+    this.text('results-course', `${getTrack(state.trackId).def.name} · ${TOTAL_LAPS} LAPS`);
     this.text('results-heading', didFinish ? 'FINISH!' : 'RACE OVER');
     this.get('result-position').innerHTML = `${rank}<span>位</span>`;
     this.text('finish-time', didFinish ? formatTime(player.finishTime!) : 'DNF');
@@ -309,6 +321,17 @@ export class GameUI {
     this.show('results');
   }
 
+  /** Title course selection: radio state, course strip and the best time for that course. */
+  setCourse(trackId: TrackId, best: number | null): void {
+    for (const input of this.get('course-select').querySelectorAll<HTMLInputElement>('input[name="course"]')) {
+      input.checked = input.value === trackId;
+    }
+    this.text('course-index', courseNumber(trackId));
+    this.text('course-name', getTrack(trackId).def.name);
+    this.setCourseLabels(trackId);
+    this.setBest(best);
+  }
+
   setBest(best: number | null): void {
     this.text('title-best', best === null ? 'まだ記録はありません' : formatTime(best));
   }
@@ -325,6 +348,14 @@ export class GameUI {
     this.text('error-message', message);
     this.get('error-dialog').hidden = false;
     this.get('reload-page').focus({ preventScroll: true });
+  }
+
+  /** Minimap heading and the 3D canvas name follow the course being shown. */
+  private setCourseLabels(trackId: TrackId): void {
+    const name = getTrack(trackId).def.name;
+    this.text('minimap-course', name);
+    const label = `${name} を走る3Dカートレース`;
+    if (this.canvas.getAttribute('aria-label') !== label) this.canvas.setAttribute('aria-label', label);
   }
 
   private isPlaying(): boolean {
@@ -358,16 +389,18 @@ export class GameUI {
     }
   }
 
-  private prepareMap(): void {
-    if (TRACK_SAMPLES.length === 0) return;
-    const minX = Math.min(...TRACK_SAMPLES.map((point) => point.x));
-    const maxX = Math.max(...TRACK_SAMPLES.map((point) => point.x));
-    const minZ = Math.min(...TRACK_SAMPLES.map((point) => point.z));
-    const maxZ = Math.max(...TRACK_SAMPLES.map((point) => point.z));
+  private prepareMap(track: Track): void {
+    this.mapTrack = track;
+    this.trackPath = new Path2D();
+    if (track.samples.length === 0) return;
+    const minX = Math.min(...track.samples.map((point) => point.x));
+    const maxX = Math.max(...track.samples.map((point) => point.x));
+    const minZ = Math.min(...track.samples.map((point) => point.z));
+    const maxZ = Math.max(...track.samples.map((point) => point.z));
     this.mapScale = Math.min(144 / (maxX - minX), 99 / (maxZ - minZ));
     this.mapOffsetX = 90 - (minX + maxX) / 2 * this.mapScale;
     this.mapOffsetZ = 64 - (minZ + maxZ) / 2 * this.mapScale;
-    TRACK_SAMPLES.forEach((point, index) => {
+    track.samples.forEach((point, index) => {
       const x = point.x * this.mapScale + this.mapOffsetX;
       const y = point.z * this.mapScale + this.mapOffsetZ;
       if (index === 0) this.trackPath.moveTo(x, y);
@@ -377,6 +410,8 @@ export class GameUI {
   }
 
   private drawMap(state: RaceState): void {
+    const track = getTrack(state.trackId);
+    if (this.mapTrack !== track) this.prepareMap(track);
     const context = this.mapContext;
     if (!context) return;
     context.setTransform(2, 0, 0, 2, 0, 0);
@@ -388,7 +423,7 @@ export class GameUI {
     context.strokeStyle = 'rgba(255, 255, 255, .7)';
     context.lineWidth = 5;
     context.stroke(this.trackPath);
-    const start = TRACK_SAMPLES[0];
+    const start = track.samples[0];
     if (start) {
       const x = start.x * this.mapScale + this.mapOffsetX;
       const y = start.z * this.mapScale + this.mapOffsetZ;

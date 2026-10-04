@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { getAIInput } from '../sim/ai';
 import { createRace, FIXED_DT, stepRace } from '../sim/race';
-import type { InputFrame, RaceState } from '../sim/types';
+import type { InputFrame, RaceState, TrackId } from '../sim/types';
 import { packPong, TICK_MS, unpackClock } from './clock';
 import { GuestSession } from './guestSession';
 import { HostSession } from './hostSession';
@@ -18,8 +18,8 @@ import type { ChannelKind, PeerLink, Transport, WireData } from './transport';
 
 const drive = quantizeInput({ ...NEUTRAL_INPUT, throttle: 1, steer: 0.17 });
 const neutralInputs = () => Array.from({ length: 8 }, () => ({ ...NEUTRAL_INPUT }));
-function snapshot(tick = 180): Snapshot {
-  const state = createRace(431);
+function snapshot(tick = 180, trackId: TrackId = 'meadow'): Snapshot {
+  const state = createRace(431, { trackId });
   state.tick = tick;
   state.phase = 'racing';
   state.countdown = 0;
@@ -37,6 +37,35 @@ function distance(a: { x: number; y: number; z: number }, b: { x: number; y: num
 }
 
 describe('Predictor', () => {
+  it('preserves sub-centisecond airTime through airborne snapshots without replay or visible jumps', () => {
+    const initial = snapshot(180, 'canyon');
+    initial.state.karts[1].airTime = 0.8 - FIXED_DT;
+    initial.state.karts[1].speed = 20;
+    const host = structuredClone(initial.state);
+    const predictor = new Predictor(initial, 1);
+    let quantizedTimers = 0;
+    for (let tick = 181; tick <= 216; tick++) {
+      predictor.recordInput(tick, drive);
+      predictor.advanceTo(tick);
+      const inputs = host.karts.map(kart => !kart.human ? getAIInput(host, kart.id)
+        : kart.id === 1 ? drive : NEUTRAL_INPUT);
+      stepRace(host, inputs);
+      if (tick % 3 !== 0) continue;
+      expect(host.karts[1].airTime).toBeGreaterThan(0);
+      const decoded = decodeSnapshot(encodeSnapshot(host, 1, tick * TICK_MS, inputs), initial.state)!;
+      if (decoded.state.karts[1].airTime !== host.karts[1].airTime) quantizedTimers++;
+      expect(predictor.reconcile(decoded)).toBe(false);
+      expect(predictor.replayTicks).toBe(0);
+      expect(predictor.kart.airTime).toBe(host.karts[1].airTime);
+      expect(predictor.state.trackId).toBe('canyon');
+      const offset = predictor.visualOffset;
+      expect(Math.hypot(offset.x, offset.y, offset.z)).toBeLessThan(1.5);
+      expect(distance(predictor.kart, host.karts[1])).toBeLessThan(0.001);
+      predictor.decayVisualOffset(3 * FIXED_DT);
+    }
+    expect(quantizedTimers).toBeGreaterThan(0);
+  });
+
   it('replays quantized pending inputs, held remote inputs and fresh CPU AI bit for bit', () => {
     const initial = snapshot();
     initial.lastAppliedInput[0] = quantizeInput({ ...drive, steer: -0.4 });
@@ -346,8 +375,8 @@ describe('GuestSession prediction', () => {
       const players = roster(initial.state);
       const send = (data: Parameters<typeof encodeControlMessage>[0]) => peer.send('reliable', encodeControlMessage(data));
       const sendSnapshot = (tick: number) => peer.send('unreliable', encodeSnapshot(snapshot(tick).state, 1, network.now));
-      send({ type: 'welcome', slot: 1, roster: players, hostTime: 0 });
-      send({ type: 'race_start', raceId: 1, seed: 431, roster: players, startAtHostTime: 0 });
+      send({ type: 'welcome', trackId: 'meadow', slot: 1, roster: players, hostTime: 0 });
+      send({ type: 'race_start', trackId: 'meadow', raceId: 1, seed: 431, roster: players, startAtHostTime: 0 });
       sendSnapshot(180);
       network.advance(0);
       guest.tick(drive);
@@ -373,7 +402,7 @@ describe('GuestSession prediction', () => {
 
       sendSnapshot(192);
       send({ type: 'return_lobby' });
-      send({ type: 'race_start', raceId: 2, seed: 432, roster: players, startAtHostTime: 0 });
+      send({ type: 'race_start', trackId: 'meadow', raceId: 2, seed: 432, roster: players, startAtHostTime: 0 });
       network.advance(0);
       guest.frame();
       expect(guest.predictedState!.tick).toBe(0);
@@ -523,7 +552,7 @@ describe('GuestSession prediction', () => {
     try {
       await guest.join('AB2X');
       const initial = snapshot();
-      peer.send('reliable', encodeControlMessage({ type: 'welcome', slot: 1,
+      peer.send('reliable', encodeControlMessage({ type: 'welcome', trackId: 'meadow', slot: 1,
         roster: roster(initial.state), hostTime: network.now }));
       network.advance(0);
       for (let i = 0; i < 5; i++) { network.advance(100); guest.frame(); network.advance(0); }
@@ -551,8 +580,8 @@ describe('GuestSession prediction', () => {
     const initial = snapshot();
     const players = roster(initial.state);
     const send = (data: Parameters<typeof encodeControlMessage>[0]) => peer.send('reliable', encodeControlMessage(data));
-    send({ type: 'welcome', slot: 1, roster: players, hostTime: 0 });
-    send({ type: 'race_start', raceId: 1, seed: 431, roster: players, startAtHostTime: 0 });
+    send({ type: 'welcome', trackId: 'meadow', slot: 1, roster: players, hostTime: 0 });
+    send({ type: 'race_start', trackId: 'meadow', raceId: 1, seed: 431, roster: players, startAtHostTime: 0 });
     initial.state.karts[1].item = 'dash';
     peer.send('unreliable', encodeSnapshot(initial.state, 1, 0));
     network.advance(0);

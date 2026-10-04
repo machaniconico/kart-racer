@@ -43,6 +43,11 @@
 #lobby-screen .lobby-player-tags { font-size: 9px; color: #d8ff75; white-space: nowrap; }
 #lobby-screen .lobby-player[data-disconnected="true"] .lobby-player-tags { color: #ffc1ca; }
 #lobby-screen .lobby-profile { min-width: 0; }
+#lobby-screen .lobby-side { min-width: 0; }
+#lobby-screen .lobby-course { margin-bottom: 10px; }
+#lobby-screen #lobby-course-select { display: block; width: 100%; height: 40px; padding: 6px 8px; border: 1px solid #739486; border-radius: 4px; background: #f6fff7; color: #173d35; font: inherit; font-size: 16px; font-weight: 600; }
+#lobby-screen #lobby-course-select:focus-visible { outline: 3px solid var(--lime, #d8ff75); outline-offset: 2px; }
+#lobby-screen #lobby-course-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--lime, #d8ff75); font-size: 14px; font-weight: 800; letter-spacing: .5px; }
 #lobby-screen .lobby-palette { margin: 14px 0; padding: 0; border: 0; min-width: 0; }
 #lobby-screen .lobby-swatches { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
 #lobby-screen .lobby-swatch { position: relative; display: grid; place-items: center; min-width: 0; padding: 5px; height: 40px; }
@@ -65,7 +70,10 @@
   #lobby-screen .lobby-room { margin: 10px 0; padding: 8px 0; }
   #lobby-screen #lobby-code { font-size: 36px; }
   #lobby-screen .lobby-body { grid-template-columns: minmax(0, 1fr); gap: 12px; }
-  #lobby-screen .lobby-player { min-height: 28px; }
+  #lobby-screen .lobby-player { min-height: 27px; }
+  #lobby-screen .lobby-course { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  #lobby-screen .lobby-course label { flex-shrink: 0; margin: 0; }
+  #lobby-screen .lobby-course :is(select, output) { flex: 1; min-width: 0; }
   #lobby-screen .lobby-profile { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; align-items: end; }
   #lobby-screen .lobby-profile > label { grid-column: 1 / -1; }
   #lobby-screen .lobby-palette { grid-column: 1 / -1; grid-row: 3; margin: 10px 0 0; }
@@ -122,6 +130,16 @@
   #lobby-screen .lobby-player { min-height: 25px; }
   #lobby-screen .lobby-palette { margin: 8px 0; }
   #lobby-screen .lobby-swatches { gap: 4px; }
+  #lobby-screen .lobby-palette { margin: 4px 0; }
+  #lobby-screen .lobby-swatch { height: 32px; }
+  #lobby-screen .lobby-course { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  #lobby-screen .lobby-course label { flex-shrink: 0; margin: 0; }
+  /* The host's selector needs the full column; its options already read as course names. */
+  #lobby-screen .lobby-course:has(select:not([hidden])) label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  #lobby-screen .lobby-course :is(select, output) { flex: 1; min-width: 0; }
+  #lobby-screen #lobby-course-select { height: 34px; padding-block: 4px; }
+  #lobby-screen #lobby-name { height: 34px; }
+  #lobby-screen #lobby-profile-save { min-height: 34px; padding-block: 4px; }
   #lobby-screen .lobby-footer { margin-top: 4px; display: grid; grid-template-columns: minmax(0, 1fr) 205px; column-gap: 20px; align-items: center; }
   #lobby-screen .lobby-status { margin: 0; }
   #lobby-screen .lobby-start-row { margin: 0; }

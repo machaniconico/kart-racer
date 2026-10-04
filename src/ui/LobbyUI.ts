@@ -7,6 +7,24 @@ export interface LobbyUICallbacks {
   onProfile: (name: string, color: number) => void;
   onCreate: () => void;
   onJoin: (code: string) => void;
+  onCourse: (id: string) => void;
+}
+
+/** Display data for one course; main.ts supplies it so the lobby stays free of sim code. */
+export interface CourseOption { id: string; name: string }
+
+export interface CourseView {
+  /** Only the host gets the selector; guests see the course read-only. */
+  editable: boolean;
+  /** -1 when the selected ID is not in the known course list. */
+  index: number;
+  label: string;
+}
+
+export function courseView(courses: readonly CourseOption[], selectedId: string, role: 'host' | 'guest'): CourseView {
+  const index = courses.findIndex(course => course.id === selectedId);
+  const label = index < 0 ? '不明なコース' : `${String(index + 1).padStart(2, '0')} ${courses[index].name}`;
+  return { editable: role === 'host', index, label };
 }
 
 // Kept presentation-local: the UI must not load transport, protocol, or sim code.
@@ -60,6 +78,7 @@ export class LobbyUI {
   onProfile?: LobbyUICallbacks['onProfile'];
   onCreate?: LobbyUICallbacks['onCreate'];
   onJoin?: LobbyUICallbacks['onJoin'];
+  onCourse?: LobbyUICallbacks['onCourse'];
 
   private readonly entry: HTMLElement;
   private readonly lobby: HTMLElement;
@@ -84,7 +103,7 @@ export class LobbyUI {
   private selectedColor = COLORS[0];
   private actionVersion = 0;
 
-  constructor(root: HTMLElement, callbacks: Partial<LobbyUICallbacks> = {}) {
+  constructor(root: HTMLElement, callbacks: Partial<LobbyUICallbacks> = {}, private readonly courses: readonly CourseOption[] = []) {
     Object.assign(this, callbacks);
     const title = root.querySelector<HTMLElement>('#title-screen');
     const lobby = root.querySelector<HTMLElement>('#lobby-screen');
@@ -129,6 +148,12 @@ export class LobbyUI {
         </div>
         <div class="lobby-body">
           <section class="lobby-grid" aria-label="参加者"><ol id="lobby-roster"></ol></section>
+          <div class="lobby-side">
+          <div class="lobby-course">
+            <label for="lobby-course-select" class="lobby-label">コース</label>
+            <select id="lobby-course-select"></select>
+            <output id="lobby-course-name" aria-label="コース（ホストが選択）"></output>
+          </div>
           <form id="lobby-profile" class="lobby-profile" novalidate>
             <label for="lobby-name">名前（10文字まで）</label>
             <input id="lobby-name" name="name" type="text" maxlength="20" autocomplete="nickname"
@@ -136,6 +161,7 @@ export class LobbyUI {
             <fieldset class="lobby-palette"><legend>カートの色</legend><div class="lobby-swatches"></div></fieldset>
             <button id="lobby-profile-save" type="submit">名前を更新</button>
           </form>
+          </div>
         </div>
         <footer class="lobby-footer">
           <p id="lobby-status" class="lobby-status" role="status" aria-live="polite" aria-atomic="true"></p>
@@ -168,6 +194,12 @@ export class LobbyUI {
         this.submitProfile();
       });
       return button;
+    });
+
+    const courseSelect = this.get<HTMLSelectElement>('lobby-course-select');
+    for (const course of courses) courseSelect.append(new Option(courseView(courses, course.id, 'host').label, course.id));
+    this.listen(courseSelect, 'change', () => {
+      if (this.phase === 'lobby' && this.localPlayer()?.kind === 'host') this.invoke(() => this.onCourse?.(courseSelect.value));
     });
 
     this.listen(this.get('online-create'), 'click', () => this.connect());
@@ -320,6 +352,18 @@ export class LobbyUI {
     for (const id of ['lobby-copy', 'lobby-share']) this.get<HTMLButtonElement>(id).disabled = !rosterView?.roomCode;
     this.updateStatus();
     if (entering) this.nameInput.focus({ preventScroll: true });
+  }
+
+  /** Shows the selected course: a selector for the host, read-only text for guests. */
+  setCourse(selectedId: string, role: 'host' | 'guest'): void {
+    if (this.destroyed) return;
+    const view = courseView(this.courses, selectedId, role);
+    const select = this.get<HTMLSelectElement>('lobby-course-select');
+    const name = this.get('lobby-course-name');
+    select.hidden = !view.editable;
+    name.hidden = view.editable;
+    if (name.textContent !== view.label) name.textContent = view.label;
+    select.value = view.index < 0 ? '' : selectedId;
   }
 
   /** Accepts TransportError, a session close/rejection reason, or an unknown failure. */

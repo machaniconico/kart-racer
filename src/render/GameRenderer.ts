@@ -1,12 +1,17 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import {
-  ROAD_HALF_WIDTH, WALL_HALF_WIDTH, TRACK_LENGTH,
-  projectToTrack, sampleTrack,
-} from '../sim';
-import type { RaceState, TrackSample } from '../sim';
+import { getTrack, sampleTrack } from '../sim';
+import type { RaceState, Track, TrackId } from '../sim';
 import type { RenderSnapshot } from './snapshot';
+import { buildCourse, disposeObjectTree, type Course } from './course/buildCourse';
+import type { CourseTheme } from './course/CourseTheme';
+import { meadow } from './course/themes/meadow';
+import { canyon } from './course/themes/canyon';
+import { snowpeak } from './course/themes/snowpeak';
+import { neon } from './course/themes/neon';
 import { attachKartEffects, createEntityMesh, entityPose, updateKartEffects, type KartEffectVisuals } from './itemVisuals';
+
+const themes: Readonly<Record<TrackId, CourseTheme>> = { meadow, canyon, snowpeak, neon };
 
 const mix = (a: number, b: number, t: number) => a + (b - a) * t;
 const angleMix = (a: number, b: number, t: number) =>
@@ -31,51 +36,49 @@ interface KartVisual {
 
 /** Rendering owns all three objects; the serializable simulation stays unaware of them. */
 export class GameRenderer {
+  private readonly track: Track;
   readonly renderer: THREE.WebGLRenderer;
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.PerspectiveCamera(58, 1, 0.2, 650);
-  private readonly sun = new THREE.DirectionalLight(0xfff1d4, 2.25);
+  private readonly sun: THREE.DirectionalLight;
   private readonly cameraTarget = new THREE.Vector3();
   private readonly desiredCamera = new THREE.Vector3();
   private readonly desiredTarget = new THREE.Vector3();
-  private readonly sunOffset = new THREE.Vector3(55, 85, 35);
+  private readonly sunOffset: THREE.Vector3;
   private readonly transform = new THREE.Object3D();
   private readonly kartVisuals: KartVisual[] = [];
   private readonly boxCubes: THREE.InstancedMesh;
   private readonly boxCores: THREE.InstancedMesh;
   private readonly entities = new Map<number, THREE.Mesh>();
-  private readonly sky: THREE.Mesh;
+  private readonly course: Course;
   private elapsed = 0;
   private cameraReady = false;
   private lastMode = '';
   private reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   constructor(private readonly canvas: HTMLCanvasElement, initial: RaceState, private readonly localKartId: number) {
+    this.track = getTrack(initial.trackId);
+    const theme = themes[this.track.def.themeId];
     const mobile = window.matchMedia('(pointer: coarse)').matches;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: !mobile, powerPreference: 'high-performance' });
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = mobile ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.setClearColor(0xa3dce6);
-    this.scene.fog = new THREE.Fog(0xb4e1df, 170, 460);
-    this.scene.add(new THREE.HemisphereLight(0xe5faff, 0x6d965b, 2.25));
-    this.sun.position.set(70, 100, 40);
+    this.renderer.setClearColor(theme.colors.sky);
+    this.scene.fog = new THREE.Fog(theme.fog.color, theme.fog.near, theme.fog.far);
+    const { hemisphere, sun } = theme.lighting;
+    this.scene.add(new THREE.HemisphereLight(hemisphere.sky, hemisphere.ground, hemisphere.intensity));
+    this.sun = new THREE.DirectionalLight(sun.color, sun.intensity);
+    this.sun.position.set(...sun.position);
+    this.sunOffset = new THREE.Vector3(...sun.offset);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(1024, 1024);
     Object.assign(this.sun.shadow.camera, { left: -38, right: 38, top: 38, bottom: -38, near: 1, far: 230 });
     this.sun.shadow.bias = -0.0008;
     this.sun.shadow.normalBias = 0.08;
     this.scene.add(this.sun, this.sun.target);
-    this.sky = new THREE.Mesh(new THREE.SphereGeometry(600, 16, 12), new THREE.ShaderMaterial({
-      side: THREE.BackSide,
-      depthWrite: false,
-      uniforms: { top: { value: new THREE.Color(0x51b8ed) }, bottom: { value: new THREE.Color(0xdff4ee) } },
-      vertexShader: 'varying vec3 vPosition; void main(){vPosition=position;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}',
-      fragmentShader: 'uniform vec3 top; uniform vec3 bottom; varying vec3 vPosition; void main(){float t=smoothstep(-0.08,0.7,normalize(vPosition).y);gl_FragColor=vec4(mix(bottom,top,t),1.0);\n#include <colorspace_fragment>\n}',
-    }));
-    this.scene.add(this.sky);
-    this.buildCourse();
-    this.buildScenery();
+    this.course = buildCourse(this.track, theme);
+    this.scene.add(this.course.group);
     this.setRoster(initial.karts);
     const cubeGeometry = new THREE.BoxGeometry(1.3, 1.3, 1.3);
     cubeGeometry.applyMatrix4(new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(Math.PI / 5, 0, Math.PI / 4)));
@@ -89,7 +92,6 @@ export class GameRenderer {
       this.scene.add(mesh);
     }
     this.resize();
-    // Compiled away in production; lets browser QA call setRoster without touching main.ts.
   }
 
   /** Repaint karts by id (array index); missing karts are built, extra ones hidden. */
@@ -114,208 +116,6 @@ export class GameRenderer {
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / Math.max(1, h);
     this.camera.updateProjectionMatrix();
-  }
-
-  private ribbon(inner: number, outer: number, color: number, lift = 0, slope = false): void {
-    const positions: number[] = [];
-    const indices: number[] = [];
-    // Use a distance grid so the final segment closes at exactly the first vertex.
-    const count = 384;
-    for (let i = 0; i <= count; i++) {
-      const p = sampleTrack(i / count * TRACK_LENGTH);
-      for (const [j, offset] of [inner, outer].entries()) {
-        positions.push(p.x + p.nx * offset, slope && j === 1 ? -1.35 : p.y + lift, p.z + p.nz * offset);
-      }
-      if (i < count) {
-        const n = i * 2;
-        indices.push(n, n + 2, n + 1, n + 1, n + 2, n + 3);
-      }
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    geo.setIndex(indices);
-    geo.computeVertexNormals();
-    const mat = material(color);
-    mat.side = THREE.DoubleSide;
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.receiveShadow = true;
-    this.scene.add(mesh);
-  }
-
-  private buildCourse(): void {
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(1800, 1800), material(0x82c767));
-    ground.rotation.x = -Math.PI / 2;
-    ground.position.y = -1.45;
-    ground.receiveShadow = true;
-    this.scene.add(ground);
-    this.ribbon(-ROAD_HALF_WIDTH, ROAD_HALF_WIDTH, 0x596d73, 0.06);
-    for (const side of [-1, 1]) {
-      this.ribbon(side * ROAD_HALF_WIDTH, side * WALL_HALF_WIDTH, 0x98cf64, 0.01);
-      this.ribbon(side * WALL_HALF_WIDTH, side * (WALL_HALF_WIDTH + 22), 0x82c767, 0, true);
-      this.ribbon(side * (ROAD_HALF_WIDTH - 0.16), side * (ROAD_HALF_WIDTH + 0.06), 0xf8f6d8, 0.075);
-    }
-    const count = Math.floor(TRACK_LENGTH / 3);
-    const curb = new THREE.InstancedMesh(new THREE.BoxGeometry(0.65, 0.16, TRACK_LENGTH / count + 0.1), material(0xffffff), count * 2);
-    const rails = new THREE.InstancedMesh(new THREE.BoxGeometry(0.22, 0.54, TRACK_LENGTH / count + 0.18), material(0xe9eee0), count * 2);
-    const posts = new THREE.InstancedMesh(new THREE.BoxGeometry(0.22, 1.05, 0.22), material(0x547e6d), count * 2);
-    const dashes = new THREE.InstancedMesh(new THREE.BoxGeometry(0.13, 0.025, 1.8), material(0xaab8b4), Math.floor(count / 3));
-    for (let i = 0; i < count; i++) {
-      const p = sampleTrack((i + 0.5) / count * TRACK_LENGTH);
-      for (let s = 0; s < 2; s++) {
-        const side = s * 2 - 1;
-        this.place(this.transform, p, side * (ROAD_HALF_WIDTH + 0.32), 0.12);
-        curb.setMatrixAt(i * 2 + s, this.transform.matrix);
-        curb.setColorAt(i * 2 + s, new THREE.Color(i % 2 ? 0xfff1d1 : 0xeb695f));
-        this.place(this.transform, p, side * WALL_HALF_WIDTH, 0.83);
-        rails.setMatrixAt(i * 2 + s, this.transform.matrix);
-        this.place(this.transform, p, side * WALL_HALF_WIDTH, 0.51);
-        posts.setMatrixAt(i * 2 + s, this.transform.matrix);
-      }
-      if (i % 3 === 0 && i / 3 < dashes.count) {
-        this.place(this.transform, p, 0, 0.085);
-        dashes.setMatrixAt(i / 3, this.transform.matrix);
-      }
-    }
-    rails.castShadow = false;
-    this.scene.add(curb, rails, posts, dashes);
-    // Procedural checkered start line and a mint gantry.
-    const start = sampleTrack(0);
-    const arch = new THREE.Group();
-    arch.position.set(start.x, start.y, start.z);
-    arch.rotation.y = Math.atan2(start.tx, start.tz);
-    const mint = material(0x175c50);
-    for (const x of [-ROAD_HALF_WIDTH - 1.1, ROAD_HALF_WIDTH + 1.1]) {
-      const post = box(0.65, 7.5, 0.65, mint);
-      post.position.set(x, 3.75, 0);
-      post.castShadow = true;
-      arch.add(post);
-    }
-    const top = box(ROAD_HALF_WIDTH * 2 + 3, 1.6, 0.65, mint);
-    top.position.y = 7;
-    arch.add(top);
-    const banner = this.textPlane('POCKET CIRCUIT', 768, 80, '#175c50', '#ffffff');
-    banner.scale.set(ROAD_HALF_WIDTH * 1.5, 1.12, 1);
-    banner.position.set(0, 7.02, -0.34);
-    banner.rotation.y = Math.PI;
-    arch.add(banner);
-    const rear = banner.clone();
-    rear.position.z = 0.34;
-    rear.rotation.y = 0;
-    arch.add(rear);
-    const line = new THREE.InstancedMesh(new THREE.BoxGeometry(ROAD_HALF_WIDTH / 8, 0.03, 0.75), material(0xffffff), 48);
-    for (let x = 0; x < 16; x++) {
-      for (let z = 0; z < 3; z++) {
-        this.transform.position.set((x - 7.5) * ROAD_HALF_WIDTH / 8, 0.09, (z - 1) * 0.75);
-        this.transform.rotation.set(0, 0, 0);
-        this.transform.updateMatrix();
-        line.setMatrixAt(x * 3 + z, this.transform.matrix);
-        line.setColorAt(x * 3 + z, new THREE.Color((x + z) % 2 ? 0x203a3d : 0xffffee));
-      }
-    }
-    arch.add(line);
-    this.scene.add(arch);
-    // Direction chevrons face approaching drivers at several bends.
-    for (const fraction of [0.18, 0.37, 0.61, 0.82]) {
-      const p = sampleTrack(TRACK_LENGTH * fraction);
-      const sign = this.textPlane('› › ›', 256, 96, '#fff0aa', '#184f43');
-      sign.position.set(p.x + p.nx * (WALL_HALF_WIDTH + 0.25), p.y + 2.5, p.z + p.nz * (WALL_HALF_WIDTH + 0.25));
-      sign.scale.set(4.8, 1.8, 1);
-      sign.rotation.y = Math.atan2(-p.nx, -p.nz);
-      this.scene.add(sign);
-    }
-  }
-
-  private place(object: THREE.Object3D, point: TrackSample, offset: number, lift: number): void {
-    object.position.set(point.x + point.nx * offset, point.y + lift, point.z + point.nz * offset);
-    const next = sampleTrack(point.distance + 0.5);
-    object.rotation.set(-Math.atan2(next.y - point.y, 0.5), Math.atan2(point.tx, point.tz), 0, 'YXZ');
-    object.scale.set(1, 1, 1);
-    object.updateMatrix();
-  }
-
-  private textPlane(text: string, width: number, height: number, bg: string, fg: string): THREE.Mesh {
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    const context = canvas.getContext('2d')!;
-    context.fillStyle = bg;
-    context.fillRect(0, 0, width, height);
-    context.fillStyle = fg;
-    context.textAlign = 'center';
-    context.textBaseline = 'middle';
-    context.font = `900 ${height * 0.7}px system-ui, sans-serif`;
-    context.fillText(text, width / 2, height * 0.5, width * 0.94);
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    return new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide }));
-  }
-
-  private buildScenery(): void {
-    // Scenery uses a local deterministic sequence and never consumes simulation RNG.
-    let seed = 127;
-    const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
-    const trees = 150;
-    const trunks = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.27, 0.4, 2, 5), material(0x927050), trees);
-    const crowns = new THREE.InstancedMesh(new THREE.ConeGeometry(2.4, 5.7, 6), material(0x34a67b), trees);
-    const rocks = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1.6, 0), material(0xa3b7a6), 54);
-    const flowers = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.22, 0), material(0xffe97e), 120);
-    for (let i = 0; i < trees; i++) {
-      let x = 0, z = 0, projection = projectToTrack(0, 0);
-      for (let tries = 0; tries < 100; tries++) {
-        x = (random() - 0.5) * 365;
-        z = (random() - 0.5) * 365;
-        projection = projectToTrack(x, z);
-        if (Math.abs(projection.offset) > WALL_HALF_WIDTH + 6) break;
-      }
-      const y = Math.abs(projection.offset) < WALL_HALF_WIDTH + 22
-        ? mix(projection.height, -1.35, (Math.abs(projection.offset) - WALL_HALF_WIDTH) / 22) : -1.35;
-      const scale = 0.75 + random() * 0.7;
-      this.transform.position.set(x, y + scale, z);
-      this.transform.rotation.set(0, random() * 6.28, 0);
-      this.transform.scale.setScalar(scale);
-      this.transform.updateMatrix();
-      trunks.setMatrixAt(i, this.transform.matrix);
-      this.transform.position.y = y + 4.5 * scale;
-      this.transform.updateMatrix();
-      crowns.setMatrixAt(i, this.transform.matrix);
-      crowns.setColorAt(i, new THREE.Color().setHSL(0.37 + random() * 0.07, 0.45, 0.37 + random() * 0.12));
-      if (i < rocks.count) {
-        this.transform.position.set(x + 3.5, y + 0.25, z + 2);
-        this.transform.scale.set(scale * 1.5, scale * 0.8, scale);
-        this.transform.updateMatrix();
-        rocks.setMatrixAt(i, this.transform.matrix);
-      }
-    }
-    for (let i = 0; i < flowers.count; i++) {
-      const p = sampleTrack(random() * TRACK_LENGTH);
-      const offset = (ROAD_HALF_WIDTH + 1.2 + random() * 1.2) * (i % 2 ? -1 : 1);
-      this.place(this.transform, p, offset, 0.28);
-      flowers.setMatrixAt(i, this.transform.matrix);
-    }
-    crowns.castShadow = true;
-    trunks.castShadow = true;
-    this.scene.add(trunks, crowns, rocks, flowers);
-    const peaks = new THREE.InstancedMesh(new THREE.ConeGeometry(45, 65, 5), material(0x75b99d), 16);
-    for (let i = 0; i < peaks.count; i++) {
-      const angle = i / peaks.count * Math.PI * 2;
-      this.transform.position.set(Math.cos(angle) * 290, 13 + random() * 12, Math.sin(angle) * 290);
-      this.transform.rotation.set(0, random() * 3, 0);
-      this.transform.scale.set(1 + random(), 0.7 + random() * 0.8, 1 + random());
-      this.transform.updateMatrix();
-      peaks.setMatrixAt(i, this.transform.matrix);
-      peaks.setColorAt(i, new THREE.Color().setHSL(0.4, 0.26, 0.58 + random() * 0.08));
-    }
-    this.scene.add(peaks);
-    const clouds = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), new THREE.MeshBasicMaterial({ color: 0xf7fff0 }), 36);
-    for (let i = 0; i < clouds.count; i++) {
-      const angle = i / clouds.count * Math.PI * 2;
-      this.transform.position.set(Math.cos(angle) * 220, 48 + random() * 24, Math.sin(angle) * 220);
-      this.transform.scale.set(8 + random() * 13, 3 + random() * 4, 5 + random() * 6);
-      this.transform.rotation.set(0, 0, 0);
-      this.transform.updateMatrix();
-      clouds.setMatrixAt(i, this.transform.matrix);
-    }
-    this.scene.add(clouds);
   }
 
   private buildKart(color: number): KartVisual {
@@ -406,6 +206,9 @@ export class GameRenderer {
   }
 
   update(state: RaceState, previous: RenderSnapshot, alpha: number, dt: number, mode: 'title' | 'lobby' | 'race' | 'results'): void {
+    if (state.trackId !== this.track.def.id) {
+      throw new RangeError(`Renderer course ${this.track.def.id} does not match race course ${state.trackId}; recreate GameRenderer`);
+    }
     this.elapsed += dt;
     if (mode !== this.lastMode) { this.cameraReady = false; this.lastMode = mode; }
     for (const kart of state.karts) {
@@ -413,8 +216,8 @@ export class GameRenderer {
       const prev = previous.karts[kart.id] ?? kart;
       visual.root.position.set(mix(prev.x, kart.x, alpha), mix(prev.y, kart.y, alpha), mix(prev.z, kart.z, alpha));
       visual.root.rotation.y = angleMix(prev.heading, kart.heading, alpha);
-      const p = sampleTrack(kart.trackDistance);
-      const next = sampleTrack(kart.trackDistance + 1);
+      const p = sampleTrack(this.track, kart.trackDistance);
+      const next = sampleTrack(this.track, kart.trackDistance + 1);
       const slope = (next.y - p.y) * Math.cos(kart.heading - Math.atan2(p.tx, p.tz));
       visual.body.rotation.x = -Math.atan(slope);
       visual.body.rotation.z = -kart.steer * Math.min(kart.speed / 32, 1) * 0.075;
@@ -471,7 +274,7 @@ export class GameRenderer {
     const player = state.karts.find((kart) => kart.id === this.localKartId);
     const playerVisual = player ? this.kartVisuals[this.localKartId] : undefined;
     if (mode === 'title' || mode === 'lobby' || !player || !playerVisual) {
-      const p = sampleTrack(TRACK_LENGTH - 8);
+      const p = sampleTrack(this.track, this.track.length - 8);
       const orbit = this.reducedMotion ? 0 : Math.sin(this.elapsed * 0.08) * 0.12;
       const heading = Math.atan2(p.tx, p.tz) + orbit;
       this.desiredCamera.set(p.x - Math.sin(heading) * 30 - p.nx * 19, p.y + 18, p.z - Math.cos(heading) * 30 - p.nz * 19);
@@ -489,7 +292,7 @@ export class GameRenderer {
     this.cameraTarget.lerp(this.desiredTarget, follow);
     this.camera.lookAt(this.cameraTarget);
     this.cameraReady = true;
-    this.sky.position.copy(this.camera.position);
+    this.course.sky.position.copy(this.camera.position);
     // Without a local kart (spectating, roster mismatch) the sun follows the camera target instead.
     const sunAnchor = playerVisual ? playerVisual.root.position : this.cameraTarget;
     this.sun.position.copy(sunAnchor).add(this.sunOffset);
@@ -497,17 +300,18 @@ export class GameRenderer {
     this.renderer.render(this.scene, this.camera);
   }
 
+  getTrackId(): TrackId {
+    return this.track.def.id;
+  }
+
+  getDrawCalls(): number {
+    return this.renderer.info.render.calls;
+  }
+
   dispose(): void {
-    const geometries = new Set<THREE.BufferGeometry>();
-    const materials = new Set<THREE.Material>();
-    this.scene.traverse((object) => {
-      if (object instanceof THREE.Mesh) {
-        geometries.add(object.geometry);
-        for (const mat of Array.isArray(object.material) ? object.material : [object.material]) materials.add(mat);
-      }
-    });
-    geometries.forEach((geo) => geo.dispose());
-    materials.forEach((mat) => { if ('map' in mat && mat.map instanceof THREE.Texture) mat.map.dispose(); mat.dispose(); });
+    this.course.dispose();
+    disposeObjectTree(this.scene);
+    this.sun.dispose();
     this.renderer.dispose();
   }
 }

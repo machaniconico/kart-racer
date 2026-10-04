@@ -6,12 +6,13 @@ import { NEUTRAL_INPUT, quantizeInput } from './inputBuffer';
 import { isRaceState, MAX_PLAYERS, PacketKind } from './protocol';
 
 // All multibyte fields are little endian. The design's field lists total
-// 28/57/25 bytes, giving 1,196 bytes at capacity and 546 with two entities.
+// 28/58/25 bytes, giving 1,179 bytes at capacity and 554 with two entities.
 export const SNAPSHOT_HEADER_BYTES = 28;
-export const SNAPSHOT_KART_BYTES = 57;
+export const SNAPSHOT_KART_BYTES = 58;
 export const SNAPSHOT_ENTITY_BYTES = 25;
 export const SNAPSHOT_BOX_COUNT = 12;
-export const MAX_SNAPSHOT_ENTITIES = 28;
+// With 58-byte karts, a 28th entity would exceed the 1,200-byte packet budget.
+export const MAX_SNAPSHOT_ENTITIES = 27;
 const BOX_OFFSET = SNAPSHOT_HEADER_BYTES + MAX_PLAYERS * SNAPSHOT_KART_BYTES;
 const BASE_BYTES = BOX_OFFSET + SNAPSHOT_BOX_COUNT;
 // A binary scale gives <= 0.000062 rad error and accommodates the sim's
@@ -25,7 +26,9 @@ const ENTITY_FLIGHT_LAYOUT = {
   bouncesMask: 0x7f, ownerClearedMask: 0x80, bombSpeedScale: 2,
   aux: ['bolt:aux', 'seeker:launchSpeed', 'skycomet:trackDistance', 'bomb:fuse', 'trap:age', 'decoy:age'],
 } as const;
-export const SNAPSHOT_LAYOUT = [KART_EFFECT_LAYOUT, ENTITY_KINDS, ITEMS, FLAGS, PHASES, ENTITY_FLIGHT_LAYOUT] as const;
+const AIR_TIME_LAYOUT = { field: 'airTime', byteOffset: 57, type: 'Uint8', scale: 100 } as const;
+export const SNAPSHOT_LAYOUT = [KART_EFFECT_LAYOUT, ENTITY_KINDS, ITEMS, FLAGS, PHASES, ENTITY_FLIGHT_LAYOUT,
+  AIR_TIME_LAYOUT, { kartBytes: SNAPSHOT_KART_BYTES, maxEntities: MAX_SNAPSHOT_ENTITIES }] as const;
 type Entity = (Projectile | Trap) & ProjectileState;
 
 export interface Snapshot {
@@ -82,7 +85,7 @@ export function encodeSnapshot(
   const inputs = lastAppliedInput.map(quantizeInput);
   const entities = selectEntities(state);
   // Validate the transmitted subset, without imposing the control channel's
-  // entity-array limit on a host simulation that will be culled to 28 anyway.
+  // entity-array limit on a host simulation that will be culled to capacity anyway.
   if (!isRaceState({ ...state,
     projectiles: entities.filter(entity => 'bounces' in entity),
     traps: entities.filter(entity => 'age' in entity),
@@ -124,6 +127,7 @@ export function encodeSnapshot(
     view.setUint8(offset + 41, quantize(kart.spinTime, 50, 0, 255));
     view.setUint8(offset + 42, quantize(kart.hopTime, 100, 0, 255));
     view.setUint8(offset + 43, quantize(kart.hitCooldown, 100, 0, 255));
+    view.setUint8(offset + AIR_TIME_LAYOUT.byteOffset, quantize(kart.airTime, AIR_TIME_LAYOUT.scale, 0, 255));
     const item = ITEMS.indexOf(kart.item);
     if (item < 0) throw new RangeError('Unknown snapshot item');
     view.setUint8(offset + 44, item);
@@ -180,7 +184,8 @@ export function decodeSnapshot(data: unknown, template: RaceState): Snapshot | n
   const state: RaceState = {
     tick: view.getUint32(2, true), seed: view.getUint32(14, true), phase,
     countdown: view.getUint16(19, true) / 100, racingTicks, time: racingTicks * FIXED_DT,
-    nextEntityId: view.getUint16(25, true), karts: [], boxes: [], projectiles: [], traps: [], events: [],
+    karts: [], boxes: [], projectiles: [], traps: [], events: [],
+    nextEntityId: view.getUint16(25, true), trackId: template.trackId,
   };
   const lastAppliedInput: InputFrame[] = [];
   for (let id = 0; id < MAX_PLAYERS; id++) {
@@ -207,6 +212,7 @@ export function decodeSnapshot(data: unknown, template: RaceState): Snapshot | n
       driftTime: view.getUint16(offset + 37, true) / 100, driftDirection,
       boostTime: view.getUint8(offset + 40) / 50, spinTime: view.getUint8(offset + 41) / 50,
       hopTime: view.getUint8(offset + 42) / 100, hitCooldown: view.getUint8(offset + 43) / 100, item,
+      airTime: view.getUint8(offset + AIR_TIME_LAYOUT.byteOffset) / AIR_TIME_LAYOUT.scale,
     };
     FLAGS.forEach((key, index) => { kart[key] = (flags & (1 << index)) !== 0; });
     for (const field of KART_EFFECT_LAYOUT) {

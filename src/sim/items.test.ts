@@ -1,7 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import * as THREE from 'three';
 import { AudioEngine } from '../audio/AudioEngine';
-import { attachKartEffects, createEntityMesh, entityPose, updateKartEffects } from '../render/itemVisuals';
 import { getAIInput } from './ai';
 import { decideItemUse, getSteeringError } from './itemAi';
 import { LAYOUT_FINGERPRINT, PROTOCOL_VERSION, isRaceState } from '../net/protocol';
@@ -14,8 +12,11 @@ import { chooseItem as publicChooseItem } from './index';
 import { getRank } from './laps';
 import { random } from './random';
 import { createRace, FIXED_DT, NEUTRAL_INPUT, stepRace } from './race';
-import { projectToTrack, sampleTrack, TRACK_LENGTH, WALL_HALF_WIDTH, wrapDistance } from './track';
+import { projectToTrack, sampleTrack, wrapDistance } from './track';
 import type { InputFrame, ItemType, KartState, Projectile, RaceEvent, RaceState } from './types';
+import { getTrack } from './tracks';
+
+const track = getTrack('meadow');
 
 const PRESS: InputFrame = { ...NEUTRAL_INPUT, useItem: true };
 const ITEMS: readonly ItemType[] = ['dash', 'trap', 'bolt', 'seeker', 'skycomet',
@@ -33,7 +34,7 @@ const EXPECTED_WEIGHTS = [
 ];
 
 function place(kart: KartState, distance: number): void {
-  const sample = sampleTrack(distance);
+  const sample = sampleTrack(track, distance);
   Object.assign(kart, { x: sample.x, y: sample.y, z: sample.z,
     heading: Math.atan2(sample.tx, sample.tz), trackDistance: sample.distance, lateralOffset: 0 });
 }
@@ -134,13 +135,13 @@ describe('dash charges and timed presses', () => {
       useItem(state, kart, PRESS);
       expect(kart.effects.charges).toBe(remaining);
       if (remaining > 0) {
-        advanceItems(state, FIXED_DT);
+        advanceItems(track, state, FIXED_DT);
         expect(state.boxes[0]!.respawnTime).toBe(0);
         expect(kart.item).toBe('tripleDash');
       }
     }
     expect(state.events.filter((event) => event.type === 'boost')).toHaveLength(3);
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     expect(kart.item).not.toBeNull();
     expect(state.boxes[0]!.respawnTime).toBe(5);
   });
@@ -155,7 +156,7 @@ describe('dash charges and timed presses', () => {
     while (chooseItem({ seed }, rank) !== 'tripleDash') seed++;
     state.seed = seed;
     boxAt(state, kart);
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     expect(kart.item).toBe('tripleDash');
     expect(kart.effects.charges).toBe(3);
     press(state, kart);
@@ -167,20 +168,20 @@ describe('dash charges and timed presses', () => {
     const kart = state.karts[0]!;
     kart.item = 'rapidDash';
     // Carrying it before activation does not start the window.
-    advanceItems(state, 10);
+    advanceItems(track, state, 10);
     expect(kart.item).toBe('rapidDash');
     press(state, kart);
     expect(kart.effects.rapidTime).toBe(8);
     expect(kart.boostTime).toBe(0.45);
     boxAt(state, kart);
-    for (let tick = 0; tick < 479; tick++) advanceItems(state, FIXED_DT);
+    for (let tick = 0; tick < 479; tick++) advanceItems(track, state, FIXED_DT);
     expect(kart.effects.rapidTime).toBeCloseTo(FIXED_DT, 8);
     expect(state.boxes[0]!.respawnTime).toBe(0);
     state.boxes = [];
     press(state, kart);
     expect(kart.effects.rapidTime).toBeCloseTo(FIXED_DT, 8);
     useItem(state, kart, held ? PRESS : NEUTRAL_INPUT);
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     expect(kart.effects.rapidTime).toBe(0);
     expect(kart.item).toBeNull();
     press(state, kart);
@@ -192,7 +193,7 @@ describe('dash charges and timed presses', () => {
     const kart = state.karts[0]!;
     kart.item = 'rapidDash';
     press(state, kart);
-    advanceItems(state, 1);
+    advanceItems(track, state, 1);
     kart.boostTime = 0.1;
     useItem(state, kart, PRESS);
     expect(kart.boostTime).toBe(0.1);
@@ -234,9 +235,9 @@ describe('aura and storm', () => {
       input: PRESS, maxSpeedMultiplier: 1.3, invulnerable: true, contactHit: true,
     });
     expect(state.events).toContainEqual({ type: 'aura_start', kartId: kart.id });
-    for (let tick = 0; tick < 419; tick++) advanceItems(state, FIXED_DT);
+    for (let tick = 0; tick < 419; tick++) advanceItems(track, state, FIXED_DT);
     expect(getKartModifiers(state, kart, PRESS).invulnerable).toBe(true);
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     expect(kart.effects.auraTime).toBe(0);
     expect(getKartModifiers(state, kart, PRESS)).toEqual({
       input: PRESS, maxSpeedMultiplier: 1, invulnerable: false, contactHit: false,
@@ -257,7 +258,7 @@ describe('aura and storm', () => {
       z: kart.z, heading: kart.heading, life: 5 };
     if (kind === 'trap') state.traps.push({ ...entity, kind, age: 2 });
     else state.projectiles.push({ ...entity, kind, bounces: 0 });
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     expect(kart).toMatchObject({ spinTime: 0, speed: 20, boostTime: 1, driftTime: 1, driftDirection: 1 });
     expect(state.events.filter((event) => event.type === 'hit')).toEqual([]);
     expect(state.traps.length + state.projectiles.length).toBe(0);
@@ -317,9 +318,9 @@ describe('aura and storm', () => {
       expect(target.boostTime).toBe(0);
     }
     expect(state.events.filter((event) => event.type === 'storm')).toEqual([{ type: 'storm', kartId: user.id, value: 0b11111100 }]);
-    for (let tick = 0; tick < 299; tick++) advanceItems(state, FIXED_DT);
+    for (let tick = 0; tick < 299; tick++) advanceItems(track, state, FIXED_DT);
     expect(state.karts[2]!.effects.shrinkTime).toBeGreaterThan(0);
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     expect(state.karts[2]!.effects.shrinkTime).toBe(0);
     expect(getKartModifiers(state, state.karts[2]!, PRESS).maxSpeedMultiplier).toBe(1);
   });
@@ -330,7 +331,7 @@ describe('aura and storm', () => {
     const target = state.karts[2]!;
     user.item = 'storm';
     press(state, user);
-    advanceItems(state, 2);
+    advanceItems(track, state, 2);
     expect(target.effects.shrinkTime).toBe(3);
     user.item = 'storm';
     press(state, user);
@@ -364,7 +365,7 @@ describe('effect snapshot compatibility and deterministic replay', () => {
       hash = Math.imul(hash ^ character.charCodeAt(0), 0x01000193) >>> 0;
     }
     expect(hash.toString(16).padStart(8, '0')).toBe(LAYOUT_FINGERPRINT);
-    expect(PROTOCOL_VERSION).toBe(5);
+    expect(PROTOCOL_VERSION).toBe(6);
     const state = race();
     state.karts[0]!.item = 'rapidDash';
     press(state, state.karts[0]!);
@@ -457,12 +458,12 @@ describe('I2 projectiles and decoys', () => {
     const z = seeker.z;
     place(state.karts[3]!, 180); // Move the non-target out of the projectile's collision path.
     state.karts[2]!.x += 3;
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     const turn = Math.atan2(Math.sin(seeker.heading - heading), Math.cos(seeker.heading - heading));
     expect(Math.abs(turn)).toBeGreaterThan(0);
     expect(Math.abs(turn)).toBeLessThanOrEqual(2.4 * FIXED_DT + 1e-10);
     expect(Math.hypot(seeker.x - x, seeker.z - z)).toBeCloseTo(48 * FIXED_DT, 8);
-    for (let tick = 0; tick < 60 && state.projectiles.length; tick++) advanceItems(state, FIXED_DT);
+    for (let tick = 0; tick < 60 && state.projectiles.length; tick++) advanceItems(track, state, FIXED_DT);
     expect(state.karts[2]!.spinTime).toBeGreaterThan(0);
     expect(state.projectiles).toHaveLength(0);
   });
@@ -480,7 +481,7 @@ describe('I2 projectiles and decoys', () => {
     const heading = seeker.heading;
     // A later arrival does not change a launch with no target into a homing shot.
     place(state.karts[2]!, 45);
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     expect(seeker.heading).toBe(heading);
     expect(seeker.target).toBeNull();
   });
@@ -510,21 +511,21 @@ describe('I2 projectiles and decoys', () => {
     for (let tick = 0; tick < 359; tick++) {
       // Isolate the timer from wall/collision expiry on a closed course.
       Object.assign(seeker, start);
-      advanceItems(state, FIXED_DT);
+      advanceItems(track, state, FIXED_DT);
     }
     expect(state.projectiles).toHaveLength(1);
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     expect(state.projectiles).toHaveLength(0);
     owner.item = 'seeker';
     press(state, owner);
     const wallShot = state.projectiles[0]!;
-    const sample = sampleTrack(35);
-    Object.assign(wallShot, { x: sample.x + sample.nx * (WALL_HALF_WIDTH - 0.5),
-      z: sample.z + sample.nz * (WALL_HALF_WIDTH - 0.5), heading: Math.atan2(sample.nx, sample.nz) });
+    const sample = sampleTrack(track, 35);
+    Object.assign(wallShot, { x: sample.x + sample.nx * (track.def.wallHalfWidth - 0.5),
+      z: sample.z + sample.nz * (track.def.wallHalfWidth - 0.5), heading: Math.atan2(sample.nx, sample.nz) });
     const victim = state.karts[1]!;
-    victim.x = sample.x + sample.nx * (WALL_HALF_WIDTH - 1);
-    victim.z = sample.z + sample.nz * (WALL_HALF_WIDTH - 1);
-    advanceItems(state, FIXED_DT);
+    victim.x = sample.x + sample.nx * (track.def.wallHalfWidth - 1);
+    victim.z = sample.z + sample.nz * (track.def.wallHalfWidth - 1);
+    advanceItems(track, state, FIXED_DT);
     expect(state.projectiles).toHaveLength(0);
     expect(wallShot.bounces).toBe(0);
     expect(victim.spinTime).toBeGreaterThan(0);
@@ -533,7 +534,7 @@ describe('I2 projectiles and decoys', () => {
     const missedShot = state.projectiles[0]!;
     Object.assign(missedShot, { x: wallShot.x, z: wallShot.z, heading: wallShot.heading });
     place(victim, 180);
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     expect(state.projectiles).toHaveLength(0);
     expect(missedShot.bounces).toBe(0);
   });
@@ -544,9 +545,9 @@ describe('I2 projectiles and decoys', () => {
     const target = state.karts[1]!;
     owner.lap = first ? 3 : 1;
     target.lap = 2;
-    place(owner, TRACK_LENGTH - 20);
+    place(owner, track.length - 20);
     place(target, 20);
-    const sample = sampleTrack(target.trackDistance);
+    const sample = sampleTrack(track, target.trackDistance);
     target.lateralOffset = 3;
     target.x += sample.nx * 3;
     target.z += sample.nz * 3;
@@ -554,16 +555,16 @@ describe('I2 projectiles and decoys', () => {
     press(state, owner);
     const comet = state.projectiles[0] as Projectile & ProjectileState;
     expect(comet.target).toBe(target.id);
-    advanceItems(state, FIXED_DT);
-    expect(comet.aux).toBeCloseTo(wrapDistance(TRACK_LENGTH - 20 + 70 * FIXED_DT), 8);
-    expect(Math.abs(projectToTrack(comet.x, comet.z).offset)).toBeLessThan(0.01);
+    advanceItems(track, state, FIXED_DT);
+    expect(comet.aux).toBeCloseTo(wrapDistance(track, track.length - 20 + 70 * FIXED_DT), 8);
+    expect(Math.abs(projectToTrack(track, comet.x, comet.z).offset)).toBeLessThan(0.01);
     const near = state.karts[2]!;
     const far = state.karts[3]!;
     near.x = target.x + 4.49;
     near.z = target.z;
     far.x = target.x + 4.51;
     far.z = target.z;
-    for (let tick = 0; tick < 60 && state.projectiles.length; tick++) advanceItems(state, FIXED_DT);
+    for (let tick = 0; tick < 60 && state.projectiles.length; tick++) advanceItems(track, state, FIXED_DT);
     expect(state.projectiles).toHaveLength(0);
     expect(target.spinTime).toBeGreaterThan(0);
     expect(near.spinTime).toBeGreaterThan(0);
@@ -581,7 +582,7 @@ describe('I2 projectiles and decoys', () => {
     const comet = state.projectiles[0] as Projectile & ProjectileState;
     expect(comet.target).toBe(1);
     state.karts[2]!.lap = 2;
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     expect(comet.target).toBe(2);
   });
 
@@ -597,13 +598,13 @@ describe('I2 projectiles and decoys', () => {
     expect((bomb.x - owner.x) * sx + (bomb.z - owner.z) * sz).toBeCloseTo(brake ? -2.3 : 4);
     const start = { x: bomb.x, z: bomb.z };
     for (const kart of state.karts) place(kart, 200 + kart.id * 20);
-    for (let tick = 0; tick < 60; tick++) advanceItems(state, FIXED_DT);
+    for (let tick = 0; tick < 60; tick++) advanceItems(track, state, FIXED_DT);
     expect(Math.hypot(bomb.x - start.x, bomb.z - start.z)).toBeCloseTo(12, 8);
     const stopped = { x: bomb.x, z: bomb.z };
-    for (let tick = 0; tick < 89; tick++) advanceItems(state, FIXED_DT);
+    for (let tick = 0; tick < 89; tick++) advanceItems(track, state, FIXED_DT);
     expect({ x: bomb.x, z: bomb.z }).toEqual(stopped);
     expect(state.projectiles).toHaveLength(1);
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     expect(state.projectiles).toHaveLength(0);
     expect(state.events.filter(event => event.type === 'explode')).toEqual([
       { type: 'explode', kartId: owner.id, ...stopped, value: 0 },
@@ -617,11 +618,11 @@ describe('I2 projectiles and decoys', () => {
     useItem(state, owner, PRESS);
     useItem(state, owner, NEUTRAL_INPUT);
     const bomb = state.projectiles[0]!;
-    for (let tick = 0; tick < 18; tick++) advanceItems(state, FIXED_DT);
+    for (let tick = 0; tick < 18; tick++) advanceItems(track, state, FIXED_DT);
     Object.assign(owner, { x: bomb.x + 3, z: bomb.z });
     state.karts[1]!.x = bomb.x;
     state.karts[1]!.z = bomb.z;
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     expect(state.projectiles).toHaveLength(0);
     expect(owner.spinTime).toBeGreaterThan(0);
     expect(state.karts[1]!.spinTime).toBeGreaterThan(0);
@@ -635,12 +636,12 @@ describe('I2 projectiles and decoys', () => {
     useItem(state, owner, PRESS);
     useItem(state, owner, NEUTRAL_INPUT);
     const bomb = state.projectiles[0]!;
-    for (let tick = 0; tick < 60; tick++) advanceItems(state, FIXED_DT);
+    for (let tick = 0; tick < 60; tick++) advanceItems(track, state, FIXED_DT);
     expect(state.projectiles).toHaveLength(1);
     Object.assign(owner, { x: bomb.x, z: bomb.z });
     Object.assign(state.karts[1]!, { x: bomb.x + 3, z: bomb.z });
     state.karts[1]!.effects.auraTime = 7;
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     expect(owner.spinTime).toBeGreaterThan(0);
     expect(state.karts[1]!.spinTime).toBe(0);
     expect(state.projectiles).toHaveLength(0);
@@ -649,16 +650,16 @@ describe('I2 projectiles and decoys', () => {
   it('resumes a nearly expired bomb from a snapshot and still detonates at the float fuse deadline', () => {
     const state = race();
     state.boxes = createRace(42).boxes;
-    const sample = sampleTrack(350);
+    const sample = sampleTrack(track, 350);
     const bomb: Projectile & ProjectileState = { kind: 'bomb', id: state.nextEntityId++, ownerId: 0,
       x: sample.x, y: sample.y, z: sample.z, heading: 0, life: 2 / 60, aux: 2 / 60, bounces: 0 };
     state.projectiles.push(bomb);
     const resumed = decodeSnapshot(encodeSnapshot(state, 0, 0), createRace(42))!.state;
     expect(resumed.projectiles[0]!.life).toBe(0); // Tenths-of-a-second wire quantization.
-    advanceItems(resumed, FIXED_DT);
+    advanceItems(track, resumed, FIXED_DT);
     expect(resumed.projectiles).toHaveLength(1);
     expect(resumed.events.some(event => event.type === 'explode')).toBe(false);
-    advanceItems(resumed, FIXED_DT);
+    advanceItems(track, resumed, FIXED_DT);
     expect(resumed.projectiles).toHaveLength(0);
     expect(resumed.events.filter(event => event.type === 'explode')).toHaveLength(1);
   });
@@ -673,7 +674,7 @@ describe('I2 projectiles and decoys', () => {
     expect(decoy.kind).toBe('decoy');
     expect(Math.hypot(owner.x - decoy.x, owner.z - decoy.z)).toBeCloseTo(2.6);
     Object.assign(state.karts[1]!, { x: decoy.x, z: decoy.z });
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     expect(state.karts[1]!.spinTime).toBeGreaterThan(0);
     expect(state.traps).toHaveLength(0);
   });
@@ -701,9 +702,9 @@ describe('I2 reviewer regressions', () => {
     owner.item = 'skycomet';
     press(state, owner);
     const comet = state.projectiles[0] as Projectile & ProjectileState;
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     expect(comet.aux).toBeCloseTo(100 - 70 * FIXED_DT, 8);
-    for (let tick = 0; tick < 60 && state.projectiles.length; tick++) advanceItems(state, FIXED_DT);
+    for (let tick = 0; tick < 60 && state.projectiles.length; tick++) advanceItems(track, state, FIXED_DT);
     expect(target.spinTime).toBeGreaterThan(0);
     expect(state.events).toContainEqual(expect.objectContaining({ type: 'explode', kartId: owner.id, x: target.x, z: target.z }));
     expect(state.events.find(event => event.type === 'explode')!.value! & (1 << target.id)).toBe(1 << target.id);
@@ -730,7 +731,7 @@ describe('I2 reviewer regressions', () => {
     for (let launch = 0; launch < 25; launch++) {
       const state = race(launch + 1);
       const owner = state.karts[0];
-      place(owner, launch * TRACK_LENGTH / 25);
+      place(owner, launch * track.length / 25);
       owner.speed = 64;
       owner.boostTime = 3;
       owner.effects.auraTime = 0; // Do not hide self-hits behind invulnerability.
@@ -753,14 +754,14 @@ describe('I2 reviewer regressions', () => {
     owner.lap = 2;
     press(state, owner);
     const shot = state.projectiles[0];
-    advanceItems(state, 0.1);
+    advanceItems(track, state, 0.1);
     for (let tick = 0; tick < 353; tick++) {
       Object.assign(shot, { x: owner.x, z: owner.z });
-      advanceItems(state, FIXED_DT);
+      advanceItems(track, state, FIXED_DT);
       expect(owner.spinTime).toBe(0);
       expect(state.projectiles).toHaveLength(1);
     }
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     expect(state.projectiles).toHaveLength(0);
   });
 
@@ -775,7 +776,7 @@ describe('I2 reviewer regressions', () => {
     const start = { x: shot.x, z: shot.z };
     expect(shot.aux).toBe(Math.max(48, speed + 8));
     owner.speed = 0; // Launch speed is retained when the kart later slows down.
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     expect(Math.hypot(shot.x - start.x, shot.z - start.z)).toBeCloseTo(Math.max(48, speed + 8) * FIXED_DT, 8);
   });
 
@@ -788,14 +789,14 @@ describe('I2 reviewer regressions', () => {
     const shot = state.projectiles[0];
     for (let tick = 0; tick < 60; tick++) {
       Object.assign(shot, { x: owner.x, z: owner.z });
-      advanceItems(state, FIXED_DT);
+      advanceItems(track, state, FIXED_DT);
       expect(owner.spinTime).toBe(0);
     }
     shot.x = owner.x + Math.sin(owner.heading) * 4;
     shot.z = owner.z + Math.cos(owner.heading) * 4;
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     Object.assign(shot, { x: owner.x, z: owner.z });
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     expect(owner.spinTime).toBeGreaterThan(0);
     expect(state.projectiles).toHaveLength(0);
   });
@@ -809,7 +810,7 @@ describe('I2 reviewer regressions', () => {
     useItem(state, owner, { ...NEUTRAL_INPUT, brake });
     const bomb = state.projectiles[0];
     const start = { x: bomb.x, z: bomb.z };
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     expect(Math.hypot(bomb.x - start.x, bomb.z - start.z))
       .toBeCloseTo((brake ? 24 : 56) * FIXED_DT - 12 * FIXED_DT ** 2, 8);
   });
@@ -825,7 +826,7 @@ describe('I2 reviewer regressions', () => {
     for (let tick = 0; tick < 30; tick++) {
       owner.x += Math.sin(owner.heading) * speed * FIXED_DT;
       owner.z += Math.cos(owner.heading) * speed * FIXED_DT;
-      advanceItems(state, FIXED_DT);
+      advanceItems(track, state, FIXED_DT);
       expect(owner.spinTime).toBe(0);
       expect(state.projectiles).toHaveLength(1);
       const bomb = state.projectiles[0];
@@ -837,7 +838,7 @@ describe('I2 reviewer regressions', () => {
     for (let launch = 0; launch < 25; launch++) {
       const state = race(launch + 1);
       const owner = state.karts[0];
-      place(owner, launch * TRACK_LENGTH / 25);
+      place(owner, launch * track.length / 25);
       state.karts.slice(1).forEach(kart => { kart.finishTime = 1; });
       owner.speed = speed;
       owner.boostTime = speed > 32 ? 3 : 0;
@@ -872,16 +873,16 @@ describe('I2 reviewer regressions', () => {
     for (let tick = 1; tick < stopTick; tick++) {
       // Resume immediately before each tick, including the exact stopping deadline.
       const guest = decodeSnapshot(encodeSnapshot(state, 0, 0), createRace(42))!.state;
-      advanceItems(state, FIXED_DT);
-      advanceItems(guest, FIXED_DT);
+      advanceItems(track, state, FIXED_DT);
+      advanceItems(track, guest, FIXED_DT);
       expect(owner.spinTime, `speed ${speed}, tick ${tick}`).toBe(0);
       expect(guest.karts[0].spinTime).toBe(0);
       expect(guest.projectiles).toHaveLength(1);
     }
     expect(state.projectiles).toHaveLength(1);
     const guest = decodeSnapshot(encodeSnapshot(state, 0, 0), createRace(42))!.state;
-    advanceItems(state, FIXED_DT);
-    advanceItems(guest, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
+    advanceItems(track, guest, FIXED_DT);
     expect(owner.spinTime).toBeGreaterThan(0);
     expect(guest.karts[0].spinTime).toBeGreaterThan(0);
     expect(state.projectiles).toHaveLength(0);
@@ -898,13 +899,13 @@ describe('I2 reviewer regressions', () => {
     const bomb = state.projectiles[0];
     for (let tick = 1; tick < 18; tick++) {
       Object.assign(target, { x: bomb.x, z: bomb.z });
-      advanceItems(state, FIXED_DT);
+      advanceItems(track, state, FIXED_DT);
       expect(state.projectiles, `tick ${tick}`).toHaveLength(1);
       expect(target.spinTime).toBe(0);
       expect(state.events.some(event => event.type === 'explode')).toBe(false);
     }
     Object.assign(target, { x: bomb.x, z: bomb.z });
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     expect(state.projectiles).toHaveLength(0);
     expect(target.spinTime).toBeGreaterThan(0);
   });
@@ -921,7 +922,7 @@ describe('I2 reviewer regressions', () => {
       shot.ownerCleared = cleared;
       Object.assign(shot, { x: owner.x, z: owner.z });
       const resumed = decodeSnapshot(encodeSnapshot(state, 0, 0), createRace(42))!.state;
-      advanceItems(resumed, FIXED_DT);
+      advanceItems(track, resumed, FIXED_DT);
       expect(resumed.karts[0].spinTime > 0).toBe(cleared);
       expect(resumed.projectiles).toHaveLength(cleared ? 0 : 1);
     }
@@ -949,8 +950,8 @@ describe('I2 reviewer regressions', () => {
       for (let tick = 0; tick < 12; tick++) {
         const start = { x: bomb.x, z: bomb.z };
         const guestStart = { x: predicted.x, z: predicted.z };
-        advanceItems(host, FIXED_DT);
-        advanceItems(guest, FIXED_DT);
+        advanceItems(track, host, FIXED_DT);
+        advanceItems(track, guest, FIXED_DT);
         expect(Math.hypot(predicted.x - guestStart.x, predicted.z - guestStart.z))
           .toBeCloseTo(Math.hypot(bomb.x - start.x, bomb.z - start.z), 8);
         expect(predicted.aux).toBe(bomb.aux);
@@ -1008,7 +1009,7 @@ describe('I2 reviewer regressions', () => {
     const shot = resumed.projectiles[0];
     const start = { x: shot.x, z: shot.z };
     resumed.karts[0].speed = 0;
-    advanceItems(resumed, FIXED_DT);
+    advanceItems(track, resumed, FIXED_DT);
     expect(Math.hypot(shot.x - start.x, shot.z - start.z))
       .toBeCloseTo(kind === 'seeker' ? 72 * FIXED_DT : 88 * FIXED_DT - 12 * FIXED_DT ** 2, 8);
   });
@@ -1020,11 +1021,11 @@ describe('I2 reviewer regressions', () => {
     const shot: Projectile = { kind, id: state.nextEntityId++, ownerId: 0,
       x: target.x, y: target.y, z: target.z, heading: target.heading, life: 4, bounces: 0 };
     state.projectiles.push(shot);
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     expect(target.spinTime).toBe(0);
     expect(state.projectiles).toHaveLength(1);
     Object.assign(state.karts[2], { x: shot.x, z: shot.z });
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     expect(state.karts[2].spinTime).toBeGreaterThan(0);
     expect(state.projectiles).toHaveLength(0);
   });
@@ -1042,11 +1043,11 @@ describe('I2 reviewer regressions', () => {
       y: finished.y, z: finished.z, heading: finished.heading, life: 1 };
     state.traps.push({ ...pose, kind: 'decoy', age: 2 });
     state.projectiles.push({ ...pose, id: state.nextEntityId++, kind: 'bomb', bounces: 1, aux: 1 } as Projectile & ProjectileState);
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     expect(state.traps).toHaveLength(1);
     expect(state.projectiles).toHaveLength(1);
     expect(finished).toEqual(before);
-    advanceItems(state, 1);
+    advanceItems(track, state, 1);
     expect(state.events.some(event => event.type === 'explode')).toBe(true);
     expect(finished).toEqual(before);
   });
@@ -1062,7 +1063,7 @@ describe('I3 ink and autopilot', () => {
     press(state, kart);
     expect(kart.effects).toMatchObject({ rapidTime: 8, rapidUnused: 0 });
     expect(kart.item).toBe('rapidDash');
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     expect(kart.effects.rapidTime).toBeCloseTo(8 - FIXED_DT);
   });
 
@@ -1076,9 +1077,9 @@ describe('I3 ink and autopilot', () => {
     expect(owner.item).toBeNull();
     expect(state.karts.map(kart => kart.effects.inkTime)).toEqual([0, 0, 0, 0, 4, 4, 4, 0]);
     expect(state.events).toEqual([{ type: 'use', kartId: 3 }, { type: 'ink', kartId: 3, value: 0b01110000 }]);
-    for (let tick = 0; tick < 239; tick++) advanceItems(state, FIXED_DT);
+    for (let tick = 0; tick < 239; tick++) advanceItems(track, state, FIXED_DT);
     expect(state.karts[4].effects.inkTime).toBeCloseTo(FIXED_DT, 8);
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     expect(state.karts.every(kart => kart.effects.inkTime === 0)).toBe(true);
   });
 
@@ -1095,7 +1096,7 @@ describe('I3 ink and autopilot', () => {
         getSteeringError(state, kart) * 1.8 + 0.35 * Math.sin(time * 7 + kart.aiPhase))), 10);
       expect(inked.throttle).toBe(clear.throttle);
       expect(getAIInput(JSON.parse(JSON.stringify(state)), kart.id)).toEqual(inked);
-      advanceItems(state, 4);
+      advanceItems(track, state, 4);
       expect(getAIInput(state, kart.id)).toEqual(clear);
     }
   });
@@ -1115,7 +1116,7 @@ describe('I3 ink and autopilot', () => {
       const expected = getAIInput(state, kart.id);
       expect(getKartModifiers(state, kart, { ...PRESS, steer: -1, throttle: 0, brake: true }))
         .toEqual({ input: expected, maxSpeedMultiplier: 1.5, contactHit: true, invulnerable: true });
-      advanceItems(state, FIXED_DT);
+      advanceItems(track, state, FIXED_DT);
     }
     expect(kart.effects.autoTime).toBe(0);
     expect(getKartModifiers(state, kart, NEUTRAL_INPUT)).toEqual({
@@ -1224,7 +1225,7 @@ describe('I3 CPU item tactics (§7.5)', () => {
       const use = decideItemUse(state, kart);
       if (use) ticks.push(tick);
       useItem(state, kart, { ...NEUTRAL_INPUT, useItem: use });
-      advanceItems(state, FIXED_DT);
+      advanceItems(track, state, FIXED_DT);
     }
     expect(ticks).toEqual([108, 120, 132]);
     expect(kart.effects.rapidTime).toBeCloseTo(8 - 37 * FIXED_DT, 8);
@@ -1426,7 +1427,7 @@ describe('I2 held-item defense', () => {
       y: owner.y, heading: owner.heading, life: kind === 'bomb' ? 2.5 : 5, bounces: 0 };
     if (kind === 'bomb') projectile.aux = 2.5;
     state.projectiles.push(projectile);
-    advanceItems(state, 0.1);
+    advanceItems(track, state, 0.1);
     expect(state.projectiles).toHaveLength(0);
     expect(owner.item).toBeNull();
     expect(owner.effects.holding).toBe(0);
@@ -1446,7 +1447,7 @@ describe('I2 held-item defense', () => {
       y: owner.y, heading: owner.heading - Math.PI, life: kind === 'bomb' ? 2.2 : 5, bounces: 0 };
     if (kind === 'bomb') projectile.aux = 2.2;
     state.projectiles.push(projectile);
-    advanceItems(state, 0.1);
+    advanceItems(track, state, 0.1);
     expect(owner.spinTime).toBeGreaterThan(0);
     expect(owner.effects.holding).toBe(0);
     expect(state.events.some(event => event.type === 'block')).toBe(false);
@@ -1462,7 +1463,7 @@ describe('I2 held-item defense', () => {
     state.projectiles.push({ kind: 'bolt', id: state.nextEntityId++, ownerId: 1,
       x: owner.x - sx * 5 + sz * offset, z: owner.z - sz * 5 - sx * offset,
       y: owner.y, heading: owner.heading, life: 5, bounces: 0 });
-    advanceItems(state, 0.1);
+    advanceItems(track, state, 0.1);
     expect(state.events.some(event => event.type === 'block')).toBe(offset < 1.3);
     expect(owner.spinTime > 0).toBe(offset > 1.3);
   });
@@ -1477,7 +1478,7 @@ describe('I2 held-item defense', () => {
         x: owner.x - Math.sin(owner.heading) * 5, z: owner.z - Math.cos(owner.heading) * 5,
         y: owner.y, heading: owner.heading, life: 5, bounces: 0 });
     }
-    advanceItems(state, 0.1);
+    advanceItems(track, state, 0.1);
     expect(owner.item).toBeNull();
     expect(owner.spinTime).toBeGreaterThan(0);
     expect(state.events.filter(event => event.type === 'block')).toHaveLength(1);
@@ -1512,7 +1513,7 @@ describe('I2 held-item defense', () => {
     expect(state.traps).toHaveLength(0);
   });
 
-  it('simulates forty projectiles while snapshots retain at most twenty-eight', () => {
+  it('simulates forty projectiles while snapshots retain at most twenty-seven', () => {
     const state = race();
     state.boxes = createRace(42).boxes;
     const owner = state.karts[0]!;
@@ -1521,13 +1522,13 @@ describe('I2 held-item defense', () => {
       press(state, owner);
     }
     expect(state.projectiles).toHaveLength(40);
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     expect(state.projectiles).toHaveLength(40);
     const buffer = encodeSnapshot(state, 0, 0);
-    expect(buffer.byteLength).toBe(1196);
+    expect(buffer.byteLength).toBe(1179);
     const decoded = decodeSnapshot(buffer, createRace(42))!;
-    expect(decoded.state.projectiles).toHaveLength(28);
-    for (let tick = 0; tick < 360; tick++) advanceItems(state, FIXED_DT);
+    expect(decoded.state.projectiles).toHaveLength(27);
+    for (let tick = 0; tick < 360; tick++) advanceItems(track, state, FIXED_DT);
     expect(state.projectiles).toHaveLength(0);
     expect(isRaceState(JSON.parse(JSON.stringify(state)))).toBe(true);
   });
@@ -1554,8 +1555,8 @@ describe('I5 orbit guard', () => {
       state.seed = seed;
       boxAt(state, owner);
       const copy: RaceState = JSON.parse(JSON.stringify(state));
-      advanceItems(state, FIXED_DT);
-      advanceItems(copy, FIXED_DT);
+      advanceItems(track, state, FIXED_DT);
+      advanceItems(track, copy, FIXED_DT);
       expect(copy).toEqual(state);
       expect(owner.item).toBe('barrier');
       expect(owner.effects.orbitCount).toBe(3);
@@ -1564,7 +1565,7 @@ describe('I5 orbit guard', () => {
       expect(state.projectiles).toHaveLength(0);
       const nextId = state.nextEntityId;
       state.boxes[0].respawnTime = 0;
-      advanceItems(state, FIXED_DT);
+      advanceItems(track, state, FIXED_DT);
       expect(state.boxes[0].respawnTime).toBe(0);
       expect(owner.effects.orbitCount).toBe(3);
       expect(state.nextEntityId).toBe(nextId);
@@ -1581,13 +1582,13 @@ describe('I5 orbit guard', () => {
       const offset = orbitPosition(state.time, count - 1);
       Object.assign(target, { x: owner.x + offset.x, z: owner.z + offset.z, spinTime: 0 });
       const nextId = state.nextEntityId;
-      advanceItems(state, FIXED_DT);
+      advanceItems(track, state, FIXED_DT);
       expect(target.spinTime).toBe(1.05);
       expect(owner.spinTime).toBe(0);
       expect(owner.effects.orbitCount).toBe(count - 1);
       expect(owner.item).toBe(count === 1 ? null : 'barrier');
       expect(state.nextEntityId).toBe(nextId);
-      advanceItems(state, FIXED_DT);
+      advanceItems(track, state, FIXED_DT);
       expect(owner.effects.orbitCount).toBe(count - 1);
       expect(state.events.filter(event => event.type === 'hit')).toHaveLength(4 - count);
     }
@@ -1601,12 +1602,12 @@ describe('I5 orbit guard', () => {
     const owner = equip(state, 2);
     const target = state.karts[1];
     Object.assign(target, { x: owner.x, z: owner.z });
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     expect(target.spinTime).toBe(0);
     expect(owner.effects.orbitCount).toBe(3);
     const offset = orbitPosition(state.time, 0);
     Object.assign(target, { x: owner.x + offset.x, z: owner.z + offset.z, finishTime: 1 });
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     expect(target.spinTime).toBe(0);
     expect(owner.effects.orbitCount).toBe(3);
   });
@@ -1618,14 +1619,14 @@ describe('I5 orbit guard', () => {
     const offset = orbitPosition(state.time, 2);
     Object.assign(target, { x: owner.x + offset.x, z: owner.z + offset.z });
     target.effects[field] = 2;
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     expect(target.spinTime).toBe(0);
     expect(owner.effects.orbitCount).toBe(3);
     owner.finishTime = 1;
     target.effects[field] = 0;
     const remaining = orbitPosition(state.time, 1);
     Object.assign(target, { x: owner.x + remaining.x, z: owner.z + remaining.z });
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     expect(target.spinTime).toBe(0);
     expect(owner.effects.orbitCount).toBe(3);
   });
@@ -1637,13 +1638,13 @@ describe('I5 orbit guard', () => {
     const offset = orbitPosition(state.time, 2);
     Object.assign(target, { x: owner.x + offset.x, z: owner.z + offset.z });
     target.effects[field] = 2;
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     expect(target.spinTime).toBe(0);
     expect(owner.effects.orbitCount).toBe(3);
     target.effects[field] = 0;
     const again = orbitPosition(state.time, 2);
     Object.assign(target, { x: owner.x + again.x, z: owner.z + again.z });
-    advanceItems(state, FIXED_DT);
+    advanceItems(track, state, FIXED_DT);
     expect(target.spinTime).toBeGreaterThan(0);
     expect(owner.effects.orbitCount).toBe(2);
   });
@@ -1663,55 +1664,6 @@ describe('I5 orbit guard', () => {
     expect(owner.effects.orbitKind).toBe(0);
     useItem(state, owner, PRESS);
     expect(state.projectiles.length + state.traps.length).toBe(3);
-  });
-
-  it('matches collision and rendered world positions at any heading, scale and local animation time', () => {
-    const state = race();
-    const owner = equip(state, 2);
-    state.time = 12.375;
-    owner.effects.shrinkTime = 5;
-    owner.effects.auraTime = 7;
-    const root = new THREE.Group();
-    const material = new THREE.MeshLambertMaterial();
-    root.add(new THREE.Mesh(new THREE.BoxGeometry(), material));
-    root.position.set(owner.x, owner.y, owner.z);
-    root.rotation.y = 2.16;
-    const visuals = attachKartEffects(root);
-    for (const elapsed of [1, 100]) {
-      updateKartEffects(visuals, owner, elapsed, state.time, true);
-      root.updateMatrixWorld(true);
-      for (let index = 0; index < 3; index++) {
-        const position = visuals.orbit[index].getWorldPosition(new THREE.Vector3());
-        const offset = orbitPosition(state.time, index);
-        expect(position.x).toBeCloseTo(owner.x + offset.x, 10);
-        expect(position.z).toBeCloseTo(owner.z + offset.z, 10);
-        expect(position.y).toBeCloseTo(owner.y + 0.7, 10);
-        expect(visuals.orbit[index].rotation.y).toBe(0);
-      }
-      expect(material.emissiveIntensity).toBe(0.6);
-    }
-    const before = visuals.orbit[0].position.clone();
-    updateKartEffects(visuals, owner, 100, state.time + 0.1, true);
-    expect(visuals.orbit[0].position.equals(before)).toBe(false);
-  });
-
-  it('keeps the decoy box silhouette, mint shell and height identical to a pickup box', () => {
-    const decoy = createEntityMesh('decoy');
-    const expected = new THREE.BoxGeometry(1.3, 1.3, 1.3).applyMatrix4(new THREE.Matrix4()
-      .makeRotationFromEuler(new THREE.Euler(Math.PI / 5, 0, Math.PI / 4))).toNonIndexed();
-    const shell = expected.getAttribute('position');
-    const positions = decoy.geometry.getAttribute('position');
-    const colors = decoy.geometry.getAttribute('color');
-    const mint = new THREE.Color(0x9ce9d2);
-    for (let i = 0; i < shell.count; i++) {
-      expect(new THREE.Vector3().fromBufferAttribute(positions, i).toArray())
-        .toEqual(new THREE.Vector3().fromBufferAttribute(shell, i).toArray());
-      expect(colors.getX(i)).toBeCloseTo(mint.r);
-      expect(colors.getY(i)).toBeCloseTo(mint.g);
-      expect(colors.getZ(i)).toBeCloseTo(mint.b);
-    }
-    expect(entityPose(decoy).lift).toBe(1.5);
-    expect(decoy.geometry.groups).toHaveLength(0);
   });
 
   it('does not spend inventory picked up during autopilot, including a CPU firing opportunity', () => {

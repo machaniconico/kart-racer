@@ -4,8 +4,9 @@ import { hasOpponent } from './itemAi';
 import { chooseItem } from './itemTable';
 import { random } from './random';
 import type { ProjectileState } from './itemTypes';
-import { TRACK_LENGTH, WALL_HALF_WIDTH, projectToTrack, sampleTrack, wrapDistance } from './track';
-import type { InputFrame, ItemType, KartState, Projectile, RaceState } from './types';
+import { projectToTrack, sampleTrack, wrapDistance } from './track';
+import { getTrack } from './tracks';
+import type { InputFrame, ItemType, KartState, Projectile, RaceState, Track } from './types';
 
 export { chooseItem } from './itemTable';
 export const BOX_RESPAWN_TIME = 5;
@@ -29,15 +30,15 @@ function canHold(item: ItemType | null): boolean {
   return item === 'trap' || item === 'bolt' || item === 'decoy' || item === 'bomb';
 }
 
-function leadingOpponent(state: RaceState, ownerId: number): KartState | undefined {
+function leadingOpponent(track: Track, state: RaceState, ownerId: number): KartState | undefined {
   return state.karts.filter(kart => kart.id !== ownerId && kart.finishTime === null)
-    .sort((a, b) => raceProgress(b) - raceProgress(a) || a.id - b.id)[0];
+    .sort((a, b) => raceProgress(track, b) - raceProgress(track, a) || a.id - b.id)[0];
 }
 
-function seekerTarget(state: RaceState, owner: KartState): KartState | undefined {
-  const tangent = sampleTrack(owner.trackDistance);
+function seekerTarget(track: Track, state: RaceState, owner: KartState): KartState | undefined {
+  const tangent = sampleTrack(track, owner.trackDistance);
   return state.karts.filter(kart => kart.id !== owner.id && kart.finishTime === null &&
-    raceProgress(kart) > raceProgress(owner) &&
+    raceProgress(track, kart) > raceProgress(track, owner) &&
     (kart.x - owner.x) * tangent.tx + (kart.z - owner.z) * tangent.tz > 0 &&
     Math.hypot(kart.x - owner.x, kart.z - owner.z) <= 45)
     .sort((a, b) => Math.hypot(a.x - owner.x, a.z - owner.z) -
@@ -111,6 +112,7 @@ export function useItem(state: RaceState, kart: KartState, input: InputFrame): v
     kart.item = null;
     return;
   }
+  const track = getTrack(state.trackId);
   const backwards = input.brake && (item === 'bolt' || item === 'bomb');
   if (item === 'barrier') {
     // Also initialize a barrier assigned directly by a replay/debug fixture.
@@ -170,7 +172,7 @@ export function useItem(state: RaceState, kart: KartState, input: InputFrame): v
     const x = kart.x - Math.sin(kart.heading) * 2.6;
     const z = kart.z - Math.cos(kart.heading) * 2.6;
     state.traps.push({ kind: item, id: state.nextEntityId++, ownerId: kart.id, x, z,
-      y: projectToTrack(x, z).height, heading: kart.heading, life: 20, age: 0 });
+      y: projectToTrack(track, x, z).height, heading: kart.heading, life: 20, age: 0 });
   } else if (item === 'bolt' || item === 'seeker' || item === 'skycomet' || item === 'bomb') {
     const direction = kart.heading + (backwards ? Math.PI : 0);
     const heading = Math.atan2(Math.sin(direction), Math.cos(direction));
@@ -180,13 +182,13 @@ export function useItem(state: RaceState, kart: KartState, input: InputFrame): v
       z: kart.z + Math.cos(heading) * launchOffset, heading,
       life: PROJECTILE_LIFETIMES[item], bounces: 0 };
     if (item === 'seeker') {
-      projectile.target = seekerTarget(state, kart)?.id ?? null;
+      projectile.target = seekerTarget(track, state, kart)?.id ?? null;
       projectile.aux = Math.max(48, kart.speed + 8);
     }
     if (item === 'skycomet') {
-      projectile.target = leadingOpponent(state, kart.id)?.id ?? null;
+      projectile.target = leadingOpponent(track, state, kart.id)?.id ?? null;
       projectile.aux = kart.trackDistance;
-      const sample = sampleTrack(kart.trackDistance);
+      const sample = sampleTrack(track, kart.trackDistance);
       projectile.x = sample.x;
       projectile.z = sample.z;
     }
@@ -256,18 +258,18 @@ function explode(state: RaceState, projectile: ItemProjectile): void {
   }
 }
 
-function advanceSkycomet(state: RaceState, projectile: ItemProjectile, dt: number): void {
-  const target = leadingOpponent(state, projectile.ownerId);
+function advanceSkycomet(track: Track, state: RaceState, projectile: ItemProjectile, dt: number): void {
+  const target = leadingOpponent(track, state, projectile.ownerId);
   projectile.target = target?.id ?? null;
-  const distance = projectile.aux ?? projectToTrack(projectile.x, projectile.z).distance;
+  const distance = projectile.aux ?? projectToTrack(track, projectile.x, projectile.z).distance;
   // Follow the shorter arc, including backwards to second place when the owner leads.
   // Re-evaluate after retargeting and across the start seam to avoid a whole-lap chase.
-  const delta = target ? wrapDistance(target.trackDistance - distance + TRACK_LENGTH / 2) - TRACK_LENGTH / 2 : Infinity;
+  const delta = target ? wrapDistance(track, target.trackDistance - distance + track.length / 2) - track.length / 2 : Infinity;
   const direction = delta < 0 ? -1 : 1;
   const ahead = Math.abs(delta);
   const arrived = !!target && ahead <= 70 * dt;
-  projectile.aux = wrapDistance(distance + (arrived ? delta : direction * 70 * dt));
-  const sample = sampleTrack(projectile.aux);
+  projectile.aux = wrapDistance(track, distance + (arrived ? delta : direction * 70 * dt));
+  const sample = sampleTrack(track, projectile.aux);
   const offset = target ? target.lateralOffset * Math.max(0, 1 - Math.max(0, ahead - 70 * dt) / 12) : 0;
   projectile.x = sample.x + sample.nx * offset;
   projectile.z = sample.z + sample.nz * offset;
@@ -280,7 +282,7 @@ function advanceSkycomet(state: RaceState, projectile: ItemProjectile, dt: numbe
   }
 }
 
-export function advanceItems(state: RaceState, dt: number): void {
+export function advanceItems(track: Track, state: RaceState, dt: number): void {
   for (const kart of state.karts) {
     for (const field of ['rapidTime', 'auraTime', 'shrinkTime', 'inkTime', 'autoTime'] as const) {
       const remaining = kart.effects[field] - dt;
@@ -344,7 +346,7 @@ export function advanceItems(state: RaceState, dt: number): void {
     projectile.life = Math.max(0, projectile.life - dt);
     if (projectile.kind !== 'bomb' && projectile.life <= 1e-9) continue;
     if (projectile.kind === 'skycomet') {
-      advanceSkycomet(state, projectile, dt);
+      advanceSkycomet(track, state, projectile, dt);
       continue;
     }
     const previousX = projectile.x;
@@ -376,14 +378,14 @@ export function advanceItems(state: RaceState, dt: number): void {
     }
     projectile.x += Math.sin(projectile.heading) * travel;
     projectile.z += Math.cos(projectile.heading) * travel;
-    const projection = projectToTrack(projectile.x, projectile.z);
+    const projection = projectToTrack(track, projectile.x, projectile.z);
     projectile.y = projection.height;
     // Seeker hits are resolved before wall expiry below.
-    if (projectile.kind !== 'seeker' && Math.abs(projection.offset) > WALL_HALF_WIDTH - 0.4) {
-      const sample = sampleTrack(projection.distance);
+    if (projectile.kind !== 'seeker' && Math.abs(projection.offset) > track.def.wallHalfWidth - 0.4) {
+      const sample = sampleTrack(track, projection.distance);
       const side = Math.sign(projection.offset);
-      projectile.x = sample.x + sample.nx * side * (WALL_HALF_WIDTH - 0.45);
-      projectile.z = sample.z + sample.nz * side * (WALL_HALF_WIDTH - 0.45);
+      projectile.x = sample.x + sample.nx * side * (track.def.wallHalfWidth - 0.45);
+      projectile.z = sample.z + sample.nz * side * (track.def.wallHalfWidth - 0.45);
       projectile.bounces++;
       if (projectile.kind === 'bolt') {
         const vx = Math.sin(projectile.heading);
@@ -423,7 +425,7 @@ export function advanceItems(state: RaceState, dt: number): void {
         break;
       }
     }
-    if (projectile.kind === 'seeker' && Math.abs(projection.offset) > WALL_HALF_WIDTH - 0.4) projectile.life = 0;
+    if (projectile.kind === 'seeker' && Math.abs(projection.offset) > track.def.wallHalfWidth - 0.4) projectile.life = 0;
   }
   state.projectiles = state.projectiles.filter((projectile) => projectile.life > 1e-9);
 }

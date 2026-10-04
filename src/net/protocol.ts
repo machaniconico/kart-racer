@@ -1,36 +1,37 @@
-import type { RaceEvent, RaceState } from '../sim/types';
+import type { RaceEvent, RaceState, TrackId } from '../sim/types';
 import type { RosterPlayer } from './session';
 
 export type { InputFrame, RaceEvent, RaceState } from '../sim/types';
 export type { RosterPlayer } from './session';
 
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 export const ROOM_PREFIX = `pcircuit-v${PROTOCOL_VERSION}-`;
 /** FNV-1a32 of JSON.stringify(SNAPSHOT_LAYOUT), including enum order and flight fields.
- * Pinned to protocol v5; snapshot codec tests compare the actual wire descriptors.
+ * Pinned to protocol v6; snapshot codec tests compare the actual wire descriptors.
  */
-export const LAYOUT_FINGERPRINT = 'bc5d9d9d';
+export const LAYOUT_FINGERPRINT = '53ab24b2';
 export const MAX_PLAYERS = 8;
 export const MAX_NAME_LENGTH = 10;
 export const MAX_CONTROL_LENGTH = 65_536;
 export const MAX_EVENTS = 256;
 export const PacketKind = { INPUT: 0x01, SNAPSHOT: 0x02, PING: 0x03, PONG: 0x04 } as const;
 
-export interface Hello { type: 'hello'; protocol: number; name: string; color: number }
-export interface Welcome { type: 'welcome'; slot: number; roster: RosterPlayer[]; hostTime: number }
+export interface Hello { type: 'hello'; protocol: number; course: number; name: string; color: number }
+export interface Welcome { type: 'welcome'; slot: number; roster: RosterPlayer[]; hostTime: number; trackId: TrackId }
 export type RejectReason = 'version' | 'full' | 'in_race' | 'bad_name';
 export interface Reject { type: 'reject'; reason: RejectReason }
 export interface Roster { type: 'roster'; players: RosterPlayer[] }
 export interface Profile { type: 'profile'; name: string; color: number }
+export interface Course { type: 'course'; trackId: TrackId }
 export interface RaceStart {
-  type: 'race_start'; raceId: number; seed: number; roster: RosterPlayer[]; startAtHostTime: number;
+  type: 'race_start'; raceId: number; seed: number; roster: RosterPlayer[]; startAtHostTime: number; trackId: TrackId;
 }
 export interface Events { type: 'events'; raceId: number; tick: number; events: RaceEvent[] }
 export interface RaceEnd { type: 'race_end'; raceId: number; finalState: RaceState }
 export interface ReturnLobby { type: 'return_lobby' }
 export interface Leave { type: 'leave' }
 export interface HostClosed { type: 'host_closed' }
-export type ControlMessage = Hello | Welcome | Reject | Roster | Profile | RaceStart | Events |
+export type ControlMessage = Hello | Welcome | Reject | Roster | Profile | Course | RaceStart | Events |
   RaceEnd | ReturnLobby | Leave | HostClosed;
 
 type RecordValue = Record<string, unknown>;
@@ -82,10 +83,12 @@ export function isRaceEvent(value: unknown): value is RaceEvent {
 
 const itemTypes = ['dash', 'trap', 'bolt', 'seeker', 'skycomet', 'tripleDash', 'rapidDash',
   'aura', 'storm', 'ink', 'decoy', 'bomb', 'autopilot', 'barrier'];
+// Must equal sim TRACK_IDS (net-core.test.ts checks); the net core may only import sim types.
+export const PROTOCOL_TRACK_IDS: readonly TrackId[] = ['meadow', 'canyon', 'snowpeak', 'neon'];
 const poseFields = ['x', 'y', 'z', 'heading'];
 const kartNumbers = [...poseFields, 'speed', 'steer', 'trackDistance', 'lateralOffset',
   'lapStartTime', 'driftTime', 'driftDirection', 'boostTime', 'spinTime', 'hopTime',
-  'lapProgress', 'aiPhase', 'hitCooldown'];
+  'lapProgress', 'aiPhase', 'hitCooldown', 'airTime'];
 const kartBooleans = ['wrongWay', 'startedLap', 'lapValid', 'previousDrift', 'previousItem'];
 const effectTimers = ['rapidTime', 'auraTime', 'shrinkTime', 'inkTime', 'autoTime'];
 function effects(value: unknown): boolean {
@@ -123,9 +126,9 @@ function entity(value: unknown, trap: boolean): boolean {
       (value.kind === 'bolt' && typeof value.ownerCleared === 'boolean'));
 }
 export function isRaceState(value: unknown): value is RaceState {
-  if (!record(value) || !keys(value, ['tick', 'seed', 'phase', 'countdown', 'racingTicks', 'time',
+  if (!record(value) || !keys(value, ['tick', 'seed', 'trackId', 'phase', 'countdown', 'racingTicks', 'time',
     'karts', 'boxes', 'projectiles', 'traps', 'events', 'nextEntityId'])) return false;
-  return integer(value.tick) && integer(value.seed) && integer(value.racingTicks) &&
+  return integer(value.tick) && integer(value.seed) && oneOf(value.trackId, PROTOCOL_TRACK_IDS) && integer(value.racingTicks) &&
     oneOf(value.phase, ['countdown', 'racing', 'finished']) && finite(value.countdown) && positiveTime(value.time) &&
     arrayOf(value.karts, kart, MAX_PLAYERS, 1) &&
     new Set((value.karts as RecordValue[]).map(entry => entry.id)).size === (value.karts as unknown[]).length &&
@@ -135,13 +138,13 @@ export function isRaceState(value: unknown): value is RaceState {
 }
 
 export function isHello(value: unknown): value is Hello {
-  // Other versions are structurally valid so the host can send reject:version.
-  return record(value) && keys(value, ['type', 'protocol', 'name', 'color']) && value.type === 'hello' &&
-    integer(value.protocol, 1, 0xffff) && isPlayerName(value.name) && color(value.color);
+  // Other versions/fingerprints are structurally valid so the host can send reject:version.
+  return record(value) && keys(value, ['type', 'protocol', 'course', 'name', 'color']) && value.type === 'hello' &&
+    integer(value.protocol, 1, 0xffff) && integer(value.course) && isPlayerName(value.name) && color(value.color);
 }
 export function isWelcome(value: unknown): value is Welcome {
-  return record(value) && keys(value, ['type', 'slot', 'roster', 'hostTime']) && value.type === 'welcome' &&
-    slot(value.slot) && isRosterPlayers(value.roster) &&
+  return record(value) && keys(value, ['type', 'slot', 'roster', 'hostTime', 'trackId']) && value.type === 'welcome' &&
+    slot(value.slot) && oneOf(value.trackId, PROTOCOL_TRACK_IDS) && isRosterPlayers(value.roster) &&
     value.roster.some(player => player.slot === value.slot) && positiveTime(value.hostTime);
 }
 export function isReject(value: unknown): value is Reject {
@@ -156,9 +159,13 @@ export function isProfile(value: unknown): value is Profile {
     isPlayerName(value.name) && color(value.color);
 }
 export function isRaceStart(value: unknown): value is RaceStart {
-  return record(value) && keys(value, ['type', 'raceId', 'seed', 'roster', 'startAtHostTime']) &&
-    value.type === 'race_start' && integer(value.raceId, 0, 255) && integer(value.seed) &&
+  return record(value) && keys(value, ['type', 'raceId', 'seed', 'roster', 'startAtHostTime', 'trackId']) &&
+    value.type === 'race_start' && integer(value.raceId, 0, 255) && integer(value.seed) && oneOf(value.trackId, PROTOCOL_TRACK_IDS) &&
     isRosterPlayers(value.roster) && positiveTime(value.startAtHostTime);
+}
+export function isCourse(value: unknown): value is Course {
+  return record(value) && keys(value, ['type', 'trackId']) && value.type === 'course' &&
+    oneOf(value.trackId, PROTOCOL_TRACK_IDS);
 }
 export function isEvents(value: unknown): value is Events {
   return record(value) && keys(value, ['type', 'raceId', 'tick', 'events']) && value.type === 'events' &&
@@ -179,7 +186,7 @@ export function isHostClosed(value: unknown): value is HostClosed {
 }
 
 export const controlGuards = {
-  hello: isHello, welcome: isWelcome, reject: isReject, roster: isRoster, profile: isProfile,
+  hello: isHello, welcome: isWelcome, reject: isReject, roster: isRoster, profile: isProfile, course: isCourse,
   race_start: isRaceStart, events: isEvents, race_end: isRaceEnd, return_lobby: isReturnLobby,
   leave: isLeave, host_closed: isHostClosed,
 } satisfies { [Type in ControlMessage['type']]: (value: unknown) => boolean };

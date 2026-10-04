@@ -7,8 +7,8 @@ import { generateRoomCode } from './net/roomCode';
 import type { Transport } from './net/transport';
 import { GameRenderer } from './render/GameRenderer';
 import { captureRenderSnapshot } from './render/snapshot';
-import { createRace, FIXED_DT, getAIInput, stepRace } from './sim';
-import type { InputFrame, InputSource, RaceState } from './sim';
+import { createRace, FIXED_DT, getAIInput, getTrack, stepRace, TRACK_IDS } from './sim';
+import type { InputFrame, InputSource, RaceState, TrackId } from './sim';
 import { GameUI } from './ui/GameUI';
 import { LobbyUI } from './ui/LobbyUI';
 import { loadBest, loadMuted, saveBest, saveMuted } from './storage';
@@ -18,11 +18,12 @@ const ui = new GameUI(root, 0);
 const controls = new Controls(root);
 root.classList.toggle('touch-device', controls.isTouch);
 let audio = new AudioEngine(0);
-let best = loadBest();
+/** Title selection; solo races and new rooms start on this course. */
+let course: TrackId = 'meadow';
 let muted = loadMuted();
 audio.setMuted(muted);
 ui.setMuted(muted);
-ui.setBest(best);
+ui.setCourse(course, loadBest(course));
 
 function seed(): number {
   try { return crypto.getRandomValues(new Uint32Array(1))[0]; }
@@ -73,11 +74,17 @@ try {
 function start(): void {
   if (fatal) return;
   cancelOnline(); // A room being created or joined must not take over the solo race.
-  launch(createRace(seed()));
+  launch(createRace(seed(), { trackId: course }));
 }
 
 function launch(next: RaceState): void {
   state = next;
+  // GameRenderer is bound to one course; a different course needs a new renderer first.
+  if (renderer && !fatal && renderer.getTrackId() !== state.trackId) {
+    // Online, prepareCourse() builds it in the lobby; a rebuild here stalls the countdown.
+    if (mode !== 'solo') console.warn(`Renderer rebuilt at race start (${renderer.getTrackId()} -> ${state.trackId}); the lobby did not prepare it.`);
+    recreateRenderer(localId);
+  }
   if (mode !== 'solo') renderer?.setRoster(next.karts);
   leaving = false;
   previous = captureRenderSnapshot(state);
@@ -136,14 +143,25 @@ function title(): void {
   screen = 'title';
   paused = false;
   accumulator = 0;
-  state = createRace(seed());
+  state = createRace(seed(), { trackId: course });
   previous = captureRenderSnapshot(state);
-  if (wasOnline) renderer?.setRoster(state.karts);
+  if (renderer && !fatal && renderer.getTrackId() !== state.trackId) recreateRenderer(localId);
+  else if (wasOnline) renderer?.setRoster(state.karts);
   controls.setEnabled(false);
   audio.suspend();
   ui.setPaused(false);
-  ui.setBest(best);
+  ui.setCourse(course, loadBest(course));
   ui.show('title');
+}
+
+function selectCourse(id: TrackId): void {
+  if (screen !== 'title' || fatal || id === course || !TRACK_IDS.includes(id)) return;
+  course = id;
+  // The title background shows the selected course.
+  state = createRace(seed(), { trackId: course });
+  previous = captureRenderSnapshot(state);
+  if (renderer && renderer.getTrackId() !== state.trackId) recreateRenderer(localId);
+  ui.setCourse(course, loadBest(course));
 }
 
 function finish(): void {
@@ -151,11 +169,12 @@ function finish(): void {
   controls.setEnabled(false);
   audio.finishRace();
   const time = state.karts.find((kart) => kart.id === localId)?.finishTime ?? null;
+  const previousBest = loadBest(state.trackId);
   // Online races never update the personal best.
-  const isRecord = mode === 'solo' && time !== null && (best === null || time < best);
-  if (isRecord && time !== null) { best = time; saveBest(time); }
+  const isRecord = mode === 'solo' && time !== null && (previousBest === null || time < previousBest);
+  if (isRecord) saveBest(state.trackId, time);
   if (mode !== 'solo') lobby.render((host ?? guest)?.roster ?? null, 'results');
-  ui.showResults(state, best, isRecord);
+  ui.showResults(state, isRecord ? time : previousBest, isRecord);
   ui.show('results');
 }
 
@@ -170,18 +189,28 @@ function setLocal(next: typeof mode, id: number): void {
   audio = new AudioEngine(id);
   audio.setMuted(muted);
   if (next === 'guest') void audio.unlock();
+  recreateRenderer(id);
+}
+
+/** Disposes and rebuilds the renderer for the current state's course and the given local kart. */
+function recreateRenderer(id: number): void {
   if (!renderer || fatal) return;
   // The new renderer shares the canvas context and assumes default unpack state.
   const gl = renderer.renderer.getContext();
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
   gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
   renderer.dispose();
-  try { renderer = new GameRenderer(ui.canvas, state, id); }
-  catch (error) {
+  try {
+    renderer = new GameRenderer(ui.canvas, state, id);
+    // Draw once now so shader compilation happens inside this one main-thread stall.
+    renderer.update(state, captureRenderSnapshot(state), 1, 0, screen);
+  } catch (error) {
     renderer = undefined;
     console.error('The 3D renderer could not restart.', error);
     fail('3D 表示を開始できませんでした。ページを再読み込みしてください。');
   }
+  // The rebuild blocked PONG/snapshot handling; it must not read as host silence.
+  guest?.excuseStall();
 }
 
 async function loadTransport(): Promise<Transport> {
@@ -206,6 +235,7 @@ async function createRoom(): Promise<void> {
   if (generation !== netGeneration) { session.close(); return; }
   pendingNet = false;
   host = session;
+  session.setCourse(course);
   setLocal('host', 0);
   session.onChange(() => { if (host === session && screen === 'lobby') renderLobby(); });
   // Guests already connected keep playing; only new joins are impossible.
@@ -236,6 +266,8 @@ function guestChanged(session: GuestSession): void {
     case 'lobby':
       if (screen === 'lobby') renderLobby();
       else {
+        // Set the course first so the slot change below builds the right renderer once.
+        prepareCourse(session.course, false);
         setLocal('guest', session.localSlot);
         enterLobby();
       }
@@ -282,9 +314,22 @@ function enterLobby(): void {
   renderLobby();
 }
 
+/** Lobby: builds the room's course as soon as it is known, so race_start never rebuilds the renderer.
+ * Rebuilding blocks the main thread (rAF and net polling) for a moment; the lobby tolerates that. */
+function prepareCourse(id: TrackId, rebuild = true): void {
+  if (state.trackId !== id) {
+    state = createRace(seed(), { trackId: id });
+    previous = captureRenderSnapshot(state);
+  }
+  if (rebuild && renderer && !fatal && renderer.getTrackId() !== id) recreateRenderer(localId);
+}
+
 function renderLobby(): void {
   const session = host ?? guest;
-  if (session) lobby.render(session.roster, 'lobby');
+  if (!session) return;
+  if (screen === 'lobby') prepareCourse(session.course);
+  lobby.render(session.roster, 'lobby');
+  lobby.setCourse(session.course, host ? 'host' : 'guest');
 }
 
 function startOnline(): void {
@@ -330,6 +375,14 @@ const lobby = new LobbyUI(root, {
       renderLobby(); // A refused color produces no roster broadcast.
     } else guest?.updateProfile(name, color);
   },
+  onCourse: (id) => {
+    if (host && TRACK_IDS.includes(id as TrackId)) host.setCourse(id as TrackId);
+    renderLobby(); // A refused change restores the host's actual course.
+  },
+}, TRACK_IDS.map((id) => ({ id, name: getTrack(id).def.name })));
+
+root.querySelector('#course-select')?.addEventListener('change', (event) => {
+  if (event.target instanceof HTMLInputElement) selectCourse(event.target.value as TrackId);
 });
 
 bind('start-race', start);
@@ -428,6 +481,13 @@ if (import.meta.env.DEV) {
     get rendererInfo() { return renderer?.renderer.info; },
     get renderer() { return renderer; },
     get mode() { return mode; },
+    /** Selected course: the room's course online, otherwise the title selection. */
+    get course(): TrackId { return (host ?? guest)?.course ?? course; },
+    render: {
+      get drawCalls() { return renderer?.getDrawCalls() ?? 0; },
+      get trackId() { return renderer?.getTrackId() ?? null; },
+    },
+    selectCourse,
     // PeerJsTransport appends its channels here (DEV only).
     net: {
       channels: [] as unknown[],

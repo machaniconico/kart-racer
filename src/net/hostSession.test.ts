@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { COURSE_FINGERPRINT, TRACK_IDS } from '../sim/tracks';
 import { getAIInput } from '../sim/ai';
 import { stepRace } from '../sim/race';
 import type { InputFrame, InputSource, RaceEvent, RaceState } from '../sim/types';
@@ -49,7 +50,7 @@ async function setup(options: MockTransportOptions = {}) {
       }
     });
     const control = (message: ControlMessage) => link.send('reliable', encodeControlMessage(message));
-    if (sayHello) control({ type: 'hello', protocol: PROTOCOL_VERSION, name: 'GUEST', color: 0xff5f80, ...profile });
+    if (sayHello) control({ type: 'hello', protocol: PROTOCOL_VERSION, course: COURSE_FINGERPRINT, name: 'GUEST', color: 0xff5f80, ...profile });
     network.flush();
     return { link, messages, packets, raw, control };
   };
@@ -71,6 +72,79 @@ function tick(host: HostSession, state: RaceState): InputFrame[] {
 }
 
 describe('HostSession lobby', () => {
+  it.each(TRACK_IDS)('broadcasts %s to every guest and retains it for late joins and rematches', async trackId => {
+    const { host, guest, network } = await setup();
+    try {
+      expect(host.course).toBe('meadow');
+      const one = await guest();
+      const two = await guest({ name: 'TWO' });
+      const changed = vi.fn();
+      host.onChange(changed);
+      expect(host.setCourse(trackId)).toBe(true);
+      network.flush();
+      expect(host.course).toBe(trackId);
+      expect(changed).toHaveBeenCalledOnce();
+      for (const peer of [one, two]) expect(peer.messages.at(-1)).toEqual({ type: 'course', trackId });
+      const late = await guest({ name: 'LATE' });
+      expect(late.messages[0]).toMatchObject({ type: 'welcome', trackId });
+      const state = host.startRace(42);
+      network.flush();
+      expect(state.trackId).toBe(trackId);
+      for (const peer of [one, two, late]) expect(peer.messages.at(-1)).toMatchObject({
+        type: 'race_start', trackId, seed: 42, raceId: 1,
+      });
+      host.returnToLobby();
+      network.flush();
+      expect(host.course).toBe(trackId);
+      expect(one.messages.at(-1)).toEqual({ type: 'return_lobby' });
+      expect(host.startRace(43).trackId).toBe(trackId);
+      network.flush();
+      expect(one.messages.at(-1)).toMatchObject({ type: 'race_start', trackId, raceId: 2 });
+    } finally { host.close(); }
+  });
+
+  it('rejects invalid or guest-originated course changes and locks selection outside the lobby', async () => {
+    const { host, guest, network } = await setup();
+    try {
+      const one = await guest();
+      const changed = vi.fn();
+      host.onChange(changed);
+      const count = one.messages.length;
+      expect(host.setCourse('unknown' as typeof host.course)).toBe(false);
+      one.control({ type: 'course', trackId: 'neon' });
+      network.flush();
+      expect(host.course).toBe('meadow');
+      expect(changed).not.toHaveBeenCalled();
+      expect(one.messages).toHaveLength(count);
+      host.setCourse('canyon');
+      const state = host.startRace(42);
+      expect(host.setCourse('neon')).toBe(false);
+      state.phase = 'racing';
+      tick(host, state);
+      expect(host.setCourse('neon')).toBe(false);
+      state.phase = 'finished';
+      state.tick++;
+      host.afterTick(state);
+      expect(host.setCourse('neon')).toBe(false);
+      expect(host.course).toBe('canyon');
+      expect(state.trackId).toBe('canyon');
+      host.returnToLobby();
+      expect(host.setCourse('snowpeak')).toBe(true);
+      host.close();
+      expect(host.setCourse('neon')).toBe(false);
+    } finally { host.close(); }
+  });
+
+  it('rejects a same-version build with a different course fingerprint before allocating a slot', async () => {
+    const { host, guest } = await setup();
+    try {
+      expect((await guest({ course: (COURSE_FINGERPRINT ^ 1) >>> 0 })).messages)
+        .toEqual([{ type: 'reject', reason: 'version' }]);
+      expect(host.roster.players.filter(player => player.kind === 'guest')).toHaveLength(0);
+      expect((await guest()).messages[0]).toMatchObject({ type: 'welcome', slot: 1 });
+    } finally { host.close(); }
+  });
+
   it('advertises the room code actually assigned by the transport after a collision', async () => {
     const network = new MockTransport({ latencyMs: 0 });
     const transport = {
@@ -82,7 +156,7 @@ describe('HostSession lobby', () => {
     const link = await network.join(host.roster.roomCode);
     const messages: WireData[] = [];
     link.onMessage((_, data) => messages.push(data));
-    link.send('reliable', encodeControlMessage({ type: 'hello', protocol: PROTOCOL_VERSION, name: 'ONE', color: 0xff5f80 }));
+    link.send('reliable', encodeControlMessage({ type: 'hello', protocol: PROTOCOL_VERSION, course: COURSE_FINGERPRINT, name: 'ONE', color: 0xff5f80 }));
     network.flush();
     expect(parseControlMessage(messages[0])).toMatchObject({ type: 'welcome', slot: 1 });
     host.close();
@@ -148,14 +222,14 @@ describe('HostSession lobby', () => {
     const { host, guest, network } = await setup();
     const one = await guest({}, false);
     for (const data of ['{', '{}', '{"type":"hello"}', 'x'.repeat(65_537)]) one.link.send('reliable', data);
-    one.link.send('unreliable', encodeControlMessage({ type: 'hello', protocol: PROTOCOL_VERSION, name: 'X', color: 0xff5f80 }));
+    one.link.send('unreliable', encodeControlMessage({ type: 'hello', protocol: PROTOCOL_VERSION, course: COURSE_FINGERPRINT, name: 'X', color: 0xff5f80 }));
     sendInput(one, host, 1);
     network.flush();
     expect(one.messages).toEqual([]);
     expect(host.roster.players.filter(player => player.kind === 'guest')).toHaveLength(0);
-    one.control({ type: 'hello', protocol: PROTOCOL_VERSION, name: 'ONE', color: 0xff5f80 });
+    one.control({ type: 'hello', protocol: PROTOCOL_VERSION, course: COURSE_FINGERPRINT, name: 'ONE', color: 0xff5f80 });
     network.flush();
-    one.control({ type: 'hello', protocol: PROTOCOL_VERSION, name: 'AGAIN', color: 0xff5f80 });
+    one.control({ type: 'hello', protocol: PROTOCOL_VERSION, course: COURSE_FINGERPRINT, name: 'AGAIN', color: 0xff5f80 });
     network.flush();
     expect(one.messages.filter(message => message.type === 'welcome')).toHaveLength(1);
     expect(host.roster.players.filter(player => player.kind === 'guest')).toHaveLength(1);
@@ -169,7 +243,7 @@ describe('HostSession lobby', () => {
       const one = await guest({}, false);
       const closed = vi.fn();
       one.link.onClose(closed);
-      one.link.send('reliable', JSON.stringify({ type: 'hello', protocol: PROTOCOL_VERSION, name: ' ', color: 0xff5f80 }));
+      one.link.send('reliable', JSON.stringify({ type: 'hello', protocol: PROTOCOL_VERSION, course: COURSE_FINGERPRINT, name: ' ', color: 0xff5f80 }));
       network.flush();
       expect(one.messages).toEqual([{ type: 'reject', reason: 'bad_name' }]);
       expect(host.roster.players.filter(player => player.kind === 'guest')).toHaveLength(0);
@@ -422,7 +496,7 @@ describe('HostSession timing and broadcasts', () => {
     for (let index = 0; index < 2; index++) {
       const link = await network.join('AB2X');
       link.onMessage((_, data) => received[index].push(data));
-      link.send('reliable', encodeControlMessage({ type: 'hello', protocol: PROTOCOL_VERSION, name: 'ONE', color: 0xff5f80 }));
+      link.send('reliable', encodeControlMessage({ type: 'hello', protocol: PROTOCOL_VERSION, course: COURSE_FINGERPRINT, name: 'ONE', color: 0xff5f80 }));
     }
     network.flush();
     const state = host.startRace(1);
@@ -506,7 +580,7 @@ describe('HostSession integration', () => {
     const { host, guest, network } = await setup();
     const observer = await guest({}, false);
     // The dummy guest sends real AI decisions through the same wire input path.
-    observer.control({ type: 'hello', protocol: PROTOCOL_VERSION, name: 'AI GUEST', color: 0xff5f80 });
+    observer.control({ type: 'hello', protocol: PROTOCOL_VERSION, course: COURSE_FINGERPRINT, name: 'AI GUEST', color: 0xff5f80 });
     network.flush();
     const state = host.startRace(42);
     for (let n = 0; n < 20_000 && host.phase !== 'results'; n++) {

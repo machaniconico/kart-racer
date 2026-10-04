@@ -3,10 +3,12 @@ import ts from 'typescript';
 import { getAIInput } from '../sim/ai';
 import { useItem } from '../sim/items';
 import { createRace, stepRace } from '../sim/race';
+import { COURSE_FINGERPRINT, TRACK_IDS } from '../sim/tracks';
 import { CLOCK_WINDOW_MS, ClockSync, packPing, packPong, TickMap, TICK_MS, unpackClock } from './clock';
 import { INPUT_HOLD_TICKS, InputBuffer, NEUTRAL_INPUT, pack, quantizeInput, unpack } from './inputBuffer';
 import { MockTransport } from './mockTransport';
 import {
+  PROTOCOL_TRACK_IDS,
   controlGuards, encodeControlMessage, isControlMessage, isPlayerName, isRaceEvent, isRaceState,
   isRosterPlayers, MAX_CONTROL_LENGTH, PacketKind, parseControlMessage, PROTOCOL_VERSION, ROOM_PREFIX,
 } from './protocol';
@@ -23,13 +25,13 @@ const players: RosterPlayer[] = Array.from({ length: 8 }, (_, slot) => ({
 
 function finalState() {
   return {
-    tick: 600, seed: 42, phase: 'finished' as const, countdown: 0, racingTicks: 420, time: 7,
+    tick: 600, seed: 42, trackId: 'meadow' as const, phase: 'finished' as const, countdown: 0, racingTicks: 420, time: 7,
     karts: players.map(player => ({
       id: player.slot, name: player.name, color: player.color, x: 0, y: 0, z: 0, heading: 0,
       speed: 0, steer: 0, trackDistance: 0, lateralOffset: 0, lap: 3, nextCheckpoint: 0,
       lapStartTime: 0, lapTimes: [2, 2, 3], finishTime: 7, driftTime: 0, driftDirection: 0,
       boostTime: 0, spinTime: 0, hopTime: 0, item: null, wrongWay: false, startedLap: true,
-      lapProgress: 0, lapValid: true, previousDrift: false, previousItem: false, aiPhase: 0, hitCooldown: 0,
+      lapProgress: 0, lapValid: true, previousDrift: false, previousItem: false, aiPhase: 0, hitCooldown: 0, airTime: 0,
       human: player.kind !== 'cpu', effects: { rapidTime: 0, rapidUnused: 1, auraTime: 0, shrinkTime: 0, inkTime: 0,
         autoTime: 0, charges: 0, holding: 0, aiHoldTicks: 0, orbitKind: 0, orbitCount: 0 },
     })),
@@ -41,15 +43,16 @@ function finalState() {
 }
 
 const messages: ControlMessage[] = [
-  { type: 'hello', protocol: PROTOCOL_VERSION, name: 'ゲスト', color: 0xff0000 },
-  { type: 'welcome', slot: 1, roster: players, hostTime: 100 },
+  { type: 'hello', protocol: PROTOCOL_VERSION, course: COURSE_FINGERPRINT, name: 'ゲスト', color: 0xff0000 },
+  { type: 'welcome', trackId: 'meadow', slot: 1, roster: players, hostTime: 100 },
   { type: 'reject', reason: 'full' },
   { type: 'roster', players },
   { type: 'profile', name: 'PIP', color: 0xabcdef },
-  { type: 'race_start', raceId: 1, seed: 0xffffffff, roster: players, startAtHostTime: 1500 },
+  { type: 'race_start', trackId: 'meadow', raceId: 1, seed: 0xffffffff, roster: players, startAtHostTime: 1500 },
   { type: 'events', raceId: 1, tick: 600, events: [{ type: 'lap', kartId: 1, value: 3 }] },
   { type: 'race_end', raceId: 1, finalState: finalState() },
   { type: 'return_lobby' }, { type: 'leave' }, { type: 'host_closed' },
+  { type: 'course', trackId: 'neon' },
 ];
 
 async function pair(network: MockTransport, room = 'AB2X') {
@@ -87,6 +90,51 @@ describe('room codes', () => {
 });
 
 describe('control protocol', () => {
+  it('isolates protocol v6 rooms from earlier versions', () => {
+    expect(PROTOCOL_VERSION).toBe(6);
+    expect(ROOM_PREFIX).toBe('pcircuit-v6-');
+    expect(fromPeerId('pcircuit-v5-AB2X')).toBeNull();
+  });
+
+  it.each(TRACK_IDS)('guards %s in welcome, course, race_start and race_end', trackId => {
+    const controls: ControlMessage[] = [
+      { type: 'welcome', slot: 1, roster: players, hostTime: 0, trackId },
+      { type: 'course', trackId },
+      { type: 'race_start', raceId: 1, seed: 42, roster: players, startAtHostTime: 1500, trackId },
+    ];
+    for (const message of controls) {
+      expect(parseControlMessage(encodeControlMessage(message))).toEqual(message);
+      const missing: Record<string, unknown> = { ...message };
+      delete missing.trackId;
+      for (const invalid of [missing, { ...message, extra: true },
+        ...['unknown', 'MEADOW', '', null, 0, {}, []].map(trackId => ({ ...message, trackId }))]) {
+        expect(parseControlMessage(JSON.stringify(invalid))).toBeNull();
+      }
+    }
+    const state = createRace(42, { trackId });
+    state.karts[0].airTime = 0.8;
+    const message: ControlMessage = { type: 'race_end', raceId: 1, finalState: state };
+    expect(parseControlMessage(encodeControlMessage(message))).toEqual(message);
+    const missing: Record<string, unknown> = { ...state };
+    delete missing.trackId;
+    for (const invalid of [missing, { ...state, trackId: 'unknown' }, { ...state, extra: true }]) {
+      expect(isRaceState(invalid)).toBe(false);
+      expect(parseControlMessage(JSON.stringify({ ...message, finalState: invalid }))).toBeNull();
+    }
+    const kart: Record<string, unknown> = { ...state.karts[0] };
+    delete kart.airTime;
+    expect(isRaceState({ ...state, karts: [kart, ...state.karts.slice(1)] })).toBe(false);
+  });
+
+  it('requires a uint32 course fingerprint and leaves mismatches for host version rejection', () => {
+    const hello = messages[0];
+    for (const course of [-1, 0x100000000, 1.5, null, '2027374372', {}, []]) {
+      expect(parseControlMessage(JSON.stringify({ ...hello, course }))).toBeNull();
+    }
+    const mismatch = { ...hello, course: (COURSE_FINGERPRINT ^ 1) >>> 0 };
+    expect(parseControlMessage(JSON.stringify(mismatch))).toEqual(mismatch);
+  });
+
   it.each(messages)('guards and round-trips $type', message => {
     const guard = controlGuards[message.type];
     expect(guard(message)).toBe(true);
@@ -557,6 +605,10 @@ describe('input packets and host buffer', () => {
     network.advance(200);
     expect(buffer.get(6020)).toEqual(NEUTRAL_INPUT);
   });
+});
+
+it('lists the same course ids as the sim registry', () => {
+  expect(PROTOCOL_TRACK_IDS).toEqual(TRACK_IDS);
 });
 
 it('keeps the net core independent of sim runtime and three', () => {
