@@ -198,19 +198,59 @@ describe('Predictor', () => {
     expect(predictor.kart.boostTime).toBe(0);
   });
 
-  it('does not restart an active rapidDash rounded to zero, but permits a fresh item', () => {
+  it.each([
+    { entry: 'constructor', rapidUnused: 0 },
+    { entry: 'constructor', rapidUnused: 1 },
+    { entry: 'reconcile', rapidUnused: 0 },
+    { entry: 'reconcile', rapidUnused: 1 },
+  ])('matches host rapidDash activation tick by tick with a zero wire timer ($entry, unused=$rapidUnused)', ({ entry, rapidUnused }) => {
+    const host = snapshot(601);
+    const kart = host.state.karts[1];
+    kart.item = 'rapidDash';
+    kart.effects.rapidUnused = rapidUnused;
+    kart.effects.rapidTime = rapidUnused ? 0 : FIXED_DT;
+    const decoded = decodeSnapshot(encodeSnapshot(host.state, host.raceId, host.hostTime), host.state)!;
+    expect(decoded.state.karts[1].item).toBe('rapidDash');
+    expect(decoded.state.karts[1].effects).toMatchObject({ rapidTime: 0, rapidUnused });
+    const predictor = new Predictor(entry === 'constructor' ? decoded : snapshot(600), 1);
+    if (entry === 'reconcile') predictor.reconcile(decoded);
+
+    for (const useItem of [true, false, true]) {
+      const input = { ...NEUTRAL_INPUT, useItem };
+      const tick = host.state.tick + 1;
+      predictor.recordInput(tick, input);
+      stepRace(host.state, host.state.karts.map(kart => !kart.human ? getAIInput(host.state, kart.id)
+        : kart.id === 1 ? input : NEUTRAL_INPUT));
+      predictor.advanceTo(tick);
+      expect(predictor.tick).toBe(host.state.tick);
+      expect(predictor.kart).toMatchObject({ item: kart.item, boostTime: kart.boostTime,
+        previousItem: kart.previousItem, effects: { rapidTime: kart.effects.rapidTime, rapidUnused: kart.effects.rapidUnused } });
+      if (tick === 602) {
+        expect(host.state.events).toContainEqual({ type: 'use', kartId: 1 });
+        expect(kart.boostTime).toBe(0.45);
+        expect(kart.item).toBe(rapidUnused ? 'rapidDash' : null);
+        expect(kart.effects.rapidTime).toBeCloseTo(rapidUnused ? 8 - FIXED_DT : 0);
+      }
+    }
+    expect(decoded.state.karts[1].effects).toMatchObject({ rapidTime: 0, rapidUnused });
+  });
+
+  it('does not restart an active rapidDash rounded to zero during replay, but permits a fresh item', () => {
     const initial = snapshot(600);
     initial.state.karts[1].item = 'rapidDash';
     initial.state.karts[1].effects.rapidTime = 0.05;
+    initial.state.karts[1].effects.rapidUnused = 0;
     const predictor = new Predictor(initial, 1);
     const nearExpiry = structuredClone(initial);
     nearExpiry.state.tick++;
     nearExpiry.state.karts[1].effects.rapidTime = 0.01;
     const decoded = decodeSnapshot(encodeSnapshot(nearExpiry.state, 1, nearExpiry.hostTime), initial.state)!;
     expect(decoded.state.karts[1].effects.rapidTime).toBe(0);
-    predictor.reconcile(decoded);
     predictor.recordInput(602, { ...drive, useItem: true });
     predictor.advanceTo(602);
+    predictor.reconcile(decoded);
+    expect(predictor.replayTicks).toBe(1);
+    expect(predictor.kart.boostTime).toBe(0.45);
     expect(predictor.kart.effects.rapidTime).toBe(0);
     expect(predictor.kart.item).toBeNull();
     expect(decoded.state.karts[1].effects.rapidTime).toBe(0);
@@ -239,16 +279,19 @@ describe('Predictor', () => {
     expect(predictor.kart.effects.rapidTime).toBeCloseTo(8 - FIXED_DT);
   });
 
-  it('recognizes a fresh rapidDash after the previous timer must have expired, even without an empty-item snapshot', () => {
+  it.each([183, 186])('recognizes a fresh rapidDash at tick %s without an empty-item snapshot', tick => {
     const initial = snapshot();
     initial.state.karts[1].item = 'rapidDash';
     initial.state.karts[1].effects.rapidTime = 0.05;
+    initial.state.karts[1].effects.rapidUnused = 0;
     const predictor = new Predictor(initial, 1);
-    const fresh = snapshot(186);
+    const fresh = snapshot(tick);
     fresh.state.karts[1].item = 'rapidDash';
-    predictor.reconcile(fresh);
-    predictor.recordInput(187, { ...drive, useItem: true });
-    predictor.advanceTo(187);
+    const decoded = decodeSnapshot(encodeSnapshot(fresh.state, fresh.raceId, fresh.hostTime), initial.state)!;
+    predictor.reconcile(decoded);
+    expect(predictor.kart.effects).toMatchObject({ rapidTime: 0, rapidUnused: 1 });
+    predictor.recordInput(tick + 1, { ...drive, useItem: true });
+    predictor.advanceTo(tick + 1);
     expect(predictor.kart.effects.rapidTime).toBeCloseTo(8 - FIXED_DT);
   });
 });

@@ -73,7 +73,9 @@ export class AudioEngine {
     if (!this.context || this.disposed || this.muted || !this.active || this.context.state !== 'running') return;
     const now = this.context.currentTime;
     for (const event of events) {
-      if (event.kartId !== this.localKartId && event.type !== 'countdown' && event.type !== 'go') continue;
+      const affected = (event.type === 'explode' || event.type === 'ink' || event.type === 'storm') &&
+        ((event.value ?? 0) & (1 << this.localKartId)) !== 0;
+      if (event.kartId !== this.localKartId && event.type !== 'countdown' && event.type !== 'go' && !affected) continue;
       switch (event.type) {
         case 'countdown':
           this.tone(440, now, 0.13, 0.24, 'sine');

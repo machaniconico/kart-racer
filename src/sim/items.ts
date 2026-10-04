@@ -2,6 +2,7 @@ import { getRank, raceProgress } from './laps';
 import { getAIInput } from './ai';
 import { hasOpponent } from './itemAi';
 import { chooseItem } from './itemTable';
+import { random } from './random';
 import type { ProjectileState } from './itemTypes';
 import { TRACK_LENGTH, WALL_HALF_WIDTH, projectToTrack, sampleTrack, wrapDistance } from './track';
 import type { InputFrame, ItemType, KartState, Projectile, RaceState } from './types';
@@ -10,6 +11,19 @@ export { chooseItem } from './itemTable';
 export const BOX_RESPAWN_TIME = 5;
 type ItemProjectile = Projectile & ProjectileState;
 const PROJECTILE_LIFETIMES = { bolt: 5, seeker: 6, skycomet: 25, bomb: 2.5 } as const;
+
+/** World-axis offset shared by collision and rendering; no per-orbit entity state. */
+export function orbitPosition(time: number, index: number): { x: number; z: number } {
+  const angle = time * 3 + index * Math.PI * 2 / 3;
+  return { x: Math.sin(angle) * 2.2, z: Math.cos(angle) * 2.2 };
+}
+
+function consumeOrbit(kart: KartState): void {
+  if (--kart.effects.orbitCount === 0) {
+    kart.item = null;
+    kart.effects.orbitKind = 0;
+  }
+}
 
 function canHold(item: ItemType | null): boolean {
   return item === 'trap' || item === 'bolt' || item === 'decoy' || item === 'bomb';
@@ -44,8 +58,7 @@ export function getKartModifiers(state: RaceState, kart: KartState, input: Input
     kart.spinTime === 0 && kart.finishTime === null;
   const auto = kart.effects.autoTime > 0 || activatingAuto;
   if (auto) {
-    input = getAIInput(state, kart.id);
-    if (activatingAuto) input = { ...input, useItem: true };
+    input = { ...getAIInput(state, kart.id), useItem: activatingAuto };
   }
   if ((!kart.human || auto) && kart.item === 'bomb' && kart.effects.holding && !input.useItem) {
     input = { ...input, brake: hasOpponent(state, kart, 12, -1) };
@@ -100,16 +113,13 @@ export function useItem(state: RaceState, kart: KartState, input: InputFrame): v
   }
   const backwards = input.brake && (item === 'bolt' || item === 'bomb');
   if (item === 'barrier') {
-    // CPU firing shares the normal deployment path; orbit contact belongs to I5.
+    // Also initialize a barrier assigned directly by a replay/debug fixture.
     if (kart.effects.orbitCount === 0) {
       kart.effects.orbitKind = 2;
       kart.effects.orbitCount = 3;
     }
     item = kart.effects.orbitKind === 1 ? 'trap' : 'bolt';
-    if (--kart.effects.orbitCount === 0) {
-      kart.item = null;
-      kart.effects.orbitKind = 0;
-    }
+    consumeOrbit(kart);
   } else if (item !== 'tripleDash' && item !== 'rapidDash') kart.item = null;
   state.events.push({ type: 'use', kartId: kart.id });
   if (item === 'dash') giveBoost(state, kart, 1.9);
@@ -127,6 +137,7 @@ export function useItem(state: RaceState, kart: KartState, input: InputFrame): v
     kart.effects.auraTime = 7;
     state.events.push({ type: 'aura_start', kartId: kart.id });
   } else if (item === 'storm') {
+    let affected = 0;
     for (const target of state.karts) {
       if (target.id === kart.id || target.finishTime !== null ||
         target.effects.auraTime > 0 || target.effects.autoTime > 0) continue;
@@ -139,14 +150,19 @@ export function useItem(state: RaceState, kart: KartState, input: InputFrame): v
       target.effects.aiHoldTicks = 0;
       target.effects.orbitKind = 0;
       target.effects.orbitCount = 0;
+      affected |= 1 << target.id;
     }
-    state.events.push({ type: 'storm', kartId: kart.id });
+    state.events.push({ type: 'storm', kartId: kart.id, value: affected });
   } else if (item === 'ink') {
     const rank = getRank(state, kart.id);
+    let affected = 0;
     for (const target of state.karts) {
-      if (target.finishTime === null && getRank(state, target.id) < rank) target.effects.inkTime = 4;
+      if (target.finishTime === null && getRank(state, target.id) < rank) {
+        target.effects.inkTime = 4;
+        affected |= 1 << target.id;
+      }
     }
-    state.events.push({ type: 'ink', kartId: kart.id });
+    state.events.push({ type: 'ink', kartId: kart.id, value: affected });
   } else if (item === 'autopilot') {
     kart.effects.autoTime = 4;
     state.events.push({ type: 'auto_start', kartId: kart.id });
@@ -183,6 +199,8 @@ export function useItem(state: RaceState, kart: KartState, input: InputFrame): v
     state.projectiles.push(projectile);
   }
 }
+
+const NEUTRAL_ORBIT_INPUT = { steer: 0, throttle: 0, brake: false, drift: false, useItem: false };
 
 export function hitKart(state: RaceState, kart: KartState): void {
   if (kart.finishTime !== null || kart.spinTime > 0 || getKartModifiers(state, kart,
@@ -227,9 +245,14 @@ function blockProjectile(state: RaceState, projectile: ItemProjectile, previousX
 
 function explode(state: RaceState, projectile: ItemProjectile): void {
   projectile.life = 0;
-  state.events.push({ type: 'explode', kartId: projectile.ownerId, x: projectile.x, z: projectile.z });
+  // The recipient bitmask keeps delayed network audio tied to authoritative hits.
+  const event = { type: 'explode' as const, kartId: projectile.ownerId, x: projectile.x, z: projectile.z, value: 0 };
+  state.events.push(event);
   for (const kart of state.karts) {
-    if (kart.finishTime === null && Math.hypot(kart.x - projectile.x, kart.z - projectile.z) <= 4.5) hitKart(state, kart);
+    if (kart.finishTime !== null || kart.spinTime > 0 ||
+      Math.hypot(kart.x - projectile.x, kart.z - projectile.z) > 4.5) continue;
+    hitKart(state, kart);
+    if (kart.spinTime > 0) event.value |= 1 << kart.id;
   }
 }
 
@@ -279,12 +302,26 @@ export function advanceItems(state: RaceState, dt: number): void {
         kart.effects.rapidTime = 0;
         kart.effects.rapidUnused = kart.item === 'rapidDash' ? 1 : 0;
         kart.effects.aiHoldTicks = 0;
-        kart.effects.orbitKind = kart.item === 'barrier' ? 2 : 0;
+        kart.effects.orbitKind = kart.item === 'barrier' ? (random(state) < 0.5 ? 1 : 2) : 0;
         kart.effects.orbitCount = kart.item === 'barrier' ? 3 : 0;
         box.respawnTime = BOX_RESPAWN_TIME;
         state.events.push({ type: 'pickup', kartId: kart.id });
         break;
       }
+    }
+  }
+  for (const owner of state.karts) {
+    if (owner.item !== 'barrier' || owner.finishTime !== null) continue;
+    for (let index = owner.effects.orbitCount - 1; index >= 0; index--) {
+      const offset = orbitPosition(state.time, index);
+      const target = state.karts.find(kart => kart.id !== owner.id &&
+        kart.finishTime === null && kart.spinTime === 0 &&
+        // Invulnerable karts pass through the guard without using it up.
+        !getKartModifiers(state, kart, NEUTRAL_ORBIT_INPUT).invulnerable &&
+        Math.hypot(kart.x - owner.x - offset.x, kart.z - owner.z - offset.z) < 1.4);
+      if (!target) continue;
+      hitKart(state, target);
+      consumeOrbit(owner);
     }
   }
   for (const trap of state.traps) {

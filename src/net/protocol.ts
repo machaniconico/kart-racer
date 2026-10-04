@@ -4,12 +4,12 @@ import type { RosterPlayer } from './session';
 export type { InputFrame, RaceEvent, RaceState } from '../sim/types';
 export type { RosterPlayer } from './session';
 
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 export const ROOM_PREFIX = `pcircuit-v${PROTOCOL_VERSION}-`;
 /** FNV-1a32 of JSON.stringify(SNAPSHOT_LAYOUT), including enum order and flight fields.
- * Pinned to protocol v4; snapshot codec tests compare the actual wire descriptors.
+ * Pinned to protocol v5; snapshot codec tests compare the actual wire descriptors.
  */
-export const LAYOUT_FINGERPRINT = '2daf5fc7';
+export const LAYOUT_FINGERPRINT = 'bc5d9d9d';
 export const MAX_PLAYERS = 8;
 export const MAX_NAME_LENGTH = 10;
 export const MAX_CONTROL_LENGTH = 65_536;
@@ -120,7 +120,7 @@ function entity(value: unknown, trap: boolean): boolean {
     (!Object.hasOwn(value, 'aux') || finite(value.aux)) &&
     (!Object.hasOwn(value, 'speed') || (value.kind === 'bomb' && positiveTime(value.speed) && value.speed <= 127.5)) &&
     (!Object.hasOwn(value, 'ownerCleared') ||
-      (oneOf(value.kind, ['bolt', 'bomb']) && typeof value.ownerCleared === 'boolean'));
+      (value.kind === 'bolt' && typeof value.ownerCleared === 'boolean'));
 }
 export function isRaceState(value: unknown): value is RaceState {
   if (!record(value) || !keys(value, ['tick', 'seed', 'phase', 'countdown', 'racingTicks', 'time',

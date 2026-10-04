@@ -212,7 +212,7 @@ export function decodeSnapshot(data: unknown, template: RaceState): Snapshot | n
     for (const field of KART_EFFECT_LAYOUT) {
       kart.effects[field.field] = ((view.getUint8(offset + 49 + field.byteOffset) >> field.shift) & field.mask) / field.scale;
     }
-    if (kart.effects.aiHoldTicks > 60 || (view.getUint8(offset + 56) & ~15) !== 0) return null;
+    if (kart.effects.aiHoldTicks > 60 || (view.getUint8(offset + 54) & ~15) !== 0) return null;
     state.karts.push(kart);
     lastAppliedInput.push({ steer: inputSteer / 127, throttle: view.getUint8(offset + 47) / 255,
       brake: (inputFlags & 1) !== 0, drift: (inputFlags & 2) !== 0, useItem: (inputFlags & 4) !== 0 });

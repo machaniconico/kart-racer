@@ -6,3 +6,6 @@ coverage/
 artifacts/
 .codex-impl.log
 .omc/
+test-results/
+playwright-report/
+e2e/__screenshots__/

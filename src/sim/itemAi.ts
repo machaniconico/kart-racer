@@ -25,7 +25,7 @@ export function hasOpponent(state: RaceState, kart: KartState, range: number, di
 /** Pure decisions: held ticks are advanced by useItem, never by input sampling. */
 export function decideItemUse(state: RaceState, kart: KartState): boolean {
   const item = kart.item;
-  if (!item || kart.finishTime !== null || kart.spinTime > 0) return false;
+  if (!item || kart.finishTime !== null || kart.spinTime > 0 || kart.effects.autoTime > 0) return false;
   // A pickup while pressed needs a release before it can become a shield.
   if (kart.previousItem && !kart.effects.holding) return false;
   const deployable = item === 'trap' || item === 'bolt' || item === 'decoy' || item === 'bomb';

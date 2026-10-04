@@ -622,6 +622,7 @@ describe('driving and items', () => {
 describe('CPU race integration', () => {
   it('finishes three laps with eight CPUs across ten seeds, using all fourteen items from boxes', () => {
     const uses = new Set<string>();
+    const orbitKinds = new Set<number>();
     for (let seed = 1; seed <= 10; seed++) {
       const racers = createRace(seed).karts.map(({ name, color }) => ({ name, color, human: false }));
       const state = createRace(seed, { racers });
@@ -630,6 +631,9 @@ describe('CPU race integration', () => {
         const inventory = state.karts.map(kart => kart.item);
         stepRace(state, state.karts.map(kart => getAIInput(state, kart.id)));
         stepRace(restored, restored.karts.map(kart => getAIInput(restored, kart.id)));
+        for (const kart of state.karts) {
+          if (kart.item === 'barrier') orbitKinds.add(kart.effects.orbitKind);
+        }
         for (const event of state.events) {
           if (event.type === 'use') {
             expect(inventory[event.kartId]).not.toBeNull();
@@ -647,6 +651,7 @@ describe('CPU race integration', () => {
         kart.lap === 3 && kart.finishTime !== null), `seed ${seed}`).toBe(true);
       expect(restored).toEqual(state);
     }
+    expect([...orbitKinds].sort()).toEqual([1, 2]);
     expect([...uses].sort()).toEqual(['dash', 'trap', 'bolt', 'seeker', 'skycomet', 'tripleDash',
       'rapidDash', 'aura', 'storm', 'ink', 'decoy', 'bomb', 'autopilot', 'barrier'].sort());
   }, 20_000);

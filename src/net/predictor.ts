@@ -25,9 +25,6 @@ export class Predictor {
   private previousPose: Pose;
   private replayCount = 0;
   private readonly timerHistory = new Map<number, Timers[]>();
-  // The wire timer rounds to 50ms. Remember authoritative activity so its
-  // final <25ms cannot become an unused, eight-second rapidDash on replay.
-  private readonly rapidExpiry = new Map<number, number>();
 
   constructor(snapshot: Snapshot, readonly localSlot: number) {
     this.predicted = structuredClone(snapshot.state);
@@ -135,19 +132,11 @@ export class Predictor {
   }
 
   private restoreRapidTimers(): void {
-    // Expiry followed by a pickup inside the same 50ms bucket is ambiguous
-    // without a protocol activation bit. Never carry this inference beyond
-    // the prior timer's latest possible expiry.
+    // The explicit unused bit distinguishes a fresh pickup from an active
+    // timer rounded to zero. Preserve the active item's final use tick.
     for (const kart of this.predicted.karts) {
-      if (kart.item !== 'rapidDash') { this.rapidExpiry.delete(kart.id); continue; }
-      // previousItem can be true when an unused item was picked up while the
-      // button was held, so it is not evidence of a rapidDash activation.
-      if (kart.effects.rapidTime > 0) {
-        this.rapidExpiry.set(kart.id, this.authoritativeTick + Math.ceil((kart.effects.rapidTime + 0.025) / FIXED_DT));
-      } else if (this.authoritativeTick < (this.rapidExpiry.get(kart.id) ?? 0)) {
-        kart.effects.rapidTime = FIXED_DT;
-      } else {
-        this.rapidExpiry.delete(kart.id);
+      if (kart.item === 'rapidDash' && !kart.effects.rapidUnused) {
+        kart.effects.rapidTime = Math.max(kart.effects.rapidTime, FIXED_DT);
       }
     }
   }

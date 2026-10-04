@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { getAIInput } from '../sim/ai';
 import { ENTITY_KINDS, KART_EFFECT_LAYOUT } from '../sim/itemTypes';
 import type { ItemType, ProjectileState } from '../sim/itemTypes';
-import { advanceItems, useItem } from '../sim/items';
+import { advanceItems, orbitPosition, useItem } from '../sim/items';
 import { createRace, FIXED_DT, stepRace } from '../sim/race';
 import { sampleTrack } from '../sim/track';
 import type { InputFrame, Pose, Projectile, RaceState } from '../sim/types';
@@ -231,8 +231,8 @@ describe('snapshot codec', () => {
       const buffer = encodeSnapshot(state, 0, 0);
       const view = new DataView(buffer);
       expect(view.getUint8(SNAPSHOT_HEADER_BYTES + 55)).toBe(packed);
-      expect(view.getUint8(SNAPSHOT_HEADER_BYTES + 54)).toBe(3);
-      expect(view.getUint8(SNAPSHOT_HEADER_BYTES + 56)).toBe(14);
+      expect(view.getUint8(SNAPSHOT_HEADER_BYTES + 54)).toBe(3 | (2 << 2));
+      expect(view.getUint8(SNAPSHOT_HEADER_BYTES + 56)).toBe(3);
       const decoded = decodeSnapshot(buffer, state)!;
       expect(decoded.state.karts[0].effects).toEqual(kart.effects);
       expect(decoded.state.karts.slice(1).map(other => other.effects))
@@ -345,7 +345,7 @@ describe('snapshot codec', () => {
       { ...projectile(201), kind: 'seeker', target: 7, aux: 72, life: 6 },
       { ...projectile(202), kind: 'seeker', target: null, life: 5.9 },
       { ...projectile(203), kind: 'skycomet', target: 1, aux: 123.456, life: 25 },
-      { ...projectile(204), kind: 'bomb', aux: 2.416, life: 2.416, speed: 56.5, ownerCleared: true },
+      { ...projectile(204), kind: 'bomb', aux: 2.416, life: 2.416, speed: 56.5 },
     ];
     state.projectiles = projectiles;
     const { bounces: _bounces, ...pose } = projectile(205);
@@ -367,11 +367,11 @@ describe('snapshot codec', () => {
     }
   });
 
-  it.each([false, true])('preserves bolt launch safety (cleared=%s) and drops irrelevant bomb flags without losing bounce counts', ownerCleared => {
+  it.each([false, true])('preserves bolt launch safety (cleared=%s) without losing bomb bounce counts', ownerCleared => {
     const state = fixture(0);
     state.projectiles = [
       { ...projectile(201), ownerCleared },
-      { ...projectile(202), kind: 'bomb', ownerCleared, speed: 63.123, aux: 2.1 },
+      { ...projectile(202), kind: 'bomb', speed: 63.123, aux: 2.1 },
     ] as (Projectile & ProjectileState)[];
     const decoded = roundTrip(state).state.projectiles as (Projectile & ProjectileState)[];
     expect(decoded.map(shot => shot.ownerCleared)).toEqual([ownerCleared, undefined]);
@@ -487,7 +487,7 @@ describe('protocol layout fingerprint', () => {
   }
 
   it('matches the actual sim descriptors to the pinned protocol version', () => {
-    const pinned: Record<number, string> = { 1: '584a661e', 2: '0af985f8', 3: 'fbe993cf', 4: '2daf5fc7' };
+    const pinned: Record<number, string> = { 1: '584a661e', 2: '0af985f8', 3: 'fbe993cf', 4: '2daf5fc7', 5: 'bc5d9d9d' };
     expect(SNAPSHOT_LAYOUT.slice(0, 2)).toEqual([KART_EFFECT_LAYOUT, ENTITY_KINDS]);
     expect(fingerprint(SNAPSHOT_LAYOUT)).toBe(LAYOUT_FINGERPRINT);
     expect(LAYOUT_FINGERPRINT).toBe(pinned[PROTOCOL_VERSION]);
@@ -505,5 +505,85 @@ describe('protocol layout fingerprint', () => {
     expect(fingerprint([...SNAPSHOT_LAYOUT.slice(0, 5), {
       ...SNAPSHOT_LAYOUT[5], bombSpeedScale: 1,
     }])).not.toBe(LAYOUT_FINGERPRINT);
+  });
+});
+
+describe('I5 orbit snapshots', () => {
+  it('synchronizes orbit kind and count in two effect bytes without consuming entity capacity', () => {
+    const state = fixture(28);
+    for (const kart of state.karts) {
+      kart.item = 'barrier';
+      Object.assign(kart.effects, { orbitKind: kart.id % 2 + 1, orbitCount: 3 });
+    }
+    const buffer = encodeSnapshot(state, 0, 0);
+    expect(buffer.byteLength).toBe(1196);
+    expect(new DataView(buffer).getUint8(27)).toBe(28);
+    const orbitFields = KART_EFFECT_LAYOUT.filter(field => field.field.startsWith('orbit'));
+    expect(new Set(orbitFields.map(field => field.byteOffset)).size).toBe(2);
+    const decoded = roundTrip(state).state;
+    expect(decoded.projectiles.length + decoded.traps.length).toBe(28);
+    expect(decoded.karts.map(kart => [kart.effects.orbitKind, kart.effects.orbitCount]))
+      .toEqual(state.karts.map(kart => [kart.effects.orbitKind, kart.effects.orbitCount]));
+    state.projectiles = []; state.traps = [];
+    const empty = encodeSnapshot(state, 0, 0);
+    expect(empty.byteLength).toBe(496);
+    expect(new DataView(empty).getUint8(27)).toBe(0);
+    for (const kind of [1, 2]) {
+      for (const count of [0, 1, 2, 3]) {
+        Object.assign(state.karts[0].effects, { orbitKind: kind, orbitCount: count });
+        expect(roundTrip(state).state.karts[0].effects).toMatchObject({ orbitKind: kind, orbitCount: count });
+      }
+    }
+  });
+
+  it.each([1, 2])('resumes orbit phase, contact and final kind-%s deployment from a snapshot', kind => {
+    const host = createRace(42);
+    host.phase = 'racing';
+    host.racingTicks = 731;
+    host.time = host.racingTicks * FIXED_DT;
+    host.boxes.forEach(box => { box.respawnTime = 5; });
+    host.karts.forEach((kart, index) => {
+      kart.x = index * 20; kart.z = 0;
+    });
+    const owner = host.karts[0];
+    owner.item = 'barrier';
+    Object.assign(owner.effects, { orbitKind: kind, orbitCount: 2 });
+    const offset = orbitPosition(host.time, 1);
+    host.karts[1].x = owner.x + offset.x;
+    host.karts[1].z = owner.z + offset.z;
+    const guest = decodeSnapshot(encodeSnapshot(host, 0, 0), createRace(42))!.state;
+    expect(guest.time).toBe(host.time);
+    expect(orbitPosition(guest.time, 1)).toEqual(offset);
+    for (const state of [host, guest]) {
+      advanceItems(state, FIXED_DT);
+      expect(state.karts[1].spinTime).toBe(1.05);
+      expect(state.karts[0].effects.orbitCount).toBe(1);
+      useItem(state, state.karts[0], { ...NEUTRAL_INPUT, useItem: true });
+      expect(state.karts[0].effects).toMatchObject({ orbitKind: 0, orbitCount: 0 });
+      expect(state.karts[0].item).toBeNull();
+      expect(state.projectiles.length + state.traps.length).toBe(1);
+    }
+    expect(guest.events).toEqual(host.events);
+    expect(guest.nextEntityId).toBe(host.nextEntityId);
+  });
+
+  it('rejects reserved orbit effect bits and out-of-range kind/count bytes', () => {
+    const state = createRace(42);
+    for (const [offset, value] of [[54, 16], [54, 3 << 2], [56, 4], [56, 255]]) {
+      const buffer = encodeSnapshot(state, 0, 0);
+      new DataView(buffer).setUint8(SNAPSHOT_HEADER_BYTES + offset, value);
+      expect(decodeSnapshot(buffer, state)).toBeNull();
+    }
+  });
+
+  it.each([false, true])('rejects bomb ownerCleared=%s in source and the binary owner-cleared bit', ownerCleared => {
+    const state = createRace(42);
+    const bomb = { ...projectile(200), kind: 'bomb' as const, aux: 2.5, speed: 24 };
+    state.projectiles = [{ ...bomb, ownerCleared } as Projectile & ProjectileState];
+    expect(() => encodeSnapshot(state, 0, 0)).toThrow(RangeError);
+    state.projectiles = [bomb];
+    const buffer = encodeSnapshot(state, 0, 0);
+    new DataView(buffer).setUint8(ENTITY_OFFSET + 19, 0x80);
+    expect(decodeSnapshot(buffer, state)).toBeNull();
   });
 });

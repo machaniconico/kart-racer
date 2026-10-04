@@ -3,6 +3,7 @@ import { getFinishTimeRemaining, isRaceTimedOut } from '../sim/race';
 import { TRACK_SAMPLES } from '../sim/track';
 import type { ItemType, KartState, RaceState } from '../sim/types';
 import { emptyItemIcon as emptyItem, icon, itemIcon, itemName, itemShortName } from './itemIcons';
+import { createInkOverlay, update as updateInkOverlay } from './inkOverlay';
 
 type Screen = 'title' | 'lobby' | 'race' | 'results';
 type Mode = 'solo' | 'host' | 'guest';
@@ -43,6 +44,8 @@ export class GameUI {
   private mapScale = 1;
   private mapOffsetX = 0;
   private mapOffsetZ = 0;
+
+  private inkMounted = false;
 
   constructor(private readonly root: HTMLElement, private localKartId: number) {
     root.innerHTML = `
@@ -129,6 +132,7 @@ export class GameUI {
   }
 
   show(screen: Screen): void {
+    if (screen !== 'race') updateInkOverlay(0);
     this.screen = screen;
     this.root.dataset.screen = screen;
     this.title.hidden = screen !== 'title';
@@ -205,6 +209,11 @@ export class GameUI {
 
   update(state: RaceState): void {
     const player = state.karts.find((kart) => kart.id === this.localKartId);
+    if (!this.inkMounted) {
+      createInkOverlay(this.root);
+      this.inkMounted = true;
+    }
+    updateInkOverlay(player?.effects.inkTime ?? 0);
     if (!player) return;
     this.text('position-value', String(getRank(state, this.localKartId)));
     this.text('position-total', `/ ${state.karts.length}`);

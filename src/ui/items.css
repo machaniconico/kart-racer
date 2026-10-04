@@ -1,0 +1,22 @@
+/* Obscure the track while keeping race information and touch controls legible. */
+#ink-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  user-select: none;
+  opacity: 0;
+  background:
+    radial-gradient(ellipse 13% 18% at 26% 31%, #090c12 68%, transparent 73%),
+    radial-gradient(ellipse 19% 23% at 40% 47%, #090c12 68%, transparent 73%),
+    radial-gradient(ellipse 15% 21% at 64% 34%, #090c12 68%, transparent 73%),
+    radial-gradient(ellipse 17% 18% at 72% 62%, #090c12 68%, transparent 73%),
+    radial-gradient(ellipse 10% 14% at 49% 72%, #090c12 65%, transparent 73%),
+    radial-gradient(ellipse 3% 5% at 18% 49%, #090c12 65%, transparent 74%),
+    radial-gradient(ellipse 4% 6% at 56% 22%, #090c12 65%, transparent 74%),
+    radial-gradient(ellipse 3% 4% at 84% 39%, #090c12 65%, transparent 74%),
+    radial-gradient(ellipse 2% 3% at 32% 69%, #090c12 65%, transparent 74%);
+}
+
+#ink-overlay[hidden] { display: none; }
+.race-screen { z-index: 2; }

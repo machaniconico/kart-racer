@@ -28,7 +28,7 @@ export const itemNames: Record<ItemType, string> = {
 };
 export const itemShortNames: Record<ItemType, string> = {
   dash: 'ダッシュ', trap: 'トラップ', bolt: 'ボルト', seeker: 'ハウンド', skycomet: 'コメット',
-  tripleDash: '3連ダッシュ', rapidDash: 'ブレイズ', aura: 'オーラ', storm: 'ストーム',
+  tripleDash: '3ダッシュ', rapidDash: 'ブレイズ', aura: 'オーラ', storm: 'ストーム',
   ink: 'インク', decoy: 'ダミー', bomb: 'ボム', autopilot: 'ロケット', barrier: 'ガード',
 };
 

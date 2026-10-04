@@ -438,7 +438,7 @@ export class GameRenderer {
         }
         visual.sparks.instanceMatrix.needsUpdate = true;
       }
-      updateKartEffects(visual.effects, kart, this.elapsed);
+      updateKartEffects(visual.effects, kart, this.elapsed, state.time);
     }
     state.boxes.forEach((item, i) => {
       this.transform.position.set(item.x, item.y + 1.5 + (this.reducedMotion ? 0 : Math.sin(this.elapsed * 2.6 + i) * 0.2), item.z);

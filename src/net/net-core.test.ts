@@ -189,14 +189,14 @@ describe('control protocol', () => {
 
   it('validates projectile launch speed and clearance state in race_end payloads', () => {
     const base = finalState();
-    const bomb = { ...base.projectiles[0], kind: 'bomb', speed: 56.5, aux: 2.4, ownerCleared: false };
+    const bomb = { ...base.projectiles[0], kind: 'bomb', speed: 56.5, aux: 2.4 };
     const state = { ...base, projectiles: [bomb] };
     expect(isRaceState(state)).toBe(true);
     expect(parseControlMessage(JSON.stringify({ type: 'race_end', raceId: 0, finalState: state })))
       .toEqual({ type: 'race_end', raceId: 0, finalState: state });
     for (const invalid of [
       { speed: -1 }, { speed: 128 }, { speed: NaN }, { speed: '56' },
-      { ownerCleared: 1 }, { ownerCleared: null }, { bounces: 128 }, { kind: 'seeker' },
+      { ownerCleared: true }, { ownerCleared: false }, { ownerCleared: 1 }, { ownerCleared: null }, { bounces: 128 }, { kind: 'seeker' },
     ]) expect(isRaceState({ ...state, projectiles: [{ ...bomb, ...invalid }] })).toBe(false);
   });
 

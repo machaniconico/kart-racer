@@ -17,7 +17,9 @@ export interface KartEffects {
   holding: number;
   /** Consecutive held input ticks, saturated at the CPU defense limit. */
   aiHoldTicks: number;
+  /** 0=none, 1=rear traps, 2=forward bolts. */
   orbitKind: number;
+  /** Remaining orbiters (0..3); their positions derive solely from race time. */
   orbitCount: number;
 }
 
@@ -27,8 +29,8 @@ export function createKartEffects(): KartEffects {
 }
 
 /** Eight bytes. Encode round(value * scale), mask, then shift into byteOffset.
- * orbitKind (0=none, 1=trap, 2=bolt) and orbitCount (0..3) share the last byte.
- * I1 uses the timer/charge slots already reserved by protocol v1.
+ * Orbit state uses two bytes: kind shares byte 5 with tripleDash charges,
+ * count occupies byte 7. Packing charges preserves the 1,200B snapshot budget.
  * Changes to this layout or entity IDs require a network protocol version bump.
  */
 export const KART_EFFECT_LAYOUT = [
@@ -37,12 +39,12 @@ export const KART_EFFECT_LAYOUT = [
   { field: 'shrinkTime', byteOffset: 2, scale: 20, mask: 255, shift: 0 },
   { field: 'inkTime', byteOffset: 3, scale: 20, mask: 255, shift: 0 },
   { field: 'autoTime', byteOffset: 4, scale: 20, mask: 255, shift: 0 },
-  { field: 'charges', byteOffset: 5, scale: 1, mask: 255, shift: 0 },
+  { field: 'charges', byteOffset: 5, scale: 1, mask: 3, shift: 0 },
   { field: 'holding', byteOffset: 6, scale: 1, mask: 1, shift: 0 },
   { field: 'rapidUnused', byteOffset: 6, scale: 1, mask: 1, shift: 1 },
   { field: 'aiHoldTicks', byteOffset: 6, scale: 1, mask: 63, shift: 2 },
-  { field: 'orbitKind', byteOffset: 7, scale: 1, mask: 3, shift: 0 },
-  { field: 'orbitCount', byteOffset: 7, scale: 1, mask: 3, shift: 2 },
+  { field: 'orbitKind', byteOffset: 5, scale: 1, mask: 3, shift: 2 },
+  { field: 'orbitCount', byteOffset: 7, scale: 1, mask: 255, shift: 0 },
 ] as const satisfies readonly { field: keyof KartEffects; byteOffset: number; scale: number; mask: number; shift: number }[];
 
 export const ENTITY_KINDS = { bolt: 1, trap: 2, seeker: 3, skycomet: 4, bomb: 5, decoy: 6 } as const;

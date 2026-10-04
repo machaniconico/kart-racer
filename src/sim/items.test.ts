@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import * as THREE from 'three';
+import { AudioEngine } from '../audio/AudioEngine';
+import { attachKartEffects, createEntityMesh, entityPose, updateKartEffects } from '../render/itemVisuals';
 import { getAIInput } from './ai';
 import { decideItemUse, getSteeringError } from './itemAi';
 import { LAYOUT_FINGERPRINT, PROTOCOL_VERSION, isRaceState } from '../net/protocol';
@@ -6,13 +9,13 @@ import { decodeSnapshot, encodeSnapshot, SNAPSHOT_LAYOUT } from '../net/snapshot
 import { chooseItem } from './itemTable';
 import { createKartEffects, ENTITY_KINDS, KART_EFFECT_LAYOUT } from './itemTypes';
 import type { ProjectileState } from './itemTypes';
-import { advanceItems, getKartModifiers, hitKart, onKartContact, useItem } from './items';
+import { advanceItems, getKartModifiers, hitKart, onKartContact, orbitPosition, useItem } from './items';
 import { chooseItem as publicChooseItem } from './index';
 import { getRank } from './laps';
 import { random } from './random';
 import { createRace, FIXED_DT, NEUTRAL_INPUT, stepRace } from './race';
 import { projectToTrack, sampleTrack, TRACK_LENGTH, WALL_HALF_WIDTH, wrapDistance } from './track';
-import type { InputFrame, ItemType, KartState, Projectile, RaceState } from './types';
+import type { InputFrame, ItemType, KartState, Projectile, RaceEvent, RaceState } from './types';
 
 const PRESS: InputFrame = { ...NEUTRAL_INPUT, useItem: true };
 const ITEMS: readonly ItemType[] = ['dash', 'trap', 'bolt', 'seeker', 'skycomet',
@@ -313,7 +316,7 @@ describe('aura and storm', () => {
       press(state, target);
       expect(target.boostTime).toBe(0);
     }
-    expect(state.events.filter((event) => event.type === 'storm')).toEqual([{ type: 'storm', kartId: user.id }]);
+    expect(state.events.filter((event) => event.type === 'storm')).toEqual([{ type: 'storm', kartId: user.id, value: 0b11111100 }]);
     for (let tick = 0; tick < 299; tick++) advanceItems(state, FIXED_DT);
     expect(state.karts[2]!.effects.shrinkTime).toBeGreaterThan(0);
     advanceItems(state, FIXED_DT);
@@ -351,7 +354,7 @@ describe('aura and storm', () => {
 });
 
 describe('effect snapshot compatibility and deterministic replay', () => {
-  it('registers every effect field and matches the protocol v4 fingerprint', () => {
+  it('registers every effect field and matches the protocol v5 fingerprint', () => {
     expect(KART_EFFECT_LAYOUT.map(({ field }) => field).sort()).toEqual(Object.keys(createKartEffects()).sort());
     for (const field of ['charges', 'rapidTime', 'auraTime', 'shrinkTime']) {
       expect(KART_EFFECT_LAYOUT.some((entry) => entry.field === field)).toBe(true);
@@ -361,7 +364,7 @@ describe('effect snapshot compatibility and deterministic replay', () => {
       hash = Math.imul(hash ^ character.charCodeAt(0), 0x01000193) >>> 0;
     }
     expect(hash.toString(16).padStart(8, '0')).toBe(LAYOUT_FINGERPRINT);
-    expect(PROTOCOL_VERSION).toBe(4);
+    expect(PROTOCOL_VERSION).toBe(5);
     const state = race();
     state.karts[0]!.item = 'rapidDash';
     press(state, state.karts[0]!);
@@ -395,6 +398,8 @@ describe('effect snapshot compatibility and deterministic replay', () => {
             kart.effects.rapidUnused = item === 'rapidDash' ? 1 : 0;
             kart.effects.holding = 0;
             kart.effects.aiHoldTicks = 0;
+            kart.effects.orbitKind = item === 'barrier' ? id % 2 + 1 : 0;
+            kart.effects.orbitCount = item === 'barrier' ? 3 : 0;
             kart.previousItem = false;
           }
         }
@@ -564,7 +569,7 @@ describe('I2 projectiles and decoys', () => {
     expect(near.spinTime).toBeGreaterThan(0);
     expect(far.spinTime).toBe(0);
     expect(state.events.filter(event => event.type === 'explode')).toEqual([
-      { type: 'explode', kartId: owner.id, x: target.x, z: target.z },
+      { type: 'explode', kartId: owner.id, x: target.x, z: target.z, value: (1 << target.id) | (1 << near.id) },
     ]);
   });
 
@@ -601,7 +606,7 @@ describe('I2 projectiles and decoys', () => {
     advanceItems(state, FIXED_DT);
     expect(state.projectiles).toHaveLength(0);
     expect(state.events.filter(event => event.type === 'explode')).toEqual([
-      { type: 'explode', kartId: owner.id, ...stopped },
+      { type: 'explode', kartId: owner.id, ...stopped, value: 0 },
     ]);
   });
 
@@ -700,7 +705,8 @@ describe('I2 reviewer regressions', () => {
     expect(comet.aux).toBeCloseTo(100 - 70 * FIXED_DT, 8);
     for (let tick = 0; tick < 60 && state.projectiles.length; tick++) advanceItems(state, FIXED_DT);
     expect(target.spinTime).toBeGreaterThan(0);
-    expect(state.events).toContainEqual({ type: 'explode', kartId: owner.id, x: target.x, z: target.z });
+    expect(state.events).toContainEqual(expect.objectContaining({ type: 'explode', kartId: owner.id, x: target.x, z: target.z }));
+    expect(state.events.find(event => event.type === 'explode')!.value! & (1 << target.id)).toBe(1 << target.id);
   });
 
   it.each(Array.from({ length: 10 }, (_, index) => index + 1))
@@ -853,37 +859,34 @@ describe('I2 reviewer regressions', () => {
     { speed: 0, stopTick: 60 }, { speed: 7.25, stopTick: 79 }, { speed: 8, stopTick: 80 },
     { speed: 24, stopTick: 120 }, { speed: 31.25, stopTick: 139 }, { speed: 32, stopTick: 140 },
   ])('allows owner proximity only at stopping tick $stopTick for speed $speed', ({ speed, stopTick }) => {
-    for (const cleared of [false, true]) {
-      const state = race();
-      state.boxes = createRace(42).boxes;
-      const owner = state.karts[0];
-      owner.speed = speed;
-      owner.item = 'bomb';
-      press(state, owner);
-      useItem(state, owner, NEUTRAL_INPUT);
-      const bomb = state.projectiles[0] as Projectile & ProjectileState;
-      bomb.bounces = 1; // A wall stop must not shorten the launch-speed safety period.
-      bomb.ownerCleared = cleared; // Bomb arming no longer depends on leaving a safety radius.
-      Object.assign(bomb, { x: owner.x, z: owner.z });
-      for (let tick = 1; tick < stopTick; tick++) {
-        // Resume immediately before each tick, including the exact stopping deadline.
-        const guest = decodeSnapshot(encodeSnapshot(state, 0, 0), createRace(42))!.state;
-        advanceItems(state, FIXED_DT);
-        advanceItems(guest, FIXED_DT);
-        expect(owner.spinTime, `speed ${speed}, tick ${tick}`).toBe(0);
-        expect(guest.karts[0].spinTime).toBe(0);
-        expect(guest.projectiles).toHaveLength(1);
-      }
-      expect(state.projectiles).toHaveLength(1);
+    const state = race();
+    state.boxes = createRace(42).boxes;
+    const owner = state.karts[0];
+    owner.speed = speed;
+    owner.item = 'bomb';
+    press(state, owner);
+    useItem(state, owner, NEUTRAL_INPUT);
+    const bomb = state.projectiles[0] as Projectile & ProjectileState;
+    bomb.bounces = 1; // A wall stop must not shorten the launch-speed safety period.
+    Object.assign(bomb, { x: owner.x, z: owner.z });
+    for (let tick = 1; tick < stopTick; tick++) {
+      // Resume immediately before each tick, including the exact stopping deadline.
       const guest = decodeSnapshot(encodeSnapshot(state, 0, 0), createRace(42))!.state;
       advanceItems(state, FIXED_DT);
       advanceItems(guest, FIXED_DT);
-      expect(owner.spinTime).toBeGreaterThan(0);
-      expect(guest.karts[0].spinTime).toBeGreaterThan(0);
-      expect(state.projectiles).toHaveLength(0);
-      expect(guest.projectiles).toHaveLength(0);
-      expect(state.events.filter(event => event.type === 'explode')).toHaveLength(1);
+      expect(owner.spinTime, `speed ${speed}, tick ${tick}`).toBe(0);
+      expect(guest.karts[0].spinTime).toBe(0);
+      expect(guest.projectiles).toHaveLength(1);
     }
+    expect(state.projectiles).toHaveLength(1);
+    const guest = decodeSnapshot(encodeSnapshot(state, 0, 0), createRace(42))!.state;
+    advanceItems(state, FIXED_DT);
+    advanceItems(guest, FIXED_DT);
+    expect(owner.spinTime).toBeGreaterThan(0);
+    expect(guest.karts[0].spinTime).toBeGreaterThan(0);
+    expect(state.projectiles).toHaveLength(0);
+    expect(guest.projectiles).toHaveLength(0);
+    expect(state.events.filter(event => event.type === 'explode')).toHaveLength(1);
   });
 
   it.each([false, true])('ignores all proximity for the first 0.3 s of a bomb throw (brake=%s)', brake => {
@@ -1072,7 +1075,7 @@ describe('I3 ink and autopilot', () => {
     press(state, owner);
     expect(owner.item).toBeNull();
     expect(state.karts.map(kart => kart.effects.inkTime)).toEqual([0, 0, 0, 0, 4, 4, 4, 0]);
-    expect(state.events).toEqual([{ type: 'use', kartId: 3 }, { type: 'ink', kartId: 3 }]);
+    expect(state.events).toEqual([{ type: 'use', kartId: 3 }, { type: 'ink', kartId: 3, value: 0b01110000 }]);
     for (let tick = 0; tick < 239; tick++) advanceItems(state, FIXED_DT);
     expect(state.karts[4].effects.inkTime).toBeCloseTo(FIXED_DT, 8);
     advanceItems(state, FIXED_DT);
@@ -1527,5 +1530,228 @@ describe('I2 held-item defense', () => {
     for (let tick = 0; tick < 360; tick++) advanceItems(state, FIXED_DT);
     expect(state.projectiles).toHaveLength(0);
     expect(isRaceState(JSON.parse(JSON.stringify(state)))).toBe(true);
+  });
+});
+
+describe('I5 orbit guard', () => {
+  function equip(state: RaceState, kind: number, count = 3): KartState {
+    const owner = state.karts[0];
+    owner.item = 'barrier';
+    Object.assign(owner.effects, { orbitKind: kind, orbitCount: count });
+    return owner;
+  }
+
+  it('picks up three orbiters of either kind deterministically without creating entities', () => {
+    const kinds = new Set<number>();
+    const seeds = { seed: 981 };
+    for (let draw = 0; draw < 1000 && kinds.size < 2; draw++) {
+      random(seeds);
+      const seed = seeds.seed;
+      const state = race(seed);
+      const owner = state.karts[0];
+      owner.lap = 1;
+      if (chooseItem({ seed }, getRank(state, owner.id)) !== 'barrier') continue;
+      state.seed = seed;
+      boxAt(state, owner);
+      const copy: RaceState = JSON.parse(JSON.stringify(state));
+      advanceItems(state, FIXED_DT);
+      advanceItems(copy, FIXED_DT);
+      expect(copy).toEqual(state);
+      expect(owner.item).toBe('barrier');
+      expect(owner.effects.orbitCount).toBe(3);
+      kinds.add(owner.effects.orbitKind);
+      expect(state.traps).toHaveLength(0);
+      expect(state.projectiles).toHaveLength(0);
+      const nextId = state.nextEntityId;
+      state.boxes[0].respawnTime = 0;
+      advanceItems(state, FIXED_DT);
+      expect(state.boxes[0].respawnTime).toBe(0);
+      expect(owner.effects.orbitCount).toBe(3);
+      expect(state.nextEntityId).toBe(nextId);
+    }
+    expect([...kinds].sort()).toEqual([1, 2]);
+  });
+
+  it.each([1, 2])('spins a contacting opponent once and consumes one kind-%s orb at each count', kind => {
+    const state = race();
+    const owner = equip(state, kind);
+    const target = state.karts[1];
+    for (let count = 3; count > 0; count--) {
+      state.time = 0.37 * count;
+      const offset = orbitPosition(state.time, count - 1);
+      Object.assign(target, { x: owner.x + offset.x, z: owner.z + offset.z, spinTime: 0 });
+      const nextId = state.nextEntityId;
+      advanceItems(state, FIXED_DT);
+      expect(target.spinTime).toBe(1.05);
+      expect(owner.spinTime).toBe(0);
+      expect(owner.effects.orbitCount).toBe(count - 1);
+      expect(owner.item).toBe(count === 1 ? null : 'barrier');
+      expect(state.nextEntityId).toBe(nextId);
+      advanceItems(state, FIXED_DT);
+      expect(owner.effects.orbitCount).toBe(count - 1);
+      expect(state.events.filter(event => event.type === 'hit')).toHaveLength(4 - count);
+    }
+    expect(owner.effects.orbitKind).toBe(0);
+    expect(state.projectiles).toHaveLength(0);
+    expect(state.traps).toHaveLength(0);
+  });
+
+  it('uses the three orbit positions rather than a solid circle around the owner', () => {
+    const state = race();
+    const owner = equip(state, 2);
+    const target = state.karts[1];
+    Object.assign(target, { x: owner.x, z: owner.z });
+    advanceItems(state, FIXED_DT);
+    expect(target.spinTime).toBe(0);
+    expect(owner.effects.orbitCount).toBe(3);
+    const offset = orbitPosition(state.time, 0);
+    Object.assign(target, { x: owner.x + offset.x, z: owner.z + offset.z, finishTime: 1 });
+    advanceItems(state, FIXED_DT);
+    expect(target.spinTime).toBe(0);
+    expect(owner.effects.orbitCount).toBe(3);
+  });
+
+  it.each(['auraTime', 'autoTime'] as const)('lets %s-immune karts pass without using an orb and does not attack from a finished owner', field => {
+    const state = race();
+    const owner = equip(state, 2);
+    const target = state.karts[1];
+    const offset = orbitPosition(state.time, 2);
+    Object.assign(target, { x: owner.x + offset.x, z: owner.z + offset.z });
+    target.effects[field] = 2;
+    advanceItems(state, FIXED_DT);
+    expect(target.spinTime).toBe(0);
+    expect(owner.effects.orbitCount).toBe(3);
+    owner.finishTime = 1;
+    target.effects[field] = 0;
+    const remaining = orbitPosition(state.time, 1);
+    Object.assign(target, { x: owner.x + remaining.x, z: owner.z + remaining.z });
+    advanceItems(state, FIXED_DT);
+    expect(target.spinTime).toBe(0);
+    expect(owner.effects.orbitCount).toBe(3);
+  });
+
+  it.each(['auraTime', 'autoTime'] as const)('hits and spends an orb on the first tick after %s immunity expires', field => {
+    const state = race();
+    const owner = equip(state, 2);
+    const target = state.karts[1];
+    const offset = orbitPosition(state.time, 2);
+    Object.assign(target, { x: owner.x + offset.x, z: owner.z + offset.z });
+    target.effects[field] = 2;
+    advanceItems(state, FIXED_DT);
+    expect(target.spinTime).toBe(0);
+    expect(owner.effects.orbitCount).toBe(3);
+    target.effects[field] = 0;
+    const again = orbitPosition(state.time, 2);
+    Object.assign(target, { x: owner.x + again.x, z: owner.z + again.z });
+    advanceItems(state, FIXED_DT);
+    expect(target.spinTime).toBeGreaterThan(0);
+    expect(owner.effects.orbitCount).toBe(2);
+  });
+
+  it.each([1, 2])('fires or drops one kind-%s orb per press and requires release between uses', kind => {
+    const state = race();
+    const owner = equip(state, kind);
+    for (let count = 3; count > 0; count--) {
+      useItem(state, owner, PRESS);
+      for (let held = 0; held < 30; held++) useItem(state, owner, PRESS);
+      expect(owner.effects.orbitCount).toBe(count - 1);
+      expect(state.projectiles.length + state.traps.length).toBe(4 - count);
+      expect(state.events.filter(event => event.type === 'use')).toHaveLength(4 - count);
+      useItem(state, owner, NEUTRAL_INPUT);
+    }
+    expect(owner.item).toBeNull();
+    expect(owner.effects.orbitKind).toBe(0);
+    useItem(state, owner, PRESS);
+    expect(state.projectiles.length + state.traps.length).toBe(3);
+  });
+
+  it('matches collision and rendered world positions at any heading, scale and local animation time', () => {
+    const state = race();
+    const owner = equip(state, 2);
+    state.time = 12.375;
+    owner.effects.shrinkTime = 5;
+    owner.effects.auraTime = 7;
+    const root = new THREE.Group();
+    const material = new THREE.MeshLambertMaterial();
+    root.add(new THREE.Mesh(new THREE.BoxGeometry(), material));
+    root.position.set(owner.x, owner.y, owner.z);
+    root.rotation.y = 2.16;
+    const visuals = attachKartEffects(root);
+    for (const elapsed of [1, 100]) {
+      updateKartEffects(visuals, owner, elapsed, state.time, true);
+      root.updateMatrixWorld(true);
+      for (let index = 0; index < 3; index++) {
+        const position = visuals.orbit[index].getWorldPosition(new THREE.Vector3());
+        const offset = orbitPosition(state.time, index);
+        expect(position.x).toBeCloseTo(owner.x + offset.x, 10);
+        expect(position.z).toBeCloseTo(owner.z + offset.z, 10);
+        expect(position.y).toBeCloseTo(owner.y + 0.7, 10);
+        expect(visuals.orbit[index].rotation.y).toBe(0);
+      }
+      expect(material.emissiveIntensity).toBe(0.6);
+    }
+    const before = visuals.orbit[0].position.clone();
+    updateKartEffects(visuals, owner, 100, state.time + 0.1, true);
+    expect(visuals.orbit[0].position.equals(before)).toBe(false);
+  });
+
+  it('keeps the decoy box silhouette, mint shell and height identical to a pickup box', () => {
+    const decoy = createEntityMesh('decoy');
+    const expected = new THREE.BoxGeometry(1.3, 1.3, 1.3).applyMatrix4(new THREE.Matrix4()
+      .makeRotationFromEuler(new THREE.Euler(Math.PI / 5, 0, Math.PI / 4))).toNonIndexed();
+    const shell = expected.getAttribute('position');
+    const positions = decoy.geometry.getAttribute('position');
+    const colors = decoy.geometry.getAttribute('color');
+    const mint = new THREE.Color(0x9ce9d2);
+    for (let i = 0; i < shell.count; i++) {
+      expect(new THREE.Vector3().fromBufferAttribute(positions, i).toArray())
+        .toEqual(new THREE.Vector3().fromBufferAttribute(shell, i).toArray());
+      expect(colors.getX(i)).toBeCloseTo(mint.r);
+      expect(colors.getY(i)).toBeCloseTo(mint.g);
+      expect(colors.getZ(i)).toBeCloseTo(mint.b);
+    }
+    expect(entityPose(decoy).lift).toBe(1.5);
+    expect(decoy.geometry.groups).toHaveLength(0);
+  });
+
+  it('does not spend inventory picked up during autopilot, including a CPU firing opportunity', () => {
+    const state = race();
+    const owner = equip(state, 2);
+    state.racingTicks = 95;
+    owner.effects.autoTime = 4;
+    const target = state.karts[1];
+    Object.assign(target, { x: owner.x + Math.sin(owner.heading) * 10, z: owner.z + Math.cos(owner.heading) * 10 });
+    expect(decideItemUse(state, owner)).toBe(false);
+    const input = getKartModifiers(state, owner, PRESS).input;
+    expect(input.useItem).toBe(false);
+    useItem(state, owner, input);
+    expect(owner.effects.orbitCount).toBe(3);
+    expect(state.projectiles).toHaveLength(0);
+    owner.effects.autoTime = 0;
+    expect(decideItemUse(state, owner)).toBe(true);
+    useItem(state, owner, { ...NEUTRAL_INPUT, useItem: decideItemUse(state, owner) });
+    expect(owner.effects.orbitCount).toBe(2);
+    expect(state.projectiles).toHaveLength(1);
+  });
+
+  it.each(['explode', 'ink', 'storm'] as const)('plays %s for the authoritative recipient and sender, respects mute and excludes bystanders', type => {
+    const engine = new AudioEngine(3);
+    const tone = vi.fn();
+    const noise = vi.fn();
+    Object.assign(engine, { context: { state: 'running', currentTime: 1 }, active: true, kit: { tone, noise } });
+    const event: RaceEvent = { type, kartId: 1, value: 1 << 3 };
+    engine.playEvents([JSON.parse(JSON.stringify(event))]);
+    expect(tone).toHaveBeenCalled();
+    expect(noise).toHaveBeenCalled();
+    tone.mockClear(); noise.mockClear();
+    engine.playEvents([{ ...event, value: 1 << 2 }]);
+    expect(tone).not.toHaveBeenCalled();
+    expect(noise).not.toHaveBeenCalled();
+    engine.setMuted(true);
+    engine.playEvents([event]);
+    expect(tone).not.toHaveBeenCalled();
+    engine.setMuted(false);
+    engine.playEvents([{ ...event, kartId: 3, value: 0 }]);
+    expect(tone).toHaveBeenCalled();
   });
 });
