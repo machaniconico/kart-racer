@@ -19,7 +19,10 @@ export function updateLapTracking(track: Track, state: RaceState, kart: KartStat
   if (validStep && kart.startedLap) kart.lapProgress += delta;
   const sample = sampleTrack(track, kart.trackDistance);
   kart.wrongWay = kart.speed > 2 && Math.sin(kart.heading) * sample.tx + Math.cos(kart.heading) * sample.tz < -0.3;
-  if (!validStep || delta <= 0) return;
+  // Do not require forward projected distance here: outside a polyline corner the nearest point is
+  // the vertex itself, so trackDistance can stay put for a tick while the kart physically crosses a
+  // gate sitting at that vertex. crosses() already rejects backward crossings.
+  if (!validStep) return;
 
   const crosses = (checkpoint: number): boolean => {
     const gate = sampleTrack(track, track.checkpointDistances[checkpoint]!);

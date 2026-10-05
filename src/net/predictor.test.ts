@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { getAIInput } from '../sim/ai';
+import { ROULETTE_TIME } from '../sim/items';
 import { createRace, FIXED_DT, stepRace } from '../sim/race';
 import type { InputFrame, RaceState, TrackId } from '../sim/types';
 import { packPong, TICK_MS, unpackClock } from './clock';
@@ -37,6 +38,47 @@ function distance(a: { x: number; y: number; z: number }, b: { x: number; y: num
 }
 
 describe('Predictor', () => {
+  it.each((['tripleDash', 'trap', 'autopilot'] as const).flatMap(item =>
+    [false, true].map(earlyStop => ({ item, earlyStop }))))
+  ('preserves roulette expiry and latched $item input without replay (earlyStop=$earlyStop)', ({ item, earlyStop }) => {
+    const initial = snapshot();
+    initial.state.karts.forEach(kart => { kart.human = true; });
+    const kart = initial.state.karts[1];
+    kart.item = item;
+    Object.assign(kart.effects, { rouletteTime: ROULETTE_TIME, charges: item === 'tripleDash' ? 3 : 0 });
+    const host = structuredClone(initial.state);
+    const predictor = new Predictor(initial, 1);
+    let quantizedTimers = 0;
+    for (let tick = 181; tick <= 272; tick++) {
+      const useItem = tick < 268 ? tick >= (earlyStop ? 199 : 181) : tick === 269;
+      const input = { ...NEUTRAL_INPUT, useItem };
+      predictor.recordInput(tick, input);
+      predictor.advanceTo(tick);
+      const inputs = neutralInputs();
+      inputs[1] = input;
+      stepRace(host, inputs);
+      const decoded = decodeSnapshot(encodeSnapshot(host, 1, tick * TICK_MS, inputs), initial.state)!;
+      if (decoded.state.karts[1].effects.rouletteTime !== host.karts[1].effects.rouletteTime) quantizedTimers++;
+      expect(predictor.reconcile(decoded)).toBe(false);
+      expect(predictor.replayTicks).toBe(0);
+      expect(predictor.kart.effects.rouletteTime).toBe(host.karts[1].effects.rouletteTime);
+      expect(predictor.kart.effects.holding).toBe(host.karts[1].effects.holding);
+      expect(predictor.kart.effects.charges).toBe(host.karts[1].effects.charges);
+      expect(predictor.kart.item).toBe(host.karts[1].item);
+      expect(predictor.kart.previousItem).toBe(host.karts[1].previousItem);
+      if (tick < 269) {
+        expect(predictor.kart.item).toBe(item);
+        expect(predictor.kart.effects.holding).toBe(0);
+        expect(predictor.kart.effects.charges).toBe(item === 'tripleDash' ? 3 : 0);
+        expect(predictor.kart.effects.autoTime).toBe(0);
+      }
+    }
+    expect(quantizedTimers).toBeGreaterThan(0);
+    expect(predictor.kart.effects.rouletteTime).toBe(0);
+    if (item === 'tripleDash') expect(predictor.kart.effects.charges).toBe(2);
+    else expect(predictor.kart.item).toBeNull();
+  });
+
   it('preserves sub-centisecond airTime through airborne snapshots without replay or visible jumps', () => {
     const initial = snapshot(180, 'canyon');
     initial.state.karts[1].airTime = 0.8 - FIXED_DT;
@@ -470,10 +512,12 @@ describe('GuestSession prediction', () => {
     } finally { h.host.close(); }
   });
 
-  it.each(['fixed', 'ai', 'drift'] as const)('reconciles every snapshot within 0.05m of same-tick host history at RTT 120ms / loss 10% (%s)', async controls => {
+  it.each(['fixed', 'ai', 'drift'] as const)('reconciles matching input windows within 0.05m at RTT 120ms / loss 10% (%s)', async controls => {
     const h = await sessionHarness(60, 0.1);
     const predictions: { source: number; state: RaceState }[] = [];
     const history = new Map<number, RaceState>();
+    const appliedInputs = new Map<number, InputFrame>();
+    const sentInputs = new Map<number, InputFrame>();
     let lastTick = 0;
     let reconciledTick = 0;
     h.observe((kind, data) => {
@@ -490,7 +534,10 @@ describe('GuestSession prediction', () => {
         const input = controls === 'ai' ? { ...getAIInput(h.state, 1), useItem: false }
           : { ...NEUTRAL_INPUT, throttle: 1, steer: controls === 'drift' ? Math.sin(tick * 0.02) * 0.6 : 0,
             drift: controls === 'drift' && tick % 200 < 100 };
-        h.step(input);
+        const applied = h.step(input);
+        appliedInputs.set(h.state.tick, applied[1]);
+        const packet = h.sent.at(-1);
+        packet?.frames.forEach((frame, index) => sentInputs.set(packet.latestTick - index, frame));
         history.set(h.state.tick, structuredClone(h.state));
         h.guest.frame();
         if (lastTick > reconciledTick) {
@@ -503,6 +550,15 @@ describe('GuestSession prediction', () => {
       for (const prediction of predictions) {
         const expected = history.get(prediction.state.tick);
         expect(expected, `missing host tick ${prediction.state.tick}`).toBeDefined();
+        // A lost input edge can leave the host holding drift after the guest has
+        // released it. Only equal input windows can promise a 5 cm replay bound.
+        let input = appliedInputs.get(prediction.source)!;
+        let matchingInputs = true;
+        for (let tick = prediction.source + 1; tick <= prediction.state.tick; tick++) {
+          input = sentInputs.get(tick) ?? input;
+          if (JSON.stringify(input) !== JSON.stringify(appliedInputs.get(tick))) matchingInputs = false;
+        }
+        if (!matchingInputs) continue;
         const error = distance(prediction.state.karts[1], expected!.karts[1]);
         expect(error, `${prediction.source} -> ${prediction.state.tick}`).toBeLessThanOrEqual(0.05);
         comparisons++;

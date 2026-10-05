@@ -35,3 +35,57 @@ export const itemShortNames: Record<ItemType, string> = {
 export const itemIcon = (item: ItemType): string => itemIcons[item];
 export const itemName = (item: ItemType): string => itemNames[item];
 export const itemShortName = (item: ItemType): string => itemShortNames[item];
+
+/** Every item icon the roulette may flash; purely decorative and independent of the sim draw. */
+export const rouletteItems = Object.keys(itemIcons) as ItemType[];
+
+/** Seconds between roulette icon switches: quick at first, slowing as the roulette nears its stop. */
+export function rouletteInterval(remaining: number, total: number): number {
+  const progress = 1 - Math.min(1, Math.max(0, remaining / total));
+  return 0.05 + 0.17 * progress * progress;
+}
+
+/** A random roulette item other than `current`, so every switch visibly changes the icon. */
+export function nextRouletteItem(current: ItemType | null, random: () => number = Math.random): ItemType {
+  const choices = rouletteItems.filter((item) => item !== current);
+  return choices[Math.min(choices.length - 1, Math.floor(random() * choices.length))];
+}
+
+/** The local kart's roulette presentation state; decorative only, never fed back into the sim. */
+export interface RouletteView {
+  active: boolean;
+  /** Icon in the slot; null shows the still "?" used for reduced motion. */
+  item: ItemType | null;
+  lastSwitch: number;
+  remaining: number;
+  reduced: boolean;
+}
+
+export const createRouletteView = (): RouletteView => ({ active: false, item: null, lastSwitch: 0, remaining: 0, reduced: false });
+
+/**
+ * Advances the roulette view for one frame. 'start' also covers a new roulette replacing a running one
+ * (rouletteTime rose, e.g. a box grabbed right after a storm stole the item); 'restyle' redraws the slot
+ * after the reduced-motion preference changes mid-spin; 'switch' is one icon flick.
+ */
+export function stepRoulette(view: RouletteView, remaining: number, reduced: boolean, total: number,
+  random: () => number = Math.random): 'start' | 'switch' | 'restyle' | 'stop' | null {
+  if (remaining <= 0) {
+    const stopped = view.active;
+    Object.assign(view, { active: false, remaining: 0 });
+    return stopped ? 'stop' : null;
+  }
+  let step: 'start' | 'switch' | 'restyle' | null = null;
+  if (!view.active || remaining > view.remaining + 1e-6) {
+    Object.assign(view, { active: true, lastSwitch: remaining, reduced, item: reduced ? null : nextRouletteItem(null, random) });
+    step = 'start';
+  } else if (reduced !== view.reduced) {
+    Object.assign(view, { lastSwitch: remaining, reduced, item: reduced ? null : nextRouletteItem(view.item, random) });
+    step = 'restyle';
+  } else if (!reduced && view.lastSwitch - remaining >= rouletteInterval(remaining, total)) {
+    Object.assign(view, { lastSwitch: remaining, item: nextRouletteItem(view.item, random) });
+    step = 'switch';
+  }
+  view.remaining = remaining;
+  return step;
+}

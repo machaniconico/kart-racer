@@ -67,11 +67,15 @@ v1 の設計制約（sim と描画の分離、固定 60Hz、`InputFrame`、seed 
 
 - **順位別の抽選**: `src/sim/itemTable.ts` の重みテーブル（1〜8 位）から seed 付き PRNG で 1 回引く。重みは確率ではなく、行の合計は 100 とは限らない。上位は設置・基本系（ポップトラップ、ダミーボックスなど）、下位は強力な加速・無敵系（ブレイズダッシュ、シャインオーラ、ロケットライドなど）が出やすい。
 - **防御**: トラップ・ボルト・ダミーボックス・ポップボムは、ボタンを押している間は後方に構えて盾になり、離すと展開する。ダッシュ系・オーラ・ストーム・インクは押した瞬間に発動する。
+- **ルーレット**: ボックスを取ると `effects.rouletteTime` が `ROULETTE_TIME`（1.4 秒、`src/sim/items.ts`）になり、毎 tick 減る。0 より大きい間はアイテムを使えない（`holding` も 0 に戻る）。開始から `ROULETTE_STOP_DELAY`（0.3 秒）たった後（判定は `rouletteTime <= ROULETTE_TIME - ROULETTE_STOP_DELAY + 1e-9`）にボタンを押すと 0 になって止まる（早止め）。開始から 0.3 秒未満の押下は早止めにならない。どちらの押下も `previousItem` に記録されるので、押しっぱなしのまま止まっても、いったん離すまでアイテムは使われない。スパークストームで奪われると `rouletteTime` も 0 に戻る。CPU も同じ規則に従う（`itemAi.ts` は回転中は使わない）。
 
 ### プロトコルの版数とレイアウトの指紋
 - `src/net/protocol.ts` の `PROTOCOL_VERSION`が版数。ルームの ID 接頭辞 `ROOM_PREFIX`（`pcircuit-v<版数>-`）にも入るため、版数が違うクライアント同士は同じルームに入れない。
 - `LAYOUT_FINGERPRINT` は、スナップショットのバイナリレイアウト（`SNAPSHOT_LAYOUT`。列挙の順序とフィールドを含む）の FNV-1a32 ハッシュで、現在の版数に固定している。
 - **運用**: スナップショットのレイアウトを変えたら `PROTOCOL_VERSION` を上げ、`src/net/protocol.ts` の `LAYOUT_FINGERPRINT` を更新する。版数を固定しているテストも両方更新する: `src/sim/items.test.ts` の `PROTOCOL_VERSION` の assert と、`src/net/snapshotCodec.test.ts` の指紋（版数ごとの固定値）。更新し忘れるとこれらのテスト（`npm test`）が失敗して検知する。
+
+### プロトコル v7: スナップショットの byte 7
+カートごとの効果フィールド（8 バイト、`KART_EFFECT_LAYOUT`）の byte 7 を分割する。bit 0〜1 が `orbitCount`（0〜3）、bit 2〜6 が `rouletteTime`（scale 20、0.05 秒刻みの bucket、上限 31 = 1.55 秒）、bit 7 は予約で 0 固定（立っていればデコーダが拒否する）。値は `(bucket << 2) | orbitCount`。効果バイト列の長さは v6 から増えない。v6 では byte 7 全体が `orbitCount` で、`rouletteTime` は存在しなかった（v7 で追加）。
 
 ### 制約
 - 通信は PeerJS 既定の公開 STUN/TURN サーバを利用する（無償の公開サービスなので可用性は保証されない）。それでもつながらない環境がある（同じ Wi-Fi か別の回線で試す）。
@@ -120,5 +124,5 @@ v1・v2 の設計制約はそのまま維持する。設計の詳細は `.omc/pl
 
 ### COURSE_FINGERPRINT と版数の運用
 - `COURSE_FINGERPRINT`（`src/sim/tracks/index.ts`）は、全コースの `TrackDef` を JSON にして FNV-1a32 でハッシュした値。`Hello.course` に載せて送り、ホストが自分の値と比べる。違うクライアントは参加できない。
-- 現在の `PROTOCOL_VERSION` は 6。`LAYOUT_FINGERPRINT` は v6 の値 `53ab24b2`。
-- **運用**: コースデータ（`src/sim/tracks/*.ts` など `TrackDef` に入る値）を変えたら `PROTOCOL_VERSION` を上げる。そのうえで `src/net/snapshotCodec.test.ts` の 2 つの pin（版数ごとの固定値）の両方に新しい版数を追加する。コースの pin には新しい `COURSE_FINGERPRINT` を、レイアウトの pin には `LAYOUT_FINGERPRINT` を入れる（レイアウトを変えていなければ前の版と同じ値）。さらに `src/sim/items.test.ts` の `PROTOCOL_VERSION` の assert も更新する。例外は、まだ公開していない版数のままコースを作っている間だけで、その間は同じ版数の pin の値を書き換えてよい（v6 はこの方法で 4 コースを作った）。pin テストは指紋の変化を検知するが、版数の上げ忘れまでは検知しない。公開済みの版数の pin を書き換えないこと。
+- 現在の `PROTOCOL_VERSION` は 7。`LAYOUT_FINGERPRINT` は v7 の値 `f7b2a1f2`（v6 は `53ab24b2`）。`COURSE_FINGERPRINT` は v6 から変わらず、v7 のコースの pin は v6 と同じ値。
+- **運用**: コースデータ（`src/sim/tracks/*.ts` など `TrackDef` に入る値）を変えたら `PROTOCOL_VERSION` を上げる。そのうえで `src/net/snapshotCodec.test.ts` の 2 つの pin（版数ごとの固定値）の両方に新しい版数を追加する。コースの pin には新しい `COURSE_FINGERPRINT` を、レイアウトの pin には `LAYOUT_FINGERPRINT` を入れる（レイアウトを変えていなければ前の版と同じ値）。さらに `src/sim/items.test.ts` の `PROTOCOL_VERSION` の assert も更新する。例外は、まだ公開していない版数のままコースを作っている間だけで、その間は同じ版数の pin の値を書き換えてよい（v6 はこの方法で 4 コースを作った）。v7 はルーレットでレイアウトを変えたため、2 つの pin のうちレイアウトの pin に `LAYOUT_FINGERPRINT` の新しい値を、コースの pin に前の版と同じ値を追加した。pin テストは指紋の変化を検知するが、版数の上げ忘れまでは検知しない。公開済みの版数の pin を書き換えないこと。

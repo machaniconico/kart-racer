@@ -6,6 +6,17 @@ export interface SoundKit {
   noise(start: number, duration: number, volume: number, frequency: number): void;
 }
 
+/** Item roulette feedback: a short click per icon switch and a bell-like "ding" on the stop. */
+export function playRouletteSound(kit: SoundKit, kind: 'tick' | 'stop', time: number): void {
+  if (kind === 'tick') {
+    kit.tone(1500, time, 0.035, 0.07, 'square', 1100);
+    return;
+  }
+  kit.tone(2093, time, 0.55, 0.14, 'sine');
+  kit.tone(3136, time, 0.38, 0.07, 'sine');
+  kit.tone(4186, time + 0.01, 0.2, 0.04, 'triangle');
+}
+
 /** Uses only the engine's master-routed, tracked voices: mute and suspend apply. */
 export function playItemEvent(kit: SoundKit, event: RaceEvent, time: number): void {
   switch (event.type) {

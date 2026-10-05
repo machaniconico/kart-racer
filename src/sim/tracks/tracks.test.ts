@@ -34,16 +34,16 @@ describe('course registry and MEADOW golden baseline', () => {
     expect(fnv1a32(track.samples)).toBe(MEADOW_SAMPLES_FNV);
   });
 
-  it('preserves the original race JSON with only the two declared state additions', () => {
+  it('preserves the original race JSON with only the declared state additions (trackId, airTime, rouletteTime)', () => {
     const state = createRace(1, { trackId: 'meadow' });
     const baseline = JSON.parse(MEADOW_RACE_JSON);
     baseline.trackId = 'meadow';
-    for (const kart of baseline.karts) kart.airTime = 0;
+    for (const kart of baseline.karts) { kart.airTime = 0; kart.effects = { rouletteTime: 0, ...kart.effects }; }
     expect(JSON.stringify(state)).toBe(JSON.stringify(baseline));
     expect(JSON.stringify(createRace(1))).toBe(JSON.stringify(state));
     const legacy = JSON.parse(JSON.stringify(state));
     delete legacy.trackId;
-    for (const kart of legacy.karts) delete kart.airTime;
+    for (const kart of legacy.karts) { delete kart.airTime; delete kart.effects.rouletteTime; }
     expect(JSON.stringify(legacy)).toBe(MEADOW_RACE_JSON);
   });
 

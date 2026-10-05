@@ -10,6 +10,8 @@ import type { InputFrame, ItemType, KartState, Projectile, RaceState, Track } fr
 
 export { chooseItem } from './itemTable';
 export const BOX_RESPAWN_TIME = 5;
+export const ROULETTE_TIME = 1.4;
+const ROULETTE_STOP_DELAY = 0.3;
 type ItemProjectile = Projectile & ProjectileState;
 const PROJECTILE_LIFETIMES = { bolt: 5, seeker: 6, skycomet: 25, bomb: 2.5 } as const;
 
@@ -56,7 +58,7 @@ export interface KartModifiers {
 export function getKartModifiers(state: RaceState, kart: KartState, input: InputFrame): KartModifiers {
   const aura = kart.effects.auraTime > 0;
   const activatingAuto = kart.item === 'autopilot' && input.useItem && !kart.previousItem &&
-    kart.spinTime === 0 && kart.finishTime === null;
+    kart.effects.rouletteTime === 0 && kart.spinTime === 0 && kart.finishTime === null;
   const auto = kart.effects.autoTime > 0 || activatingAuto;
   if (auto) {
     input = { ...getAIInput(state, kart.id), useItem: activatingAuto };
@@ -89,6 +91,15 @@ export function giveBoost(state: RaceState, kart: KartState, duration: number): 
 export function useItem(state: RaceState, kart: KartState, input: InputFrame): void {
   const pressed = input.useItem && !kart.previousItem;
   kart.previousItem = input.useItem;
+  if (kart.effects.rouletteTime > 0) {
+    // Latch even an ignored press so holding through expiry cannot use the item.
+    if (pressed && kart.effects.rouletteTime <= ROULETTE_TIME - ROULETTE_STOP_DELAY + 1e-9) {
+      kart.effects.rouletteTime = 0;
+    }
+    kart.effects.holding = 0;
+    kart.effects.aiHoldTicks = 0;
+    return;
+  }
   if (!kart.item || kart.spinTime > 0 || kart.finishTime !== null) {
     kart.effects.holding = 0;
     kart.effects.aiHoldTicks = 0;
@@ -145,6 +156,7 @@ export function useItem(state: RaceState, kart: KartState, input: InputFrame): v
         target.effects.auraTime > 0 || target.effects.autoTime > 0) continue;
       target.effects.shrinkTime = 5;
       target.item = null;
+      target.effects.rouletteTime = 0;
       target.effects.charges = 0;
       target.effects.rapidTime = 0;
       target.effects.rapidUnused = 0;
@@ -284,7 +296,7 @@ function advanceSkycomet(track: Track, state: RaceState, projectile: ItemProject
 
 export function advanceItems(track: Track, state: RaceState, dt: number): void {
   for (const kart of state.karts) {
-    for (const field of ['rapidTime', 'auraTime', 'shrinkTime', 'inkTime', 'autoTime'] as const) {
+    for (const field of ['rouletteTime', 'rapidTime', 'auraTime', 'shrinkTime', 'inkTime', 'autoTime'] as const) {
       const remaining = kart.effects[field] - dt;
       // Fixed-step subtraction can leave a tiny positive remainder at expiry.
       kart.effects[field] = remaining > 1e-9 ? remaining : 0;
@@ -300,6 +312,7 @@ export function advanceItems(track: Track, state: RaceState, dt: number): void {
       if (kart.finishTime !== null || kart.item || kart.spinTime > 0) continue;
       if (Math.hypot(kart.x - box.x, kart.z - box.z) < 1.9) {
         kart.item = chooseItem(state, getRank(state, kart.id));
+        kart.effects.rouletteTime = ROULETTE_TIME;
         kart.effects.charges = kart.item === 'tripleDash' ? 3 : 0;
         kart.effects.rapidTime = 0;
         kart.effects.rapidUnused = kart.item === 'rapidDash' ? 1 : 0;
@@ -313,7 +326,7 @@ export function advanceItems(track: Track, state: RaceState, dt: number): void {
     }
   }
   for (const owner of state.karts) {
-    if (owner.item !== 'barrier' || owner.finishTime !== null) continue;
+    if (owner.item !== 'barrier' || owner.effects.rouletteTime > 0 || owner.finishTime !== null) continue;
     for (let index = owner.effects.orbitCount - 1; index >= 0; index--) {
       const offset = orbitPosition(state.time, index);
       const target = state.karts.find(kart => kart.id !== owner.id &&

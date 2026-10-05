@@ -9,7 +9,7 @@ import {
 } from './index';
 import type { InputFrame, KartState, RaceState } from './types';
 import { formatResultTime } from '../ui/GameUI';
-import { getTrack } from './tracks';
+import { getTrack, TRACK_IDS } from './tracks';
 
 const track = getTrack('meadow');
 
@@ -310,6 +310,52 @@ describe('course and clock', () => {
 });
 
 describe('ordered directional checkpoints and lap timing', () => {
+  function crossGate(checkpoint: number, offset: number, step: number, phase: number, setup: (kart: KartState) => void) {
+    const state = startRace();
+    const kart = state.karts[0]!;
+    const gate = sampleTrack(track, track.checkpointDistances[checkpoint]!);
+    const at = (t: number) => ({ x: gate.x + gate.nx * offset + gate.tx * t, z: gate.z + gate.nz * offset + gate.tz * t });
+    const start = at(-3 + phase * step);
+    kart.x = start.x; kart.z = start.z;
+    kart.trackDistance = projectToTrack(track, kart.x, kart.z, track.checkpointDistances[checkpoint]!).distance;
+    setup(kart);
+    for (let t = -3 + phase * step + step; t <= 3; t += step) {
+      const previous = { x: kart.x, z: kart.z, trackDistance: kart.trackDistance };
+      const point = at(t);
+      kart.x = point.x; kart.z = point.z;
+      const projection = projectToTrack(track, kart.x, kart.z, previous.trackDistance);
+      kart.trackDistance = projection.distance;
+      kart.lateralOffset = projection.offset;
+      updateLapTracking(track, state, kart, previous);
+    }
+    return kart;
+  }
+  const sweep = [-9, -7, -5, 5, 7, 9].flatMap(offset => [0.1, 0.25, 0.6].flatMap(step => [0, 0.33, 0.66].map(phase => [offset, step, phase] as const)));
+
+  it('counts a gate crossed while the projected distance sticks to a corner vertex (MEADOW cp6 regression)', () => {
+    const state = startRace();
+    const kart = state.karts[0]!;
+    // Recorded from an 8-CPU race: the kart crossed cp6 outside a corner and trackDistance did not move.
+    Object.assign(kart, { x: 20.230438345051976, z: -123.3025673514565, trackDistance: 325.8939591571094,
+      startedLap: true, lapValid: true, nextCheckpoint: 6 });
+    const previous = { x: kart.x, z: kart.z, trackDistance: kart.trackDistance };
+    Object.assign(kart, { x: 19.96670370573453, z: -123.23881548081897, trackDistance: 325.8939591571094 });
+    updateLapTracking(track, state, kart, previous);
+    expect(kart.nextCheckpoint).toBe(7);
+  });
+
+  it.each(sweep)('passes cp6 on a straight line at offset %s, step %s, phase %s', (offset, step, phase) => {
+    const kart = crossGate(6, offset, step, phase, k => Object.assign(k, { startedLap: true, lapValid: true, nextCheckpoint: 6 }));
+    expect(kart.nextCheckpoint).toBe(7);
+  });
+
+  it.each(sweep)('counts the lap on a straight start-line crossing at offset %s, step %s, phase %s', (offset, step, phase) => {
+    const kart = crossGate(0, offset, step, phase, k => Object.assign(k, {
+      startedLap: true, lapValid: true, nextCheckpoint: 0, lap: 1, lapProgress: track.length,
+    }));
+    expect(kart.lap).toBe(2);
+  });
+
   it.each([8.5, 9, 9.5, 10])('finishes three laps along the inside hairpin at offset %s without projection jumps', (offset) => {
     const state = startRace();
     const kart = state.karts[0]!;
@@ -580,6 +626,8 @@ describe('driving and items', () => {
     stepRace(state, []);
     expect(kart.item).not.toBeNull();
     expect(box.respawnTime).toBe(BOX_RESPAWN_TIME);
+    for (let tick = 0; tick < 84; tick++) stepRace(state, []);
+    expect(kart.effects.rouletteTime).toBe(0);
     kart.item = 'dash';
     stepRace(state, [{ ...NEUTRAL_INPUT, useItem: true }]);
     expect(kart.item).toBeNull();
@@ -623,7 +671,25 @@ describe('driving and items', () => {
 });
 
 describe('CPU race integration', () => {
-  it('finishes three laps with eight CPUs across ten seeds, using all fourteen items from boxes', () => {
+  it.each(TRACK_IDS)('finishes %s with eight CPUs and matches JSON resumes every tick', trackId => {
+    const state = createRace(42, { trackId, racers: [] });
+    let restored: RaceState = JSON.parse(JSON.stringify(state));
+    let rouletteTicks = 0;
+    for (let tick = 0; tick < 60 * 180 && state.phase !== 'finished'; tick++) {
+      stepRace(state, state.karts.map(kart => getAIInput(state, kart.id)));
+      stepRace(restored, restored.karts.map(kart => getAIInput(restored, kart.id)));
+      expect(JSON.stringify(restored), `tick ${tick}`).toBe(JSON.stringify(state));
+      if (state.karts.some(kart => kart.effects.rouletteTime > 0)) rouletteTicks++;
+      if (tick % 137 === 0) restored = JSON.parse(JSON.stringify(restored));
+    }
+    expect(rouletteTicks).toBeGreaterThan(0);
+    expect(state.phase).toBe('finished');
+    expect(isRaceTimedOut(state)).toBe(false);
+    expect(state.karts.every(kart => !kart.human && kart.lap === 3 &&
+      kart.lapTimes.length === 3 && kart.finishTime !== null)).toBe(true);
+  }, 30_000);
+
+  it('resolves eight-CPU races across ten seeds, using all fourteen items from boxes', () => {
     const uses = new Set<string>();
     const orbitKinds = new Set<number>();
     for (let seed = 1; seed <= 10; seed++) {
@@ -649,7 +715,6 @@ describe('CPU race integration', () => {
         }
       }
       expect(state.phase, `seed ${seed}`).toBe('finished');
-      expect(isRaceTimedOut(state), `seed ${seed}`).toBe(false);
       expect(state.karts.every(kart => !kart.human && kart.lapTimes.length === 3 &&
         kart.lap === 3 && kart.finishTime !== null), `seed ${seed}`).toBe(true);
       expect(restored).toEqual(state);

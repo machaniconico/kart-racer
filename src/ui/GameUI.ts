@@ -2,7 +2,8 @@ import { getRank, TOTAL_LAPS } from '../sim/laps';
 import { getFinishTimeRemaining, isRaceTimedOut } from '../sim/race';
 import { getTrack, TRACK_IDS } from '../sim/tracks';
 import type { ItemType, KartState, RaceState, Track, TrackId } from '../sim/types';
-import { emptyItemIcon as emptyItem, icon, itemIcon, itemName, itemShortName } from './itemIcons';
+import { ROULETTE_TIME } from '../sim/items';
+import { emptyItemIcon as emptyItem, icon, itemIcon, itemName, itemShortName, createRouletteView, stepRoulette } from './itemIcons';
 import { createInkOverlay, update as updateInkOverlay } from './inkOverlay';
 
 type Screen = 'title' | 'lobby' | 'race' | 'results';
@@ -55,6 +56,11 @@ export class GameUI {
   private mapOffsetZ = 0;
 
   private inkMounted = false;
+  /** Local kart's roulette presentation; decorative only, never fed back into the sim. */
+  private readonly roulette = createRouletteView();
+  private readonly reducedMotion = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
+  /** Fired for the local kart only: one 'tick' per icon switch and one 'stop' when the item is revealed. */
+  onRoulette: ((kind: 'tick' | 'stop') => void) | null = null;
 
   constructor(private readonly root: HTMLElement, private localKartId: number) {
     // Placeholder until setCourse(); the first registered course is the default selection.
@@ -92,9 +98,10 @@ export class GameUI {
       <section id="race-screen" class="screen race-screen" aria-label="レース" hidden>
         <div class="race-position" aria-label="順位とラップ"><div class="position-group"><span class="hud-eyebrow">POSITION</span><div><strong id="position-value">8</strong><span id="position-total" class="position-total">/ 8</span></div></div><div class="lap-group"><span class="hud-eyebrow">LAP</span><strong><span id="lap-value">1</span><span class="lap-total"> / 3</span></strong></div></div>
         <div class="race-times"><div><span>TOTAL</span><strong id="total-time">00:00.00</strong></div><div><span>LAP</span><strong id="lap-time">00:00.00</strong></div><div class="best-lap-line"><span>BEST LAP</span><strong id="best-lap">—</strong></div></div>
-        <div class="item-display"><div id="item-hud-icon" class="item-icon">${emptyItem}</div><div><span class="hud-eyebrow">YOUR ITEM</span><strong id="item-name">ボックスを取ろう</strong><span class="item-key"><kbd>SHIFT</kbd> / <kbd>E</kbd> で使う</span></div></div>
+        <div id="item-display" class="item-display"><div id="item-hud-icon" class="item-icon">${emptyItem}</div><div><span class="hud-eyebrow">YOUR ITEM</span><strong id="item-name">ボックスを取ろう</strong><span class="item-key"><kbd>SHIFT</kbd> / <kbd>E</kbd> で使う</span></div></div>
         <div id="countdown-display" class="countdown-display" role="status" aria-live="polite" hidden>3</div>
         <div class="race-notices"><p id="finish-countdown" class="finish-countdown" role="timer" hidden></p><p id="wrong-way" class="wrong-way" role="status" hidden>↶ 逆走しています</p><p id="race-status" class="race-status" hidden></p><p id="net-status" class="race-status" role="status" hidden></p></div>
+        <p id="item-announce" class="item-announce" role="status" aria-live="polite"></p>
         <div class="speed-display"><strong id="speed-value">0</strong><span>km/h</span><div id="drift-meter" class="drift-meter" data-stage="0"><div class="drift-meter-label"><span id="drift-label">MINI TURBO</span><span class="drift-levels">Ⅰ / Ⅱ</span></div><div class="drift-track"><div id="drift-fill" class="drift-fill"></div><i class="drift-threshold"></i></div></div></div>
         <div class="minimap"><span id="minimap-course">${initialCourse}</span><canvas id="minimap-canvas" width="360" height="256" aria-label="コース全体図。明るい枠のマーカーがあなたです。"></canvas><span class="map-you"><i></i>YOU</span></div>
         <div class="touch-controls" aria-label="タッチ操作">
@@ -152,6 +159,7 @@ export class GameUI {
     if (screen === 'race') {
       this.lastItem = undefined;
       this.lastMapTick = -1;
+      this.resetRoulette();
       this.canvas.focus({ preventScroll: true });
     } else if (screen !== 'lobby') {
       requestAnimationFrame(() => {
@@ -168,6 +176,7 @@ export class GameUI {
     this.localKartId = localKartId;
     this.lastItem = undefined;
     this.lastMapTick = -1;
+    this.resetRoulette();
     this.root.dataset.mode = mode;
     const online = mode !== 'solo';
     this.text('pause-eyebrow', online ? 'ONLINE RACE' : 'TAKE A BREATHER');
@@ -255,14 +264,46 @@ export class GameUI {
     this.get('drift-fill').style.transform = `scaleX(${Math.min(1, player.driftTime / 1.5)})`;
     this.text('drift-label', stage === 2 ? 'TURBO Ⅱ READY' : stage === 1 ? 'TURBO Ⅰ READY' : 'MINI TURBO');
 
+    this.updateItem(player);
+    if (state.tick !== this.lastMapTick && (state.tick % 4 === 0 || this.lastMapTick < 0)) {
+      this.lastMapTick = state.tick;
+      this.drawMap(state);
+    }
+  }
+
+  /** HUD item slot and touch ITEM button, including the local kart's item roulette. */
+  private updateItem(player: KartState): void {
+    const remaining = player.item ? player.effects.rouletteTime : 0;
+    const step = stepRoulette(this.roulette, remaining, this.reducedMotion?.matches ?? false, ROULETTE_TIME);
+    const art = this.roulette.item ? itemIcon(this.roulette.item) : emptyItem;
+    if (step === 'start') {
+      this.lastItem = undefined;
+      this.text('item-announce', '');
+      this.text('item-name', 'ルーレット中…');
+      this.text('item-button-name', 'STOP');
+      this.setItemArt(art, true);
+      this.setRolling(true);
+      const button = this.get<HTMLButtonElement>('use-item');
+      button.disabled = false;
+      button.setAttribute('aria-label', 'ルーレットを止める');
+    } else if (step === 'switch' || step === 'restyle') {
+      this.setItemArt(art, true);
+      if (step === 'switch') this.onRoulette?.('tick');
+    }
+    if (remaining > 0) return;
+    const revealed = step === 'stop' && player.item !== null;
+    if (step === 'stop') {
+      this.setRolling(false);
+      this.lastItem = undefined;
+    }
     if (this.lastItem !== player.item) {
       this.lastItem = player.item;
       this.text('item-name', player.item ? itemName(player.item) : 'ボックスを取ろう');
       this.text('item-button-name', player.item ? itemShortName(player.item) : 'ITEM');
-      const art = player.item ? itemIcon(player.item) : emptyItem;
-      this.get('item-hud-icon').innerHTML = art;
-      this.get('item-button-icon').innerHTML = art;
-      this.get('item-hud-icon').classList.toggle('has-item', player.item !== null);
+      this.setItemArt(player.item ? itemIcon(player.item) : emptyItem, player.item !== null);
+      // Fresh SVG nodes start the pop (or the reduced-motion fade) only on a roulette stop.
+      this.get('item-hud-icon').classList.toggle('is-revealed', revealed);
+      this.get('item-button-icon').classList.toggle('is-revealed', revealed);
       const button = this.get<HTMLButtonElement>('use-item');
       button.disabled = player.item === null;
       if (button.disabled) {
@@ -271,10 +312,31 @@ export class GameUI {
       }
       button.setAttribute('aria-label', player.item ? `${itemName(player.item)}を使う` : 'アイテムを持っていません');
     }
-    if (state.tick !== this.lastMapTick && (state.tick % 4 === 0 || this.lastMapTick < 0)) {
-      this.lastMapTick = state.tick;
-      this.drawMap(state);
+    if (revealed && player.item) {
+      this.text('item-announce', `${itemName(player.item)}を手に入れた`);
+      this.onRoulette?.('stop');
     }
+  }
+
+  private setItemArt(art: string, hasItem: boolean): void {
+    const hud = this.get('item-hud-icon');
+    const button = this.get('item-button-icon');
+    hud.innerHTML = art;
+    button.innerHTML = art;
+    hud.classList.toggle('has-item', hasItem);
+  }
+
+  private setRolling(rolling: boolean): void {
+    this.get('item-display').classList.toggle('is-rolling', rolling);
+    this.get('use-item').classList.toggle('is-rolling', rolling);
+    this.get('item-hud-icon').classList.remove('is-revealed');
+    this.get('item-button-icon').classList.remove('is-revealed');
+  }
+
+  private resetRoulette(): void {
+    Object.assign(this.roulette, createRouletteView());
+    this.setRolling(false);
+    this.text('item-announce', '');
   }
 
   showResults(state: RaceState, best: number | null, isRecord: boolean): void {

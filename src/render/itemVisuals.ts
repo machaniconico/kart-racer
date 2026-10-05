@@ -153,7 +153,8 @@ export function updateKartEffects(effects: KartEffectVisuals, kart: KartState, e
 
   const orbitLook = look(kart.effects.orbitKind === 1 ? 'trap' : 'bolt');
   effects.orbit.forEach((mesh, index) => {
-    mesh.visible = kart.effects.orbitKind > 0 && index < kart.effects.orbitCount;
+    // The sim gives the guard no hitbox while its roulette is still spinning.
+    mesh.visible = kart.effects.orbitKind > 0 && index < kart.effects.orbitCount && kart.effects.rouletteTime <= 0;
     if (!mesh.visible) return;
     mesh.geometry = orbitLook.geometry;
     mesh.material = orbitLook.material;

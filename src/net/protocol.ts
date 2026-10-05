@@ -4,12 +4,12 @@ import type { RosterPlayer } from './session';
 export type { InputFrame, RaceEvent, RaceState } from '../sim/types';
 export type { RosterPlayer } from './session';
 
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
 export const ROOM_PREFIX = `pcircuit-v${PROTOCOL_VERSION}-`;
 /** FNV-1a32 of JSON.stringify(SNAPSHOT_LAYOUT), including enum order and flight fields.
- * Pinned to protocol v6; snapshot codec tests compare the actual wire descriptors.
+ * Pinned to protocol v7; snapshot codec tests compare the actual wire descriptors.
  */
-export const LAYOUT_FINGERPRINT = '53ab24b2';
+export const LAYOUT_FINGERPRINT = 'f7b2a1f2';
 export const MAX_PLAYERS = 8;
 export const MAX_NAME_LENGTH = 10;
 export const MAX_CONTROL_LENGTH = 65_536;
@@ -90,7 +90,7 @@ const kartNumbers = [...poseFields, 'speed', 'steer', 'trackDistance', 'lateralO
   'lapStartTime', 'driftTime', 'driftDirection', 'boostTime', 'spinTime', 'hopTime',
   'lapProgress', 'aiPhase', 'hitCooldown', 'airTime'];
 const kartBooleans = ['wrongWay', 'startedLap', 'lapValid', 'previousDrift', 'previousItem'];
-const effectTimers = ['rapidTime', 'auraTime', 'shrinkTime', 'inkTime', 'autoTime'];
+const effectTimers = ['rouletteTime', 'rapidTime', 'auraTime', 'shrinkTime', 'inkTime', 'autoTime'];
 function effects(value: unknown): boolean {
   return record(value) && keys(value, [...effectTimers, 'rapidUnused', 'charges', 'holding', 'aiHoldTicks', 'orbitKind', 'orbitCount']) &&
     effectTimers.every(key => positiveTime(value[key])) && integer(value.charges, 0, 3) &&

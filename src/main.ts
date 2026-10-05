@@ -18,6 +18,8 @@ const ui = new GameUI(root, 0);
 const controls = new Controls(root);
 root.classList.toggle('touch-device', controls.isTouch);
 let audio = new AudioEngine(0);
+// GameUI tracks only the local kart, so other racers' roulettes stay silent online.
+ui.onRoulette = (kind) => audio.playRoulette(kind);
 /** Title selection; solo races and new rooms start on this course. */
 let course: TrackId = 'meadow';
 let muted = loadMuted();

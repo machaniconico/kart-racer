@@ -7,7 +7,7 @@ import { decodeSnapshot, encodeSnapshot, SNAPSHOT_LAYOUT } from '../net/snapshot
 import { chooseItem } from './itemTable';
 import { createKartEffects, ENTITY_KINDS, KART_EFFECT_LAYOUT } from './itemTypes';
 import type { ProjectileState } from './itemTypes';
-import { advanceItems, getKartModifiers, hitKart, onKartContact, orbitPosition, useItem } from './items';
+import { advanceItems, getKartModifiers, hitKart, onKartContact, orbitPosition, ROULETTE_TIME, useItem } from './items';
 import { chooseItem as publicChooseItem } from './index';
 import { getRank } from './laps';
 import { random } from './random';
@@ -121,6 +121,179 @@ describe('ranked item table (§7.3)', () => {
   });
 });
 
+describe('item roulette', () => {
+  it.each(['tripleDash', 'rapidDash', 'barrier'] as const)
+  ('selects %s on pickup, preserving initialization and the PRNG draw count', item => {
+    const state = race();
+    const kart = state.karts[0];
+    state.karts.forEach((other, id) => {
+      other.startedLap = true;
+      other.lapProgress = id > 0 && id <= 5 ? 100 : -100;
+    });
+    kart.lapProgress = 0;
+    expect(getRank(state, kart.id)).toBe(6);
+    let seed = 1;
+    while (chooseItem({ seed }, 6) !== item) seed++;
+    state.seed = seed;
+    const expected = { seed };
+    chooseItem(expected, 6);
+    const orbitKind = item === 'barrier' ? (random(expected) < 0.5 ? 1 : 2) : 0;
+    boxAt(state, kart);
+    stepRace(state, [NEUTRAL_INPUT]);
+    expect(kart.item).toBe(item);
+    expect(kart.effects).toEqual({ ...createKartEffects(), rouletteTime: ROULETTE_TIME,
+      charges: item === 'tripleDash' ? 3 : 0, rapidUnused: item === 'rapidDash' ? 1 : 0,
+      orbitKind, orbitCount: item === 'barrier' ? 3 : 0 });
+    expect(state.seed).toBe(expected.seed);
+    expect(state.events.filter(event => event.type === 'pickup')).toEqual([{ type: 'pickup', kartId: 0 }]);
+    for (let tick = 1; tick <= 84; tick++) {
+      stepRace(state, [NEUTRAL_INPUT]);
+      expect(kart.effects.rouletteTime).toBeCloseTo(Math.max(0, ROULETTE_TIME - tick * FIXED_DT), 12);
+      expect(kart.item).toBe(item);
+      expect(state.seed).toBe(expected.seed);
+    }
+    expect(kart.effects.rouletteTime).toBe(0);
+    stepRace(state, [NEUTRAL_INPUT]);
+    expect(kart.effects.rouletteTime).toBe(0);
+  });
+
+  it.each(ITEMS)('ignores a held %s press through natural expiry until release and repress', item => {
+    const state = race();
+    const kart = state.karts[0];
+    kart.item = item;
+    Object.assign(kart.effects, { rouletteTime: ROULETTE_TIME, charges: item === 'tripleDash' ? 3 : 0,
+      orbitKind: item === 'barrier' ? 2 : 0, orbitCount: item === 'barrier' ? 3 : 0 });
+    const effects = { ...kart.effects };
+    for (let tick = 1; tick <= 90; tick++) {
+      stepRace(state, [PRESS]);
+      expect(kart.effects).toEqual({ ...effects, rouletteTime: kart.effects.rouletteTime });
+      expect(kart.effects.rouletteTime).toBeCloseTo(Math.max(0, ROULETTE_TIME - tick * FIXED_DT), 12);
+      expect(kart.item).toBe(item);
+      expect(kart.previousItem).toBe(true);
+      expect(kart.boostTime).toBe(0);
+      expect(kart.speed).toBe(0); // Autopilot must not activate through its modifier hook.
+      expect(state.events).toEqual([]);
+    }
+    stepRace(state, [NEUTRAL_INPUT]);
+    expect(kart.item).toBe(item);
+    expect(state.events).toEqual([]);
+    stepRace(state, [PRESS]);
+    if (['trap', 'bolt', 'decoy', 'bomb'].includes(item)) {
+      expect(kart.effects.holding).toBe(1);
+      stepRace(state, [NEUTRAL_INPUT]);
+    }
+    expect(state.events.some(event => event.type === 'use' && event.kartId === 0)).toBe(true);
+  });
+
+  it.each([17, 18, 19])('only early-stops a rising edge after 0.3 seconds (%i elapsed ticks)', ticks => {
+    const state = race();
+    const kart = state.karts[0];
+    kart.item = 'tripleDash';
+    Object.assign(kart.effects, { rouletteTime: ROULETTE_TIME, charges: 3 });
+    for (let tick = 0; tick < ticks; tick++) stepRace(state, [NEUTRAL_INPUT]);
+    stepRace(state, [PRESS]);
+    if (ticks < 18) expect(kart.effects.rouletteTime).toBeGreaterThan(0);
+    else expect(kart.effects.rouletteTime).toBe(0);
+    for (let tick = 0; tick < 90; tick++) {
+      stepRace(state, [PRESS]);
+      expect(kart.effects.charges).toBe(3);
+      expect(kart.boostTime).toBe(0);
+    }
+    stepRace(state, [NEUTRAL_INPUT]);
+    stepRace(state, [PRESS]);
+    expect(kart.effects.charges).toBe(2);
+  });
+
+  it.each(['trap', 'bolt', 'decoy', 'bomb', 'autopilot'] as const)
+  ('consumes the early-stop press for %s until release', item => {
+    const state = race();
+    const kart = state.karts[0];
+    kart.item = item;
+    kart.effects.rouletteTime = 1.1;
+    for (let tick = 0; tick < 12; tick++) {
+      stepRace(state, [PRESS]);
+      expect(kart.effects.rouletteTime).toBe(0);
+      expect(kart.effects.holding).toBe(0);
+      expect(kart.effects.autoTime).toBe(0);
+      expect(kart.item).toBe(item);
+      expect(state.events).toEqual([]);
+    }
+    stepRace(state, [NEUTRAL_INPUT]);
+    expect(state.events).toEqual([]);
+    stepRace(state, [PRESS]);
+    expect(item === 'autopilot' ? kart.effects.autoTime : kart.effects.holding).toBeGreaterThan(0);
+  });
+
+  it('does not early-stop a press held since before the pickup', () => {
+    const state = race();
+    const kart = state.karts[0];
+    boxAt(state, kart);
+    stepRace(state, [PRESS]);
+    expect(kart.effects.rouletteTime).toBe(ROULETTE_TIME);
+    expect(kart.previousItem).toBe(true);
+    const item = kart.item;
+    for (let tick = 1; tick <= 90; tick++) {
+      stepRace(state, [PRESS]);
+      expect(kart.item).toBe(item);
+      expect(kart.effects.rouletteTime).toBeCloseTo(Math.max(0, ROULETTE_TIME - tick * FIXED_DT), 12);
+      expect(kart.effects.holding).toBe(0);
+      expect(state.events).toEqual([]);
+    }
+  });
+
+  it.each(['spin', 'finished'] as const)('continues the timer while %s', condition => {
+    const state = race();
+    const kart = state.karts[1];
+    kart.item = 'dash';
+    kart.effects.rouletteTime = ROULETTE_TIME;
+    if (condition === 'spin') kart.spinTime = 2;
+    else kart.finishTime = 0;
+    for (let tick = 1; tick <= 84; tick++) {
+      stepRace(state, []);
+      expect(kart.effects.rouletteTime).toBeCloseTo(Math.max(0, ROULETTE_TIME - tick * FIXED_DT), 12);
+    }
+    expect(kart.effects.rouletteTime).toBe(0);
+  });
+
+  it.each([0, 18])('latches presses through active autopilot and its expiry (press after %i ticks)', delay => {
+    const state = race();
+    const kart = state.karts[0];
+    kart.item = 'dash';
+    Object.assign(kart.effects, { rouletteTime: ROULETTE_TIME, autoTime: 1 });
+    for (let tick = 0; tick < delay; tick++) stepRace(state, [NEUTRAL_INPUT]);
+    for (let tick = 0; tick < 90; tick++) {
+      stepRace(state, [PRESS]);
+      expect(kart.item).toBe('dash');
+      expect(kart.previousItem).toBe(true);
+      expect(kart.boostTime).toBe(0);
+      if (delay === 18) expect(kart.effects.rouletteTime).toBe(0);
+    }
+    stepRace(state, [NEUTRAL_INPUT]);
+    stepRace(state, [PRESS]);
+    expect(kart.item).toBeNull();
+    expect(kart.boostTime).toBeGreaterThan(0);
+  });
+
+  it('keeps barrier orbit contact inactive until the roulette ends', () => {
+    const state = race();
+    const [owner, target] = state.karts;
+    owner.item = 'barrier';
+    Object.assign(owner.effects, { rouletteTime: ROULETTE_TIME, orbitKind: 2, orbitCount: 3 });
+    const offset = orbitPosition(state.time, 0);
+    target.x = owner.x + offset.x;
+    target.z = owner.z + offset.z;
+    for (let tick = 0; tick < 83; tick++) {
+      advanceItems(track, state, FIXED_DT);
+      expect(target.spinTime).toBe(0);
+      expect(owner.effects.orbitCount).toBe(3);
+    }
+    advanceItems(track, state, FIXED_DT);
+    expect(owner.effects.rouletteTime).toBe(0);
+    expect(target.spinTime).toBeGreaterThan(0);
+    expect(owner.effects.orbitCount).toBe(2);
+  });
+});
+
 describe('dash charges and timed presses', () => {
   it('keeps tripleDash until the third press and blocks boxes between charges', () => {
     const state = race();
@@ -159,6 +332,8 @@ describe('dash charges and timed presses', () => {
     advanceItems(track, state, FIXED_DT);
     expect(kart.item).toBe('tripleDash');
     expect(kart.effects.charges).toBe(3);
+    expect(kart.effects.rouletteTime).toBe(ROULETTE_TIME);
+    for (let tick = 0; tick < 84; tick++) advanceItems(track, state, FIXED_DT);
     press(state, kart);
     expect(kart.effects.charges).toBe(2);
   });
@@ -300,9 +475,10 @@ describe('aura and storm', () => {
     const protectedKart = state.karts[1]!;
     state.karts.forEach((kart, index) => {
       kart.item = index % 2 ? 'tripleDash' : 'rapidDash';
-      Object.assign(kart.effects, { charges: 2, rapidTime: 3, holding: 1, orbitKind: 2, orbitCount: 3 });
+      Object.assign(kart.effects, { rouletteTime: 1.2, charges: 2, rapidTime: 3, holding: 1, orbitKind: 2, orbitCount: 3 });
     });
     user.item = 'storm';
+    user.effects.rouletteTime = 0;
     protectedKart.effects.auraTime = 7;
     const protectedBefore = JSON.stringify(protectedKart);
     press(state, user);
@@ -311,7 +487,7 @@ describe('aura and storm', () => {
     expect(JSON.stringify(protectedKart)).toBe(protectedBefore);
     for (const target of state.karts.slice(2)) {
       expect(target.item).toBeNull();
-      expect(target.effects).toMatchObject({ shrinkTime: 5, charges: 0, rapidTime: 0,
+      expect(target.effects).toMatchObject({ rouletteTime: 0, shrinkTime: 5, charges: 0, rapidTime: 0,
         holding: 0, orbitKind: 0, orbitCount: 0 });
       expect(getKartModifiers(state, target, PRESS).maxSpeedMultiplier).toBe(0.65);
       press(state, target);
@@ -355,7 +531,7 @@ describe('aura and storm', () => {
 });
 
 describe('effect snapshot compatibility and deterministic replay', () => {
-  it('registers every effect field and matches the protocol v5 fingerprint', () => {
+  it('registers every effect field and matches the protocol v7 fingerprint', () => {
     expect(KART_EFFECT_LAYOUT.map(({ field }) => field).sort()).toEqual(Object.keys(createKartEffects()).sort());
     for (const field of ['charges', 'rapidTime', 'auraTime', 'shrinkTime']) {
       expect(KART_EFFECT_LAYOUT.some((entry) => entry.field === field)).toBe(true);
@@ -365,7 +541,7 @@ describe('effect snapshot compatibility and deterministic replay', () => {
       hash = Math.imul(hash ^ character.charCodeAt(0), 0x01000193) >>> 0;
     }
     expect(hash.toString(16).padStart(8, '0')).toBe(LAYOUT_FINGERPRINT);
-    expect(PROTOCOL_VERSION).toBe(6);
+    expect(PROTOCOL_VERSION).toBe(7);
     const state = race();
     state.karts[0]!.item = 'rapidDash';
     press(state, state.karts[0]!);
@@ -1199,6 +1375,10 @@ describe('I3 CPU item tactics (§7.5)', () => {
     expect(getAIInput(state, kart.id).useItem).toBe(true);
     expect(decideItemUse(state, kart)).toBe(true);
     expect(JSON.stringify(state)).toBe(before);
+    kart.effects.rouletteTime = ROULETTE_TIME;
+    expect(decideItemUse(state, kart)).toBe(false);
+    expect(getAIInput(state, kart.id).useItem).toBe(false);
+    kart.effects.rouletteTime = 0;
     kart.finishTime = 1;
     expect(decideItemUse(state, kart)).toBe(false);
     kart.finishTime = null;

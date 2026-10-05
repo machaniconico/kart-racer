@@ -32,7 +32,7 @@ function finalState() {
       lapStartTime: 0, lapTimes: [2, 2, 3], finishTime: 7, driftTime: 0, driftDirection: 0,
       boostTime: 0, spinTime: 0, hopTime: 0, item: null, wrongWay: false, startedLap: true,
       lapProgress: 0, lapValid: true, previousDrift: false, previousItem: false, aiPhase: 0, hitCooldown: 0, airTime: 0,
-      human: player.kind !== 'cpu', effects: { rapidTime: 0, rapidUnused: 1, auraTime: 0, shrinkTime: 0, inkTime: 0,
+      human: player.kind !== 'cpu', effects: { rouletteTime: 0, rapidTime: 0, rapidUnused: 1, auraTime: 0, shrinkTime: 0, inkTime: 0,
         autoTime: 0, charges: 0, holding: 0, aiHoldTicks: 0, orbitKind: 0, orbitCount: 0 },
     })),
     boxes: [{ id: 100, x: 0, y: 0, z: 0, heading: 0, respawnTime: 0 }],
@@ -90,9 +90,9 @@ describe('room codes', () => {
 });
 
 describe('control protocol', () => {
-  it('isolates protocol v6 rooms from earlier versions', () => {
-    expect(PROTOCOL_VERSION).toBe(6);
-    expect(ROOM_PREFIX).toBe('pcircuit-v6-');
+  it('isolates protocol v7 rooms from earlier versions', () => {
+    expect(PROTOCOL_VERSION).toBe(7);
+    expect(ROOM_PREFIX).toBe('pcircuit-v7-');
     expect(fromPeerId('pcircuit-v5-AB2X')).toBeNull();
   });
 
@@ -205,7 +205,7 @@ describe('control protocol', () => {
   it('preserves all effect timers, rapid-dash state and defensive hold ticks in race_end JSON', () => {
     const state = finalState();
     state.karts.forEach((kart, id) => {
-      kart.effects = { rapidTime: 0.024, rapidUnused: id % 2, auraTime: 6.75,
+      kart.effects = { rouletteTime: 1.4 - id * 0.1, rapidTime: 0.024, rapidUnused: id % 2, auraTime: 6.75,
         shrinkTime: 4.125, inkTime: 3.5, autoTime: 3.875, charges: id % 4,
         holding: id % 2, aiHoldTicks: id === 7 ? 60 : id * 8, orbitKind: id % 3, orbitCount: id % 4 };
     });
@@ -215,7 +215,7 @@ describe('control protocol', () => {
   });
 
   it.each([
-    { field: 'rapidTime' }, { field: 'auraTime' }, { field: 'shrinkTime' },
+    { field: 'rouletteTime' }, { field: 'rapidTime' }, { field: 'auraTime' }, { field: 'shrinkTime' },
     { field: 'inkTime' }, { field: 'autoTime' },
     { field: 'rapidUnused', max: 1 }, { field: 'charges', max: 3 },
     { field: 'holding', max: 1 }, { field: 'aiHoldTicks', max: 60 },

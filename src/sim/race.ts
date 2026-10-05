@@ -129,9 +129,12 @@ function advanceKart(track: Track, state: RaceState, kart: KartState, input: Inp
     kart.driftTime = 0;
     kart.driftDirection = 0;
   }
+  const itemPressed = input.useItem;
   const modifiers = getKartModifiers(state, kart, input);
   input = modifiers.input;
-  useItem(state, kart, input);
+  // Autopilot replaces driving controls, but roulette edges follow the physical button.
+  useItem(state, kart, kart.effects.rouletteTime > 0 ? { ...input, useItem: itemPressed } : input);
+  kart.previousItem = itemPressed;
   if (kart.airTime > 0) {
     kart.airTime = Math.max(0, kart.airTime - FIXED_DT);
     kart.previousDrift = input.drift;

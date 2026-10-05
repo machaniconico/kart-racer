@@ -1,5 +1,5 @@
 import type { RaceEvent, RaceState } from '../sim/types';
-import { playItemEvent, type SoundKit } from './itemSounds';
+import { playItemEvent, playRouletteSound, type SoundKit } from './itemSounds';
 
 /** Small original WebAudio instruments; no audio files or network requests. */
 export class AudioEngine {
@@ -114,6 +114,12 @@ export class AudioEngine {
           break;
       }
     }
+  }
+
+  /** The local kart's item roulette only; GameUI drives it from the player's own rouletteTime. */
+  playRoulette(kind: 'tick' | 'stop'): void {
+    if (!this.context || this.disposed || this.muted || !this.active || this.context.state !== 'running') return;
+    playRouletteSound(this.kit, kind, this.context.currentTime);
   }
 
   /** Stop the driving instruments without cutting off the final result melody. */
