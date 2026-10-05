@@ -14,19 +14,19 @@ import type { InputFrame, RaceState, Track, TrackDef } from './types';
 // differences between CPU architectures (the same code gives different hashes on arm64 and x64),
 // so each platform has its own pinned column. Before the item roulette (v4) the arm64 column was
 // checked against the v2 sim (commit 6896e9c) on Node 22 and 25. The roulette delays item use, so
-// the arm64 column was re-pinned for protocol v7; the linux-x64 column stays 'pending-ci' (hash only
-// printed, not checked) until the first CI run's values are copied in.
+// both columns were re-pinned for protocol v7 (linux-x64 values copied from the first v7 CI run).
+// A new platform can use 'pending-ci' to print its hashes once before pinning them.
 const MEADOW_FINAL_JSON = [
-  [1, '168b61cdd92b197dedeb356a1d6500bc5717c856dcaa4be7a264c84759ef8848', 'pending-ci'],
-  [2, '8acac9e1b07d3340329d2371db00f83c09f2b9dc1c27ce4bd5c6df3b88211f3d', 'pending-ci'],
-  [3, 'ec403820d2a6dfd3903c9494ca866805de8051f2decd057966890a101106b6af', 'pending-ci'],
-  [4, 'a5f6c3c8ebf24d44996474f83fbf631c1eb54fd98bfba02f6baf0e9000f2b75f', 'pending-ci'],
-  [5, '227d372059b3b9890ccca0f8a2f71b63a133d8aea18af2492b9e17ee85e60d43', 'pending-ci'],
-  [42, 'e6df4f2dd7d84f32cd1f046fc4176cbcf0f6956a3e88e9ae5127340738a53cfe', 'pending-ci'],
-  [123, 'df2089b31265c080535a2fb403db1364a45ba65571b06bbf3f0174fdf02a485b', 'pending-ci'],
-  [999, '1685b0532150a4b41506cf869f26996fb2d89b3e36cb8082d8c21bb4dfe79047', 'pending-ci'],
-  [12345, '3591a74c505fa2aecd021d8970dca445dedbc5a8b477e0610f62e47bdca81c8a', 'pending-ci'],
-  [98765, 'f33d6aca29abc677030ff32b1644e83f96aeebf1724814f057bd74fc6d60c1d6', 'pending-ci'],
+  [1, '168b61cdd92b197dedeb356a1d6500bc5717c856dcaa4be7a264c84759ef8848', '5d116ad1909f5d27396312bde9474a7a53a19bb2c77288ddf9ac23fb3e6d13a5'],
+  [2, '8acac9e1b07d3340329d2371db00f83c09f2b9dc1c27ce4bd5c6df3b88211f3d', '78833ee62bb6940544d1147d804a87891ec7ad22a9cc45e263b56913d0488689'],
+  [3, 'ec403820d2a6dfd3903c9494ca866805de8051f2decd057966890a101106b6af', '00a7d9913f4c051dfcff9f3925fc09e70c2e89bec02aec5e1696b826e3f11753'],
+  [4, 'a5f6c3c8ebf24d44996474f83fbf631c1eb54fd98bfba02f6baf0e9000f2b75f', '502a062dca55acb8ba9e6dfb3b69bcca40e5f85b861d552346484521772a8bee'],
+  [5, '227d372059b3b9890ccca0f8a2f71b63a133d8aea18af2492b9e17ee85e60d43', 'b15f087d877c946a48b93a30c9e8d56a7e7c85fe1e4c9ed5eadf6f89aa065e42'],
+  [42, 'e6df4f2dd7d84f32cd1f046fc4176cbcf0f6956a3e88e9ae5127340738a53cfe', 'a2dbdd23ebc7def8a3e4c3af4ad8de8e05b9a36784e20872bb79806b1115996c'],
+  [123, 'df2089b31265c080535a2fb403db1364a45ba65571b06bbf3f0174fdf02a485b', '400045adbbde94adb79373898eb09716dc01fce222b029a6c991b5abc05743f9'],
+  [999, '1685b0532150a4b41506cf869f26996fb2d89b3e36cb8082d8c21bb4dfe79047', 'c164b1b390b4ca28a137a830aa9dc79243391b38314ad264ece940fed2639897'],
+  [12345, '3591a74c505fa2aecd021d8970dca445dedbc5a8b477e0610f62e47bdca81c8a', '4a936622930a13c126b0fb432c04997541bc15b4cca9c35a909ce9b8844ce9fd'],
+  [98765, 'f33d6aca29abc677030ff32b1644e83f96aeebf1724814f057bd74fc6d60c1d6', 'd604940211b4f5c4a26d40dfed807a70c664e54a8eb6f1a969d5bcaa4e4128dc'],
 ] as const;
 const PLATFORM_COLUMN: Record<string, 1 | 2> = { 'darwin-arm64': 1, 'linux-x64': 2 };
 const column = PLATFORM_COLUMN[`${process.platform}-${process.arch}`];
