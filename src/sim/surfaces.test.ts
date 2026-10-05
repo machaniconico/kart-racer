@@ -42,7 +42,7 @@ it.each(MEADOW_FINAL_JSON)('preserves C-001 MEADOW final JSON (seed %i)', (seed,
   expect(state.karts.every(kart => kart.lap === 3 && kart.finishTime !== null)).toBe(true);
   const digest = createHash('sha256').update(JSON.stringify(state)).digest('hex');
   // An unlisted platform still checks completion above; add its column from a trusted run.
-  const pinned = column ? hashes[column - 1] : undefined;
+  const pinned: string | undefined = column ? hashes[column - 1] : undefined;
   if (pinned && pinned !== 'pending-ci') expect(digest).toBe(pinned);
   else console.info(`MEADOW final hash (${process.platform}-${process.arch}) seed ${seed}: ${digest}`);
 }, 30_000);
