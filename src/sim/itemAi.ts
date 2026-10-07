@@ -10,7 +10,8 @@ export function getSteeringError(state: RaceState, kart: KartState): number {
   const track = getTrack(state.trackId);
   const targetDistance = kart.trackDistance + 7.5 + Math.max(0, kart.speed) * 0.24;
   const target = sampleTrack(track, targetDistance);
-  let lineOffset = Math.sin(kart.aiPhase + state.time * 0.12) * 1.25;
+  // Tighter tracking still needs enough lane variety to reach the outer boxes.
+  let lineOffset = Math.sin(kart.aiPhase + state.time * 0.12) * 2.5;
   if (track.def.racingLine.length > 0) {
     lineOffset += racingLineOffset(track, targetDistance);
     const limit = Math.max(0, track.def.roadHalfWidth - 1);

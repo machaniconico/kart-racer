@@ -1,6 +1,12 @@
 const BEST_KEY = 'pocket-circuit.best.v1';
 const BEST_KEY_V2 = 'pocket-circuit.best.v2';
 const MUTE_KEY = 'pocket-circuit.muted.v1';
+const SENSITIVITY_KEY = 'pocket-circuit.steer-sensitivity.v1';
+const ASSIST_KEY = 'pocket-circuit.steer-assist.v1';
+
+export const SENSITIVITY_MIN = 1;
+export const SENSITIVITY_MAX = 5;
+export const SENSITIVITY_DEFAULT = 3;
 
 const LEGACY_TRACK_ID = 'meadow';
 // Mirrors the sim course registry; kept local so storage stays independent of sim/.
@@ -65,4 +71,28 @@ export function loadMuted(): boolean {
 
 export function saveMuted(muted: boolean): void {
   try { localStorage.setItem(MUTE_KEY, String(muted)); } catch { /* Audio remains usable without persistence. */ }
+}
+
+export function loadSensitivity(): number {
+  try {
+    const raw = localStorage.getItem(SENSITIVITY_KEY);
+    const value = raw === null ? NaN : Number(raw);
+    return Number.isInteger(value) && value >= SENSITIVITY_MIN && value <= SENSITIVITY_MAX ? value : SENSITIVITY_DEFAULT;
+  } catch { return SENSITIVITY_DEFAULT; }
+}
+
+export function saveSensitivity(level: number): void {
+  try { localStorage.setItem(SENSITIVITY_KEY, String(level)); } catch { /* Steering still works without persistence. */ }
+}
+
+/** null leaves the initial preference to the active input device. */
+export function loadSteerAssist(): boolean | null {
+  try {
+    const value = localStorage.getItem(ASSIST_KEY);
+    return value === 'true' ? true : value === 'false' ? false : null;
+  } catch { return null; }
+}
+
+export function saveSteerAssist(enabled: boolean): void {
+  try { localStorage.setItem(ASSIST_KEY, String(enabled)); } catch { /* The setting still works for this session. */ }
 }

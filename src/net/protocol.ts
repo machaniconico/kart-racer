@@ -4,10 +4,10 @@ import type { RosterPlayer } from './session';
 export type { InputFrame, RaceEvent, RaceState } from '../sim/types';
 export type { RosterPlayer } from './session';
 
-export const PROTOCOL_VERSION = 7;
+export const PROTOCOL_VERSION = 8;
 export const ROOM_PREFIX = `pcircuit-v${PROTOCOL_VERSION}-`;
 /** FNV-1a32 of JSON.stringify(SNAPSHOT_LAYOUT), including enum order and flight fields.
- * Pinned to protocol v7; snapshot codec tests compare the actual wire descriptors.
+ * Pinned to protocol v8; snapshot codec tests compare the actual wire descriptors.
  */
 export const LAYOUT_FINGERPRINT = 'f7b2a1f2';
 export const MAX_PLAYERS = 8;

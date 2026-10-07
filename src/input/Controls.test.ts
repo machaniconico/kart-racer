@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Controls } from './Controls';
+import { Controls, touchSteerCurve } from './Controls';
 import { createRace, stepRace, type InputFrame } from '../sim/index';
 
 // Lightweight fake DOM: just enough surface for Controls (no happy-dom/jsdom dependency).
@@ -122,5 +122,73 @@ describe('Controls steering direction (input -> sample -> sim)', () => {
     expect(screenRightFromControls()).toBeLessThan(LEFT);
     gamepads = [pad(0, 14)];
     expect(screenRightFromControls()).toBeLessThan(LEFT);
+  });
+});
+
+describe('touch steering sensitivity curve', () => {
+  const levels = [1, 2, 3, 4, 5];
+
+  it.each(levels)('level %i is monotone, odd, and reaches +-1 at the edges', (level) => {
+    let prev = -Infinity;
+    for (let raw = -1; raw <= 1.0001; raw += 0.01) {
+      const out = touchSteerCurve(raw, level);
+      expect(out).toBeGreaterThanOrEqual(prev);
+      prev = out;
+    }
+    expect(touchSteerCurve(1, level)).toBeCloseTo(1, 10);
+    expect(touchSteerCurve(-1, level)).toBeCloseTo(-1, 10);
+    expect(touchSteerCurve(0.03, level)).toBe(0);
+    expect(touchSteerCurve(-0.5, level)).toBe(-touchSteerCurve(0.5, level));
+  });
+
+  it('returns 0 for NaN input and the default curve for NaN level', () => {
+    expect(touchSteerCurve(NaN, 3)).toBe(0);
+    expect(touchSteerCurve(0.5, NaN)).toBe(touchSteerCurve(0.5, 3));
+  });
+
+  it('ignores key presses aimed at a form control but still switches to keyboard mode otherwise', () => {
+    (win as unknown as { matchMedia: unknown }).matchMedia = () => ({ matches: true });
+    const touchControls = new Controls(root as unknown as HTMLElement);
+    expect(touchControls.isTouch).toBe(true);
+    const keyAt = (code: string, tagName: string): void => {
+      const event = new Event('keydown', { cancelable: true });
+      Object.defineProperty(event, 'code', { value: code });
+      Object.defineProperty(event, 'target', { value: { tagName } });
+      win.dispatchEvent(event);
+    };
+    keyAt('ArrowRight', 'INPUT');
+    keyAt('Tab', 'BUTTON');
+    expect(touchControls.isTouch).toBe(true);
+    keyAt('ArrowRight', 'DIV');
+    expect(touchControls.isTouch).toBe(false);
+    touchControls.dispose();
+  });
+
+  it('is continuous at the dead-zone edge', () => {
+    for (const level of levels) expect(touchSteerCurve(0.0401, level)).toBeLessThan(0.001);
+  });
+
+  it('is below linear near the centre except at the linear level, and gentler at lower levels', () => {
+    const linear = (0.3 - 0.04) / 0.96;
+    expect(touchSteerCurve(0.3, 5)).toBeCloseTo(linear, 10);
+    for (const level of [1, 2, 3, 4]) expect(touchSteerCurve(0.3, level)).toBeLessThan(linear);
+    for (let level = 1; level < 5; level++) expect(touchSteerCurve(0.3, level)).toBeLessThan(touchSteerCurve(0.3, level + 1));
+  });
+
+  it('applies the setting to the sampled touch steer (sim sign flip aside)', () => {
+    const state = createRace(1);
+    while (state.phase !== 'racing') stepRace(state, state.karts.map(() => ({ ...neutral })));
+    const pad = root.children.get('#steering-pad')!;
+    const props = { pointerId: 1, pointerType: 'touch', button: 0, clientX: 130, clientY: 100 };
+    fire(pad, 'pointerdown', props);
+    const at = (level: number): number => {
+      controls.setSteerSensitivity(level);
+      fire(pad, 'pointermove', props);
+      return Math.abs(controls.sample(state, 0).steer);
+    };
+    const gentle = at(1);
+    const sharp = at(5);
+    expect(gentle).toBeGreaterThan(0);
+    expect(gentle).toBeLessThan(sharp);
   });
 });

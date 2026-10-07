@@ -447,3 +447,48 @@ h1 span { color: var(--lime); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* Driving settings (title + pause) */
+.assist-setting { display: flex; align-items: center; gap: 10px; min-height: 44px; max-width: 330px; font-size: 11px; font-weight: 700; cursor: pointer; }
+.assist-setting input { width: 20px; height: 20px; margin-left: auto; accent-color: var(--lime); cursor: pointer; }
+.assist-status { width: 3ch; }
+.assist-status::after { content: 'OFF'; }
+.assist-setting input:checked + .assist-status::after { content: 'ON'; }
+.pause-content .assist-setting { margin-bottom: 12px; }
+.pause-content .assist-setting input { accent-color: #2f7d5b; }
+.assist-setting input:focus-visible { outline: 2px solid currentColor; outline-offset: 4px; }
+@media (max-height: 420px) {
+  .title-content .title-record { margin-top: 4px; }
+  .pause-content .assist-setting { margin-bottom: 4px; }
+}
+.touch-only { display: none; }
+.touch-device .touch-only { display: flex; }
+.sens-setting { align-items: center; gap: 10px; margin-top: 14px; font-size: 10px; font-weight: 700; letter-spacing: .8px; }
+.sens-name { white-space: nowrap; }
+.sens-slider { flex: 1 1 auto; min-width: 0; width: 100%; max-width: 200px; height: 28px; accent-color: var(--lime); touch-action: pan-x; }
+.sens-value { min-width: 1ch; font-variant-numeric: tabular-nums; }
+.pause-content .sens-setting { margin: 0 0 16px; color: var(--ink); }
+.pause-content .sens-slider { accent-color: #2f7d5b; max-width: none; }
+@media (max-height: 420px) {
+  .sens-setting { margin-top: 8px; }
+  .pause-content .sens-setting { margin-bottom: 10px; }
+  .pause-content p { margin-bottom: 10px; }
+}
+.title-content .sens-setting { max-width: 330px; }
+@media (max-height: 420px) {
+  .touch-device .title-tagline, .touch-device .title-content > .eyebrow { display: none; }
+  .touch-device .title-content h1 { margin: 4px 0; font-size: 46px; }
+  .touch-device .title-content .start-button { margin-top: 8px; }
+  .title-content .sens-setting { margin-top: 6px; }
+  .title-content .sens-slider { height: 24px; }
+  .pause-content { padding: 18px 28px; }
+  .pause-content h2 { margin-top: 8px; font-size: 22px; }
+  .pause-content .eyebrow + h2 + p { margin-top: 6px; }
+  .pause-shortcut { margin-top: 9px; }
+}
+@media (max-height: 740px) and (max-width: 700px) and (orientation: portrait) {
+  .title-content > .eyebrow, .title-tagline { display: none; }
+  .title-content h1 { font-size: 52px; margin: 12px 0; }
+  .title-content .start-button { margin-top: 16px; }
+  .title-content .sens-setting, .title-content .title-record { margin-top: 8px; }
+}

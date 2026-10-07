@@ -124,5 +124,38 @@ v1・v2 の設計制約はそのまま維持する。設計の詳細は `.omc/pl
 
 ### COURSE_FINGERPRINT と版数の運用
 - `COURSE_FINGERPRINT`（`src/sim/tracks/index.ts`）は、全コースの `TrackDef` を JSON にして FNV-1a32 でハッシュした値。`Hello.course` に載せて送り、ホストが自分の値と比べる。違うクライアントは参加できない。
-- 現在の `PROTOCOL_VERSION` は 7。`LAYOUT_FINGERPRINT` は v7 の値 `f7b2a1f2`（v6 は `53ab24b2`）。`COURSE_FINGERPRINT` は v6 から変わらず、v7 のコースの pin は v6 と同じ値。
+- 現在の `PROTOCOL_VERSION` は 8。`LAYOUT_FINGERPRINT` は v7 から変わらず `f7b2a1f2`（v6 は `53ab24b2`）。`COURSE_FINGERPRINT` は v6 から変わらず、v7・v8 のコースの pin は v6 と同じ値。
 - **運用**: コースデータ（`src/sim/tracks/*.ts` など `TrackDef` に入る値）を変えたら `PROTOCOL_VERSION` を上げる。そのうえで `src/net/snapshotCodec.test.ts` の 2 つの pin（版数ごとの固定値）の両方に新しい版数を追加する。コースの pin には新しい `COURSE_FINGERPRINT` を、レイアウトの pin には `LAYOUT_FINGERPRINT` を入れる（レイアウトを変えていなければ前の版と同じ値）。さらに `src/sim/items.test.ts` の `PROTOCOL_VERSION` の assert も更新する。例外は、まだ公開していない版数のままコースを作っている間だけで、その間は同じ版数の pin の値を書き換えてよい（v6 はこの方法で 4 コースを作った）。v7 はルーレットでレイアウトを変えたため、2 つの pin のうちレイアウトの pin に `LAYOUT_FINGERPRINT` の新しい値を、コースの pin に前の版と同じ値を追加した。pin テストは指紋の変化を検知するが、版数の上げ忘れまでは検知しない。公開済みの版数の pin を書き換えないこと。
+
+## v5: ハンドリング・アシスト・壁・カメラ・プロトコル v8
+`PROTOCOL_VERSION` は 8（`src/net/protocol.ts:7`）。`ROOM_PREFIX` は `pcircuit-v8-` になり、v7 以前のクライアントとは同じルームに入れない。スナップショットのレイアウトは変わらないので、`LAYOUT_FINGERPRINT` は `f7b2a1f2` のまま（`src/net/protocol.ts`）。
+
+### 旋回（`src/sim/race.ts:189-193`）
+- `turnRate = max(1.72, 2.1 - max(0, speed - 15) * 0.025) * min(1, speed / 6) * (onIce ? 0.5 : 1)`。6 m/s で最大の旋回速度に達し（v4 までは 12 m/s）、15 m/s を超えると 1 m/s につき 0.025 ずつ下がる（下限 1.72）。氷上は 0.5 倍（v4 までは 0.55 倍）。
+- ドリフト中（`driftDirection !== 0`）の `turnRate` は通常時と同じ式（v4 までのドリフト専用の 1.95 は廃止）。ヨーは `steering = driftDirection * 0.75 + steer * 0.6`。通常時は `steering = steer`。`heading += steering * turnRate * FIXED_DT`。
+- ドリフトのヨーが `driftDirection * 0.75` を持つので、ステアが 0 でもドリフトは曲がり続ける。`steer` が -1 のときでも、`driftDirection = 1` なら `0.75 - 0.6 = 0.15` で、向きは反転しない。
+- スリップ角 `slip = driftDirection * min(0.23, driftTime * 0.35)`（`race.ts:196`）は v4 から変わらない。
+
+### ハンドルアシスト（`src/input/assist.ts`）
+- 自分の入力にだけ効く（`applySteerAssist`。予測とネットワークは補正後のフレームを使う）。`Controls` の `steerAssist` が真のときだけ強さ 1 で適用する（`src/input/Controls.ts:177`）。初期値は、設定がなければタッチ端末が ON、それ以外が OFF（`Controls.ts:127`）。
+- 補正量の上限は 0.35（`assist.ts:25`、`clamp(angle * 1.6, -0.35, 0.35)`）。
+- 先読み距離 `lookAhead = 10 + max(0, speed) * 0.3` m。壁際は `wallWeight = clamp(2 - (roadHalfWidth - |lateralOffset|), 0, 3)`。
+- 入力の大きさ `|steer|` による減衰: `intent = (1 - 0.65 * clamp(|steer|, 0, 1)) * strongInput`。`strongInput = 1 - 0.5 * clamp((|steer| - 0.6) / 0.2, 0, 1)` で、入力 0.6 から 0.8 にかけて 1 から 0.5 へ連続的に下がる（`assist.ts:28-29`）。ドリフト中は 0.35 倍（`assist.ts:30`）。
+- 逆向き（補正の向きとステア入力が逆）の上限は `cap = |steer| + |補正| * max(0, 1 - |steer| / 0.05)`（`assist.ts:35`）。つまり |入力| 0〜0.05 で連続的にかかり、|入力| が 0.05 以上なら補正が入力を打ち消して逆転することはない。
+- 無効になる条件: `wrongWay`、後退（`speed < 0`）、スピン中、空中、ホップ中、ドリフト開始前の `drift` 押下、進行方向との差が 90°（π/2）以上。
+
+### ステア感度（`src/input/Controls.ts:25-32`）
+- タッチのステアにだけ効く（`touchSteerCurve`）。`sign(x) * n^gamma`。`n` はデッドゾーン `STEER_DEADZONE`（0.04）を除いて 0〜1 に戻した値。`gamma = 1 + (5 - level) * 1.2 / 4`。レベル 1 が gamma 2.2、レベル 5 が gamma 1.0（線形）。
+- レベルは 1〜5 の整数で、`SENSITIVITY_DEFAULT` は 3（`src/storage.ts:7-9`）。`localStorage` のキーは `pocket-circuit.steer-sensitivity.v1`、アシストは `pocket-circuit.steer-assist.v1`（保存がなければ端末の既定に従う）。UI は `#sens-title` / `#sens-pause`、`#assist-title` / `#assist-pause`。
+
+### 壁（`collideWall`、`src/sim/race.ts:92-127`）
+- 壁にめり込んだ分だけ押し戻し、そのたびに再射影する（最大 4 回。曲がった区間で最も近い線分が変わっても、めり込みを残さない）。
+- 速度の損失は壁との入射角で決まる。角度 `angle = atan2(outward, tangent)`、`blend = clamp((angle - π/9) / (2π/9), 0, 1)`、`speed *= 1 + (tangent - 1) * blend`。入射角 20°（π/9）以下では減速せず、60°（π/9 + 2π/9 = π/3）以上で従来どおりの接線成分ぶんの減速になり、その間は連続的につなぐ。
+
+### カメラの先読み（`src/render/cameraLookAhead.ts`）
+- `LOOK_AHEAD_DISTANCE = 22` m 先のコース接線との角度（`trackTurn`）に 6 m/rad（`LOOK_AHEAD_GAIN`）を掛けた分だけ、注視点をカーブの内側へずらす。上限は `LOOK_AHEAD_MAX = 3.5` m。
+- `alignment`（車の向きとコース接線の内積）が 0.3 以下なら 0、0.3 から 0.7 にかけて 0 から 1 へ増える（`fade = min(1, (alignment - 0.3) / 0.4)`）。逆走・横向きでは効かない。
+- `prefers-reduced-motion: reduce` のときは常に 0（`lookAheadOffset` の `reducedMotion`）。`GameRenderer` が起動時に一度だけ読む。
+
+### E2E（`e2e/handling.spec.ts`）
+アシスト ON・無操作の 8 秒で壁に張り付かないこと、感度スライダーがリロード後も残ること、reduced-motion でカメラの先読みが 0 になること（通常時は 0 より大きいことも確認）を検証する。

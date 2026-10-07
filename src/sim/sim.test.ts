@@ -567,6 +567,7 @@ describe('driving and items', () => {
     state.racingTicks++;
     expect(decideItemUse(state, kart)).toBe(false);
     kart.aiPhase = Math.PI / 2;
+    place(kart, 30, 2.5);
     const clear = getAIInput(state, kart.id);
     expect(Math.abs(clear.steer)).toBeLessThan(0.6);
     kart.effects.inkTime = 4;
@@ -671,23 +672,31 @@ describe('driving and items', () => {
 });
 
 describe('CPU race integration', () => {
-  it.each(TRACK_IDS)('finishes %s with eight CPUs and matches JSON resumes every tick', trackId => {
-    const state = createRace(42, { trackId, racers: [] });
-    let restored: RaceState = JSON.parse(JSON.stringify(state));
-    let rouletteTicks = 0;
-    for (let tick = 0; tick < 60 * 180 && state.phase !== 'finished'; tick++) {
-      stepRace(state, state.karts.map(kart => getAIInput(state, kart.id)));
-      stepRace(restored, restored.karts.map(kart => getAIInput(restored, kart.id)));
-      expect(JSON.stringify(restored), `tick ${tick}`).toBe(JSON.stringify(state));
-      if (state.karts.some(kart => kart.effects.rouletteTime > 0)) rouletteTicks++;
-      if (tick % 137 === 0) restored = JSON.parse(JSON.stringify(restored));
-    }
-    expect(rouletteTicks).toBeGreaterThan(0);
-    expect(state.phase).toBe('finished');
-    expect(isRaceTimedOut(state)).toBe(false);
-    expect(state.karts.every(kart => !kart.human && kart.lap === 3 &&
-      kart.lapTimes.length === 3 && kart.finishTime !== null)).toBe(true);
-  }, 30_000);
+  it.each(TRACK_IDS.flatMap(trackId => [1, 42, 98765].map(seed => ({ trackId, seed }))))(
+    'finishes $trackId with eight CPUs and matches JSON resumes every tick (seed $seed)', ({ trackId, seed }) => {
+      const state = createRace(seed, { trackId, racers: [] });
+      const course = getTrack(trackId);
+      let restored: RaceState = JSON.parse(JSON.stringify(state));
+      let rouletteTicks = 0;
+      for (let tick = 0; tick < 60 * 180 && state.phase !== 'finished'; tick++) {
+        stepRace(state, state.karts.map(kart => getAIInput(state, kart.id)));
+        stepRace(restored, restored.karts.map(kart => getAIInput(restored, kart.id)));
+        expect(JSON.stringify(restored), `tick ${tick}`).toBe(JSON.stringify(state));
+        for (const kart of state.karts) {
+          const projection = projectToTrack(course, kart.x, kart.z, kart.trackDistance);
+          expect(Math.abs(projection.offset) + KART_RADIUS, `tick ${tick}, kart ${kart.id}`)
+            .toBeLessThanOrEqual(course.def.wallHalfWidth + 1e-6);
+        }
+        if (state.karts.some(kart => kart.effects.rouletteTime > 0)) rouletteTicks++;
+        if (tick % 137 === 0) restored = JSON.parse(JSON.stringify(restored));
+      }
+      expect(rouletteTicks).toBeGreaterThan(0);
+      expect(state.phase).toBe('finished');
+      expect(state.karts).toHaveLength(8);
+      expect(isRaceTimedOut(state)).toBe(false);
+      expect(state.karts.every(kart => !kart.human && kart.lap === 3 &&
+        kart.lapTimes.length === 3 && kart.finishTime !== null)).toBe(true);
+    }, 30_000);
 
   it('resolves eight-CPU races across ten seeds, using all fourteen items from boxes', () => {
     const uses = new Set<string>();
@@ -877,7 +886,7 @@ describe('CPU finish independence', () => {
 });
 
 describe('wall contact velocity', () => {
-  it('loses speed in proportion to impact angle and removes the outward velocity once', () => {
+  it('preserves glancing speed, slows steep impacts and removes the outward velocity once', () => {
     const impact = (angle: number, offset: number): RaceState => {
       const state = startRace();
       const kart = state.karts[0]!;
@@ -913,8 +922,12 @@ describe('wall contact velocity', () => {
     kart.heading += 0.12;
     kart.speed = 14;
     for (let tick = 0; tick < 120; tick++) {
+      const heading = kart.heading;
       stepRace(state, [{ ...accelerate, steer: 0.15, drift }]);
       expect(Math.abs(kart.lateralOffset)).toBeLessThanOrEqual(track.def.wallHalfWidth - KART_RADIUS + 0.01);
+      expect(Math.cos(kart.heading - heading)).toBeGreaterThan(0.98);
+      expect(Math.abs(projectToTrack(track, kart.x, kart.z).offset))
+        .toBeLessThanOrEqual(track.def.wallHalfWidth - KART_RADIUS + 1e-6);
     }
     expect(kart.speed).toBeGreaterThan(11);
     expect(kart.trackDistance).toBeGreaterThan(45);

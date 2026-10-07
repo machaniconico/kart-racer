@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { getTrack, sampleTrack } from '../sim';
 import type { RaceState, Track, TrackId } from '../sim';
+import { LOOK_AHEAD_DISTANCE, lookAheadOffset, trackTurn } from './cameraLookAhead';
 import type { RenderSnapshot } from './snapshot';
 import { buildCourse, disposeObjectTree, type Course } from './course/buildCourse';
 import type { CourseTheme } from './course/CourseTheme';
@@ -44,6 +45,8 @@ export class GameRenderer {
   private readonly cameraTarget = new THREE.Vector3();
   private readonly desiredCamera = new THREE.Vector3();
   private readonly desiredTarget = new THREE.Vector3();
+  // World-space (x, z) look-at shift, so a kart flipping round mid-blend cannot mirror it outward.
+  private readonly lookAhead = { x: 0, z: 0 };
   private readonly sunOffset: THREE.Vector3;
   private readonly transform = new THREE.Object3D();
   private readonly kartVisuals: KartVisual[] = [];
@@ -285,7 +288,15 @@ export class GameRenderer {
       const swing = this.reducedMotion ? 0 : player.driftDirection * Math.min(player.driftTime, 1) * 1.1;
       const distance = this.reducedMotion ? 10 : 9.5 + Math.max(0, player.speed - 20) * 0.055;
       this.desiredCamera.set(playerPosition.x - Math.sin(heading) * distance + Math.cos(heading) * swing, playerPosition.y + 5.1, playerPosition.z - Math.cos(heading) * distance - Math.sin(heading) * swing);
-      this.desiredTarget.set(playerPosition.x + Math.sin(heading) * 6, playerPosition.y + 1.35, playerPosition.z + Math.cos(heading) * 6);
+      const here = sampleTrack(this.track, player.trackDistance);
+      const ahead = sampleTrack(this.track, player.trackDistance + LOOK_AHEAD_DISTANCE);
+      const alignment = Math.sin(heading) * here.tx + Math.cos(heading) * here.tz;
+      const lookTarget = lookAheadOffset(trackTurn(here.tx, here.tz, ahead.tx, ahead.tz), this.reducedMotion, alignment);
+      // +lateral along the track itself is (tz, -tx): (cos h, -sin h) with (sin h, cos h) = (tx, tz).
+      const blend = this.cameraReady ? 1 - Math.exp(-dt * 3) : 1;
+      this.lookAhead.x += (lookTarget * here.tz - this.lookAhead.x) * blend;
+      this.lookAhead.z += (-lookTarget * here.tx - this.lookAhead.z) * blend;
+      this.desiredTarget.set(playerPosition.x + Math.sin(heading) * 6 + this.lookAhead.x, playerPosition.y + 1.35, playerPosition.z + Math.cos(heading) * 6 + this.lookAhead.z);
     }
     const follow = this.cameraReady ? 1 - Math.exp(-dt * 7) : 1;
     this.camera.position.lerp(this.desiredCamera, follow);

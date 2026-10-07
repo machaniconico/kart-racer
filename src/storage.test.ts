@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { loadBest, saveBest } from './storage';
+import { loadBest, loadSensitivity, loadSteerAssist, saveBest, saveSensitivity, saveSteerAssist } from './storage';
 import { TRACK_IDS } from './sim/tracks';
 
 const V1 = 'pocket-circuit.best.v1';
@@ -15,6 +15,32 @@ beforeEach(() => {
   });
 });
 afterEach(() => vi.unstubAllGlobals());
+
+describe('storage steer assist', () => {
+  it('preserves an unset preference and round-trips both explicit choices', () => {
+    expect(loadSteerAssist()).toBeNull();
+    for (const value of [true, false]) {
+      saveSteerAssist(value);
+      expect(loadSteerAssist()).toBe(value);
+    }
+  });
+
+  it('treats corrupt values as unset', () => {
+    for (const value of ['', '0', '1', 'null', 'TRUE']) {
+      store.set('pocket-circuit.steer-assist.v1', value);
+      expect(loadSteerAssist()).toBeNull();
+    }
+  });
+
+  it('remains usable when storage is denied', () => {
+    vi.stubGlobal('localStorage', {
+      getItem: () => { throw new Error('denied'); },
+      setItem: () => { throw new Error('denied'); },
+    });
+    expect(loadSteerAssist()).toBeNull();
+    expect(() => saveSteerAssist(true)).not.toThrow();
+  });
+});
 
 describe('storage best times', () => {
   it('round-trips per track in v2', () => {
@@ -118,5 +144,23 @@ describe('storage best times', () => {
   it('saves and loads every registered course', () => {
     TRACK_IDS.forEach((id, index) => saveBest(id, 40 + index));
     TRACK_IDS.forEach((id, index) => expect(loadBest(id)).toBe(40 + index));
+  });
+});
+
+describe('storage steer sensitivity', () => {
+  it('defaults to 3, round-trips, and rejects invalid values', () => {
+    expect(loadSensitivity()).toBe(3);
+    saveSensitivity(5);
+    expect(loadSensitivity()).toBe(5);
+    for (const bad of ['0', '6', '2.5', 'abc']) {
+      store.set('pocket-circuit.steer-sensitivity.v1', bad);
+      expect(loadSensitivity()).toBe(3);
+    }
+  });
+
+  it('survives throwing storage', () => {
+    vi.stubGlobal('localStorage', { getItem: () => { throw new Error('denied'); }, setItem: () => { throw new Error('denied'); } });
+    expect(loadSensitivity()).toBe(3);
+    expect(() => saveSensitivity(2)).not.toThrow();
   });
 });

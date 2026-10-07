@@ -541,7 +541,7 @@ describe('effect snapshot compatibility and deterministic replay', () => {
       hash = Math.imul(hash ^ character.charCodeAt(0), 0x01000193) >>> 0;
     }
     expect(hash.toString(16).padStart(8, '0')).toBe(LAYOUT_FINGERPRINT);
-    expect(PROTOCOL_VERSION).toBe(7);
+    expect(PROTOCOL_VERSION).toBe(8);
     const state = race();
     state.karts[0]!.item = 'rapidDash';
     press(state, state.karts[0]!);
@@ -1269,7 +1269,7 @@ describe('I3 ink and autopilot', () => {
       kart.effects.inkTime = 4;
       const inked = getAIInput(state, kart.id);
       expect(inked.steer).toBeCloseTo(Math.max(-1, Math.min(1,
-        getSteeringError(state, kart) * 1.8 + 0.35 * Math.sin(time * 7 + kart.aiPhase))), 10);
+        getSteeringError(state, kart) * 2.3 + 0.35 * Math.sin(time * 7 + kart.aiPhase))), 10);
       expect(inked.throttle).toBe(clear.throttle);
       expect(getAIInput(JSON.parse(JSON.stringify(state)), kart.id)).toEqual(inked);
       advanceItems(track, state, 4);

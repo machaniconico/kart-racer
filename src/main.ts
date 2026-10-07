@@ -11,7 +11,7 @@ import { createRace, FIXED_DT, getAIInput, getTrack, stepRace, TRACK_IDS } from 
 import type { InputFrame, InputSource, RaceState, TrackId } from './sim';
 import { GameUI } from './ui/GameUI';
 import { LobbyUI } from './ui/LobbyUI';
-import { loadBest, loadMuted, saveBest, saveMuted } from './storage';
+import { loadBest, loadMuted, loadSensitivity, loadSteerAssist, saveBest, saveMuted, saveSensitivity, saveSteerAssist } from './storage';
 
 const root = document.querySelector<HTMLDivElement>('#app')!;
 const ui = new GameUI(root, 0);
@@ -25,6 +25,13 @@ let course: TrackId = 'meadow';
 let muted = loadMuted();
 audio.setMuted(muted);
 ui.setMuted(muted);
+let sensitivity = loadSensitivity();
+controls.setSteerSensitivity(sensitivity);
+ui.setSensitivity(sensitivity);
+const savedAssist = loadSteerAssist();
+if (savedAssist !== null) controls.setSteerAssist(savedAssist);
+ui.setSteerAssist(controls.steerAssist);
+root.addEventListener('input-device-change', () => ui.setSteerAssist(controls.steerAssist));
 ui.setCourse(course, loadBest(course));
 
 function seed(): number {
@@ -402,6 +409,24 @@ bind('mute', () => {
   saveMuted(muted);
   if (!muted && screen === 'race' && !paused) void audio.unlock();
 });
+
+for (const id of ['assist-title', 'assist-pause']) {
+  root.querySelector(`#${id}`)?.addEventListener('change', (event) => {
+    const enabled = (event.target as HTMLInputElement).checked;
+    controls.setSteerAssist(enabled);
+    ui.setSteerAssist(enabled);
+    saveSteerAssist(enabled);
+  });
+}
+
+for (const id of ['sens-title', 'sens-pause']) {
+  root.querySelector(`#${id}`)?.addEventListener('input', (event) => {
+    sensitivity = Number((event.target as HTMLInputElement).value);
+    controls.setSteerSensitivity(sensitivity);
+    ui.setSensitivity(sensitivity);
+    saveSensitivity(sensitivity);
+  });
+}
 
 window.addEventListener('keydown', (event) => {
   if (event.code === 'Escape' && screen === 'race') { event.preventDefault(); pause(!(paused || leaving)); }

@@ -92,14 +92,20 @@ function updateProjection(track: Track, kart: KartState): void {
 function collideWall(track: Track, state: RaceState, kart: KartState): void {
   const limit = track.def.wallHalfWidth - KART_RADIUS;
   if (Math.abs(kart.lateralOffset) <= limit) return;
-  const sample = sampleTrack(track, kart.trackDistance);
+  let sample = sampleTrack(track, kart.trackDistance);
   const side = Math.sign(kart.lateralOffset);
   // Correct only penetration; rebuilding from the centre sample erases travel
   // along the rail at polyline vertices and can pin a sliding kart in place.
-  const penetration = kart.lateralOffset - limit * side;
-  kart.x -= sample.nx * penetration;
-  kart.z -= sample.nz * penetration;
-  kart.lateralOffset = limit * side;
+  // Reproject after each correction: curved sections can change the nearest
+  // segment and leave a small residual penetration along its new normal.
+  for (let correction = 0; correction < 4; correction++) {
+    const penetration = kart.lateralOffset - limit * side;
+    kart.x -= sample.nx * penetration;
+    kart.z -= sample.nz * penetration;
+    updateProjection(track, kart);
+    sample = sampleTrack(track, kart.trackDistance);
+    if (Math.abs(kart.lateralOffset) <= limit + 1e-9) break;
+  }
   const slip = kart.driftDirection * Math.min(0.23, kart.driftTime * 0.35);
   const travelHeading = kart.heading - slip;
   const outward = (Math.sin(travelHeading) * sample.nx + Math.cos(travelHeading) * sample.nz) * side;
@@ -108,13 +114,15 @@ function collideWall(track: Track, state: RaceState, kart: KartState): void {
       state.events.push({ type: 'hit', kartId: kart.id });
       kart.hitCooldown = 0.7;
     }
-    // Remove the incoming normal velocity once. Tangential velocity survives,
-    // so sustained shallow contact slides instead of multiplying drag each tick.
+    // Measure incidence from the rail: glancing contact keeps its speed, while
+    // impacts at 60 degrees or more retain the original tangential slowdown.
     const vx = Math.sin(travelHeading) - sample.nx * side * outward;
     const vz = Math.cos(travelHeading) - sample.nz * side * outward;
     const tangent = Math.hypot(vx, vz);
-    kart.speed *= tangent;
-    kart.heading = (tangent > 0.0001 ? Math.atan2(vx, vz) : Math.atan2(sample.tx, sample.tz)) + slip;
+    const angle = Math.atan2(outward, tangent);
+    const blend = Math.max(0, Math.min(1, (angle - Math.PI / 9) / (2 * Math.PI / 9)));
+    kart.speed *= 1 + (tangent - 1) * blend;
+    kart.heading = (tangent > 1e-12 ? Math.atan2(vx, vz) : Math.atan2(sample.tx, sample.tz)) + slip;
   }
 }
 
@@ -177,8 +185,12 @@ function advanceKart(track: Track, state: RaceState, kart: KartState, input: Inp
   if (kart.speed > maxSpeed) kart.speed += (maxSpeed - kart.speed) * Math.min(1, FIXED_DT * (onGrass ? 6 : 4));
   kart.steer += (input.steer - kart.steer) * Math.min(1, FIXED_DT * (onIce ? 6 : 12));
   if (!spinning) {
-    const turnRate = (kart.driftDirection !== 0 ? 1.95 : 1.72) * Math.min(1, kart.speed / 12) * (onIce ? 0.55 : 1);
-    kart.heading += kart.steer * turnRate * FIXED_DT;
+    // Reach full steering at low speed, then ease it off through fast corners.
+    const turnRate = Math.max(1.72, 2.1 - Math.max(0, kart.speed - 15) * 0.025) *
+      Math.min(1, kart.speed / 6) * (onIce ? 0.5 : 1);
+    // Countersteering opens the arc without reversing an established drift.
+    const steering = kart.driftDirection === 0 ? kart.steer : kart.driftDirection * 0.75 + kart.steer * 0.6;
+    kart.heading += steering * turnRate * FIXED_DT;
     kart.heading = Math.atan2(Math.sin(kart.heading), Math.cos(kart.heading));
   }
   const slip = kart.driftDirection * Math.min(0.23, kart.driftTime * 0.35);

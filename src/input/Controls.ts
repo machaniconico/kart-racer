@@ -1,5 +1,6 @@
 import type { InputFrame, InputSource, RaceState } from '../sim/types';
 import { playerSteerToSim } from '../sim/steer';
+import { applySteerAssist } from './assist';
 
 type TouchAction = 'steer' | 'throttle' | 'brake' | 'drift' | 'item';
 
@@ -12,7 +13,23 @@ const ITEM_KEYS = new Set(['ShiftLeft', 'ShiftRight', 'KeyE']);
 const neutral = (): InputFrame => ({
   steer: 0, throttle: 0, brake: false, drift: false, useItem: false,
 });
+const STEER_DEADZONE = 0.04;
+const SENSITIVITY_LEVELS = 5;
+const SENSITIVITY_DEFAULT = 3;
 const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
+
+/**
+ * Touch steering curve: sign(x) * n^gamma, where n is the input past the dead zone rescaled to 0..1.
+ * Level 1 is gentlest (gamma 2.2), level 5 is linear (gamma 1.0).
+ */
+export function touchSteerCurve(raw: number, level: number): number {
+  if (Number.isNaN(raw)) return 0;
+  const lv = Number.isNaN(level) ? SENSITIVITY_DEFAULT : clamp(Math.round(level), 1, SENSITIVITY_LEVELS);
+  const gamma = 1 + ((SENSITIVITY_LEVELS - lv) * 1.2) / (SENSITIVITY_LEVELS - 1);
+  const magnitude = Math.abs(clamp(raw, -1, 1));
+  if (magnitude < STEER_DEADZONE) return 0;
+  return Math.sign(raw) * Math.pow((magnitude - STEER_DEADZONE) / (1 - STEER_DEADZONE), gamma);
+}
 
 /** Converts every local input device into the same fixed-tick simulation input. */
 export class Controls implements InputSource {
@@ -27,6 +44,8 @@ export class Controls implements InputSource {
   private readonly knob: HTMLElement | null;
   private readonly autoButton: HTMLButtonElement | null;
   private steering = 0;
+  private sensitivity = SENSITIVITY_DEFAULT;
+  private assistPreference: boolean | null = null;
   private itemQueued = false;
   // A gamepad item button still held across reset() stays ignored until it is released.
   private gamepadItemSuppressed = false;
@@ -96,6 +115,22 @@ export class Controls implements InputSource {
     this.applyAutoAccelerate(value);
   }
 
+  get steerSensitivity(): number {
+    return this.sensitivity;
+  }
+
+  setSteerSensitivity(level: number): void {
+    this.sensitivity = Number.isNaN(level) ? SENSITIVITY_DEFAULT : clamp(Math.round(level), 1, SENSITIVITY_LEVELS);
+  }
+
+  get steerAssist(): boolean {
+    return this.assistPreference ?? this.isTouch;
+  }
+
+  setSteerAssist(enabled: boolean): void {
+    this.assistPreference = enabled;
+  }
+
   private applyAutoAccelerate(value: boolean): void {
     this.auto = value;
     this.autoButton?.setAttribute('aria-pressed', String(value));
@@ -108,8 +143,14 @@ export class Controls implements InputSource {
     this.reset();
   }
 
-  sample(state: RaceState, _kartId: number): InputFrame {
+  sample(state: RaceState, kartId: number): InputFrame {
     const gamepad = this.readGamepad();
+    if (gamepad.steer !== 0 || gamepad.throttle > 0 || gamepad.brake || gamepad.drift || gamepad.useItem) {
+      // A fresh gamepad press switches devices without becoming a held-across-reset press.
+      const suppressed = this.gamepadItemSuppressed;
+      this.setTouchMode(false);
+      this.gamepadItemSuppressed = suppressed;
+    }
     if (!gamepad.useItem) this.gamepadItemSuppressed = false;
     if (this.gamepadItemSuppressed) gamepad.useItem = false;
 
@@ -132,7 +173,8 @@ export class Controls implements InputSource {
       useItem: this.itemQueued || this.itemHeld() || gamepad.useItem,
     };
     this.itemQueued = false;
-    return frame;
+    const kart = state.karts.find((candidate) => candidate.id === kartId);
+    return this.steerAssist && kart ? applySteerAssist(state, kart, frame, 1) : frame;
   }
 
   reset(): void {
@@ -166,6 +208,11 @@ export class Controls implements InputSource {
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
     if (event.ctrlKey || event.metaKey || event.altKey) return;
+    // Keys aimed at a form control (e.g. the sensitivity slider) and Tab navigation are not driving input.
+    const tag = (event.target as Element | null)?.tagName;
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || event.code === 'Tab') return;
+    // Shift alone (e.g. Shift+Tab in a menu) is not gameplay while the race is not accepting input.
+    if (!this.enabled && ITEM_KEYS.has(event.code) && event.code.startsWith('Shift')) return;
     this.setTouchMode(false);
     this.applyAutoAccelerate(false);
     if (!this.enabled || !GAME_KEYS.has(event.code)) return;
@@ -189,6 +236,7 @@ export class Controls implements InputSource {
     this.touchMode = value;
     this.root.classList.toggle('touch-device', value);
     this.applyAutoAccelerate(value ? this.touchAuto : false);
+    this.root.dispatchEvent(new Event('input-device-change'));
   }
 
   private bindPointer(element: HTMLElement | null, action: TouchAction): void {
@@ -237,7 +285,7 @@ export class Controls implements InputSource {
     const distance = Math.hypot(x, y);
     if (distance > radius) { x *= radius / distance; y *= radius / distance; }
     const raw = clamp(x / radius, -1, 1);
-    this.steering = Math.abs(raw) < 0.04 ? 0 : raw;
+    this.steering = touchSteerCurve(raw, this.sensitivity);
     this.moveKnob(x, y);
   }
 

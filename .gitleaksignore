@@ -1,1 +1,5 @@
 src/storage.ts:generic-api-key:2
+# localStorage key names (not secrets)
+src/storage.ts:generic-api-key:4
+src/storage.ts:generic-api-key:5
+e2e/handling.spec.ts:generic-api-key:7

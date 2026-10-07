@@ -82,6 +82,8 @@ export class GameUI {
           <p class="title-tagline">曲がれ。風になれ。</p>
           <p class="title-description">丘を越えて、カーブを抜けて。<br>7台のライバルと、3周の小さな冒険。</p>
           <button id="start-race" class="primary-button start-button" type="button"><span>レースをはじめる</span>${arrow}</button>
+          <label class="sens-setting touch-only"><span class="sens-name">ステア感度</span><input id="sens-title" class="sens-slider" type="range" min="1" max="5" step="1" value="3" aria-label="ステア感度（左: ゆるやか、右: 敏感）"><output class="sens-value">3</output></label>
+          <label class="assist-setting"><span>ハンドルアシスト</span><input id="assist-title" type="checkbox" role="switch"><span class="assist-status" aria-hidden="true"></span></label>
           <div class="title-record"><span>PERSONAL BEST</span><strong id="title-best">まだ記録はありません</strong></div>
         </div>
         <aside class="title-help" aria-label="操作方法">
@@ -120,7 +122,7 @@ export class GameUI {
         </div>
       </section>
 
-      <section id="pause-dialog" class="modal-overlay" hidden><div class="pause-content" role="dialog" aria-modal="true" aria-labelledby="pause-heading"><span id="pause-eyebrow" class="eyebrow">TAKE A BREATHER</span><h2 id="pause-heading">ひとやすみ。</h2><p id="pause-message">レースはここで待っています。</p><button id="resume-race" class="primary-button" type="button"><span id="resume-label">レースをつづける</span>${arrow}</button><button id="quit-race" class="secondary-button" type="button">タイトルへ戻る</button><span class="pause-shortcut"><kbd>ESC</kbd> で<span id="pause-shortcut-label">再開</span></span></div></section>
+      <section id="pause-dialog" class="modal-overlay" hidden><div class="pause-content" role="dialog" aria-modal="true" aria-labelledby="pause-heading"><span id="pause-eyebrow" class="eyebrow">TAKE A BREATHER</span><h2 id="pause-heading">ひとやすみ。</h2><p id="pause-message">レースはここで待っています。</p><label class="sens-setting touch-only"><span class="sens-name">ステア感度</span><input id="sens-pause" class="sens-slider" type="range" min="1" max="5" step="1" value="3" aria-label="ステア感度（左: ゆるやか、右: 敏感）"><output class="sens-value">3</output></label><label class="assist-setting"><span>ハンドルアシスト</span><input id="assist-pause" type="checkbox" role="switch"><span class="assist-status" aria-hidden="true"></span></label><button id="resume-race" class="primary-button" type="button"><span id="resume-label">レースをつづける</span>${arrow}</button><button id="quit-race" class="secondary-button" type="button">タイトルへ戻る</button><span class="pause-shortcut"><kbd>ESC</kbd> で<span id="pause-shortcut-label">再開</span></span></div></section>
       <section id="net-dialog" class="modal-overlay error-overlay" hidden><div class="pause-content" role="alertdialog" aria-modal="true" aria-labelledby="net-heading"><span class="eyebrow">CONNECTION LOST</span><h2 id="net-heading">接続が切れました</h2><p id="net-message"></p><button id="net-dialog-ok" class="primary-button" type="button">タイトルへ戻る</button></div></section>
       <p id="host-notice" class="host-notice" role="note" hidden>ホスト中 · この画面を閉じたり切り替えたりしないでください</p>
       <section id="error-dialog" class="modal-overlay error-overlay" hidden><div class="pause-content" role="alertdialog" aria-modal="true" aria-labelledby="error-heading"><span class="eyebrow">A SMALL PIT STOP</span><h2 id="error-heading">スタートできませんでした</h2><p id="error-message"></p><button id="reload-page" class="primary-button" type="button">ページを再読み込み</button></div></section>
@@ -406,6 +408,20 @@ export class GameUI {
     this.text('sound-label', muted ? 'SOUND OFF' : 'SOUND ON');
   }
 
+  setSteerAssist(enabled: boolean): void {
+    for (const id of ['assist-title', 'assist-pause']) this.get<HTMLInputElement>(id).checked = enabled;
+  }
+
+  setSensitivity(level: number): void {
+    for (const id of ['sens-title', 'sens-pause']) {
+      const slider = this.get<HTMLInputElement>(id);
+      slider.value = String(level);
+      slider.setAttribute('aria-valuetext', `${level} / 5`);
+      const out = slider.nextElementSibling;
+      if (out) out.textContent = String(level);
+    }
+  }
+
   showError(message: string): void {
     this.text('error-message', message);
     this.get('error-dialog').hidden = false;
@@ -440,7 +456,8 @@ export class GameUI {
 
   private trapFocus(event: KeyboardEvent): void {
     if (event.key !== 'Tab') return;
-    const first = this.get('resume-race');
+    const slider = this.get('sens-pause');
+    const first = slider.getClientRects().length > 0 ? slider : this.get('assist-pause');
     const last = this.get('quit-race');
     if (event.shiftKey && document.activeElement === first) {
       event.preventDefault();
