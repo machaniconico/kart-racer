@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { projectToTrack } from '../../../sim';
 import type { Track } from '../../../sim';
-import type { CourseTheme, SceneryBudget } from '../CourseTheme';
+import type { SceneryBudget } from '../CourseTheme';
+import type { CourseTheme } from '../buildCourse';
 import { material, terrainHeight } from '../buildCourse';
 
 export const snowpeak: CourseTheme = {
@@ -11,7 +12,8 @@ export const snowpeak: CourseTheme = {
     curb: [0x48748d, 0xf4f8fa], rail: 0xc5d6e0, post: 0x496778, dash: 0xc3d4de,
     gate: 0x315c75, bannerBackground: '#315c75', bannerText: '#ffffff',
     checker: [0xf8fcff, 0x294659], signBackground: '#edf6fa', signText: '#315c75',
-    surfaces: { ice: 0x9fdfed, boost: 0x64e3a8, jump: 0xffbe62 },
+    surfaces: { ice: 0x9fdfed, boost: 0x64e3a8, jump: 0xffbe62, dirt: 0x887059, pit: 0x302724, spin: 0xb77ee0 },
+    barrier: 0x728a9a,
   },
   // The horizon matches the fog so distant peaks fade without a hard silhouette.
   fog: { color: 0xdce8ed, near: 65, far: 330 },

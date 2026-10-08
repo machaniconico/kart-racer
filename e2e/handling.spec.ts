@@ -65,6 +65,58 @@ test.describe('touch device', () => {
     await expect(page.locator('#race-screen')).toBeVisible();
     expect(await page.locator('#sens-pause').inputValue()).toBe('5');
   });
+
+  test('M1-06: CANYON touch assist clears the narrow section and pillars without hits in 20 s', async ({ page }, testInfo) => {
+    await page.goto('./');
+    await page.waitForFunction(() => !!window.__kartDebug);
+    await page.locator('#course-select input[value="canyon"]').check();
+    await expect(page.locator('#assist-title')).toBeChecked();
+    await page.locator('#start-race').click();
+    await expect(page.locator('#race-screen')).toBeVisible();
+    await expect(page.locator('#auto-accelerate')).toHaveAttribute('aria-pressed', 'true');
+    await page.waitForFunction(() => window.__kartDebug.state.phase === 'racing');
+
+    const { widthKeys = [], barriers = [] } = getTrack('canyon').def;
+    expect(widthKeys.length).toBeGreaterThan(0);
+    expect(barriers.length).toBeGreaterThan(0);
+    const narrow = { from: widthKeys[0].distance, to: widthKeys[widthKeys.length - 1].distance };
+    const log = await page.evaluate(({ narrow, barriers }) => {
+      const debug = window.__kartDebug;
+      const startTime = debug.state.time;
+      const distances: number[] = [];
+      const hitEvents: { time: number; trackDistance: number; lateralOffset: number; value?: number }[] = [];
+      for (let tick = 0; tick < 60 * 20; tick++) {
+        // This run measures the assist against walls and bands only, so take CPU items out of play:
+        // a stray shell or banana spin would otherwise count as a hit and make the result seed-dependent.
+        debug.state.projectiles = [];
+        debug.state.traps = [];
+        for (const kart of debug.state.karts) if (kart.id !== 0) kart.item = null;
+        // Keep Controls' touch assist and auto-accelerate active; no AI autopilot or driver input.
+        debug.advance(1);
+        // Events are replaced each tick, so count every player hit before advancing again.
+        const { trackDistance, lateralOffset } = debug.state.karts[0];
+        for (const event of debug.state.events.filter(event => event.type === 'hit' && event.kartId === 0)) {
+          hitEvents.push({ time: debug.state.time, trackDistance, lateralOffset, value: event.value });
+        }
+        distances.push(trackDistance);
+      }
+      return {
+        hits: hitEvents.length, hitEvents, elapsed: debug.state.time - startTime, trackId: debug.state.trackId,
+        phase: debug.state.phase, trackDistance: debug.state.karts[0].trackDistance,
+        enteredNarrow: distances.some(distance => distance >= narrow.from && distance <= narrow.to),
+        passedPillars: barriers.map(barrier => distances.some(distance => distance >= barrier.from && distance <= barrier.to)),
+      };
+    }, { narrow, barriers });
+    await testInfo.attach('canyon-touch-assist', { body: JSON.stringify(log), contentType: 'application/json' });
+    expect(log.trackId).toBe('canyon');
+    expect(log.phase).toBe('racing');
+    expect(log.elapsed).toBeCloseTo(20, 6);
+    expect(log.enteredNarrow).toBe(true);
+    expect(log.passedPillars).toEqual(barriers.map(() => true));
+    expect(log.trackDistance).toBeGreaterThan(narrow.to);
+    expect(log.trackDistance).toBeGreaterThan(Math.max(...barriers.map(barrier => barrier.to)));
+    expect(log.hits, JSON.stringify(log)).toBe(0);
+  });
 });
 
 // GameRenderer reads prefers-reduced-motion once at construction, so emulate it before the first navigation.

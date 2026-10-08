@@ -1,6 +1,7 @@
 import { sampleTrack } from './track';
 import { getTrack } from './tracks';
 import { racingLineOffset } from './surfaces';
+import { corridorAt, freeIntervalFor, KART_RADIUS, widthAt } from './corridor';
 import { getRank } from './laps';
 import type { ProjectileState } from './itemTypes';
 import type { KartState, RaceState } from './types';
@@ -14,8 +15,18 @@ export function getSteeringError(state: RaceState, kart: KartState): number {
   let lineOffset = Math.sin(kart.aiPhase + state.time * 0.12) * 2.5;
   if (track.def.racingLine.length > 0) {
     lineOffset += racingLineOffset(track, targetDistance);
-    const limit = Math.max(0, track.def.roadHalfWidth - 1);
+    const limit = Math.max(0, widthAt(track, targetDistance).roadHalfWidth - 1);
     lineOffset = Math.max(-limit, Math.min(limit, lineOffset));
+  }
+  if (track.def.barriers?.length) {
+    // Stay in the passage nearest the kart, evaluated when the kart will arrive there.
+    const intervals = corridorAt(track, targetDistance, state.time + (targetDistance - kart.trackDistance) / Math.max(kart.speed, 8));
+    const passage = freeIntervalFor(intervals, kart.lateralOffset);
+    if (passage) {
+      const margin = KART_RADIUS + 0.6;
+      lineOffset = passage.max - passage.min < 2 * margin ? (passage.min + passage.max) / 2 :
+        Math.max(passage.min + margin, Math.min(passage.max - margin, lineOffset));
+    }
   }
   const desired = Math.atan2(target.x + target.nx * lineOffset - kart.x, target.z + target.nz * lineOffset - kart.z);
   const travelHeading = kart.heading - kart.driftDirection * Math.min(0.23, kart.driftTime * 0.35);

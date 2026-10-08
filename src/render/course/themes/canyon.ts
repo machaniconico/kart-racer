@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { projectToTrack, sampleTrack } from '../../../sim';
 import type { Track } from '../../../sim';
-import type { CourseTheme, SceneryBudget } from '../CourseTheme';
+import type { SceneryBudget } from '../CourseTheme';
+import type { CourseTheme } from '../buildCourse';
 import { material, place, terrainHeight } from '../buildCourse';
 
 export const canyon: CourseTheme = {
@@ -12,7 +13,8 @@ export const canyon: CourseTheme = {
     curb: [0xb44b2e, 0xffdda0], rail: 0xefcf99, post: 0x73402d, dash: 0xc9a37a,
     gate: 0x783e2d, bannerBackground: '#783e2d', bannerText: '#fff0ca',
     checker: [0xffe8b5, 0x442c25], signBackground: '#ffda79', signText: '#623525',
-    surfaces: { ice: 0xbdefff, boost: 0x64e3a8, jump: 0xfbc45a },
+    surfaces: { ice: 0xbdefff, boost: 0x64e3a8, jump: 0xfbc45a, dirt: 0xb47a3e, pit: 0x302724, spin: 0xb77ee0 },
+    barrier: 0xa85c39,
   },
   fog: { color: 0xeac797, near: 155, far: 490 },
   lighting: {

@@ -1,3 +1,4 @@
+import { widthAt } from './corridor';
 import type { SurfaceZone, Track } from './types';
 
 export const JUMP_DURATION = 0.8;
@@ -9,16 +10,21 @@ function wrap(track: Track, distance: number): number {
   return remainder < 0 ? remainder + track.length : remainder;
 }
 
-function containsOffset(track: Track, zone: SurfaceZone, offset: number): boolean {
-  return offset >= (zone.offsetMin ?? -track.def.roadHalfWidth) &&
-    offset <= (zone.offsetMax ?? track.def.roadHalfWidth);
+function containsOffset(track: Track, zone: SurfaceZone, distance: number, offset: number): boolean {
+  const { roadHalfWidth } = widthAt(track, distance);
+  return offset >= (zone.offsetMin ?? -roadHalfWidth) && offset <= (zone.offsetMax ?? roadHalfWidth);
+}
+
+function inZone(zone: SurfaceZone, d: number): boolean {
+  return zone.from <= zone.to ? d >= zone.from && d < zone.to : d >= zone.from || d < zone.to;
 }
 
 /** Continuous surface modifiers; boost and jump are entry events, not surfaces. */
-export function surfaceAt(track: Track, distance: number, offset: number): 'road' | 'ice' {
+export function surfaceAt(track: Track, distance: number, offset: number): 'road' | 'ice' | 'dirt' {
   const d = wrap(track, distance);
-  return track.def.surfaces.some(zone => zone.kind === 'ice' && containsOffset(track, zone, offset) &&
-    (zone.from <= zone.to ? d >= zone.from && d < zone.to : d >= zone.from || d < zone.to)) ? 'ice' : 'road';
+  const on = (kind: 'ice' | 'dirt'): boolean =>
+    track.def.surfaces.some(zone => zone.kind === kind && containsOffset(track, zone, d, offset) && inZone(zone, d));
+  return on('ice') ? 'ice' : on('dirt') ? 'dirt' : 'road';
 }
 
 /** Each tick travels less than half a lap. Count only a forward (previous, current] entry. */
@@ -29,7 +35,7 @@ export function crossedZone(track: Track, kind: SurfaceZone['kind'], previousDis
   else if (advance > track.length / 2) advance -= track.length;
   if (advance <= 0) return false;
   return track.def.surfaces.some(zone => {
-    if (zone.kind !== kind || !containsOffset(track, zone, offset)) return false;
+    if (zone.kind !== kind || !containsOffset(track, zone, distance, offset)) return false;
     const entry = wrap(track, zone.from - previousDistance);
     return entry > 0 && entry <= advance;
   });
@@ -52,6 +58,6 @@ export function racingLineOffset(track: Track, distance: number): number {
   }
   const span = beforeDistance + afterDistance;
   const offset = span === 0 ? before.offset : before.offset + (after.offset - before.offset) * beforeDistance / span;
-  const limit = Math.max(0, track.def.roadHalfWidth - 1);
+  const limit = Math.max(0, widthAt(track, d).roadHalfWidth - 1);
   return Math.max(-limit, Math.min(limit, offset));
 }

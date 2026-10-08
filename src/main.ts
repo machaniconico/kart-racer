@@ -15,6 +15,47 @@ import { loadBest, loadMuted, loadSensitivity, loadSteerAssist, saveBest, saveMu
 
 const root = document.querySelector<HTMLDivElement>('#app')!;
 const ui = new GameUI(root, 0);
+const perf = new URLSearchParams(window.location.search).get('perf') === '1' ? createPerfReadout() : null;
+
+function createPerfReadout() {
+  const element = document.createElement('div');
+  element.id = 'perf-readout';
+  element.style.cssText = 'position:fixed;top:max(8px,env(safe-area-inset-top));right:max(8px,env(safe-area-inset-right));z-index:100;pointer-events:none;padding:4px 7px;border-radius:4px;background:#102529e6;color:#fff;font:11px/1.4 monospace;white-space:nowrap';
+  document.body.append(element);
+  let previousTime: number | null = null;
+  let total = 0, count = 0, maximum = 0, lastPaint = 0;
+  const reset = () => {
+    previousTime = null;
+    total = count = maximum = lastPaint = 0;
+    element.textContent = '平均 — ms · 最大 — ms';
+  };
+  const onVisibility = () => { previousTime = null; };
+  document.addEventListener('visibilitychange', onVisibility);
+  reset();
+  return {
+    reset,
+    sample(now: number) {
+      if (document.hidden) { previousTime = null; return; }
+      if (previousTime !== null) {
+        // Use real frame intervals: the simulation's 100 ms clamp hides stalls.
+        const milliseconds = Math.max(0, now - previousTime);
+        total += milliseconds;
+        count++;
+        maximum = Math.max(maximum, milliseconds);
+        if (now - lastPaint >= 500) {
+          element.textContent = `平均 ${(total / count).toFixed(1)} ms · 最大 ${maximum.toFixed(1)} ms`;
+          lastPaint = now;
+        }
+      }
+      previousTime = now;
+    },
+    dispose() {
+      document.removeEventListener('visibilitychange', onVisibility);
+      element.remove();
+    },
+  };
+}
+
 const controls = new Controls(root);
 root.classList.toggle('touch-device', controls.isTouch);
 let audio = new AudioEngine(0);
@@ -32,7 +73,7 @@ const savedAssist = loadSteerAssist();
 if (savedAssist !== null) controls.setSteerAssist(savedAssist);
 ui.setSteerAssist(controls.steerAssist);
 root.addEventListener('input-device-change', () => ui.setSteerAssist(controls.steerAssist));
-ui.setCourse(course, loadBest(course));
+ui.setCourse(course, loadBest(course, getTrack(course).def.layoutVersion ?? 1));
 
 function seed(): number {
   try { return crypto.getRandomValues(new Uint32Array(1))[0]; }
@@ -87,6 +128,7 @@ function start(): void {
 }
 
 function launch(next: RaceState): void {
+  perf?.reset();
   state = next;
   // GameRenderer is bound to one course; a different course needs a new renderer first.
   if (renderer && !fatal && renderer.getTrackId() !== state.trackId) {
@@ -159,7 +201,7 @@ function title(): void {
   controls.setEnabled(false);
   audio.suspend();
   ui.setPaused(false);
-  ui.setCourse(course, loadBest(course));
+  ui.setCourse(course, loadBest(course, getTrack(course).def.layoutVersion ?? 1));
   ui.show('title');
 }
 
@@ -170,7 +212,7 @@ function selectCourse(id: TrackId): void {
   state = createRace(seed(), { trackId: course });
   previous = captureRenderSnapshot(state);
   if (renderer && renderer.getTrackId() !== state.trackId) recreateRenderer(localId);
-  ui.setCourse(course, loadBest(course));
+  ui.setCourse(course, loadBest(course, getTrack(course).def.layoutVersion ?? 1));
 }
 
 function finish(): void {
@@ -178,10 +220,10 @@ function finish(): void {
   controls.setEnabled(false);
   audio.finishRace();
   const time = state.karts.find((kart) => kart.id === localId)?.finishTime ?? null;
-  const previousBest = loadBest(state.trackId);
+  const previousBest = loadBest(state.trackId, getTrack(state.trackId).def.layoutVersion ?? 1);
   // Online races never update the personal best.
   const isRecord = mode === 'solo' && time !== null && (previousBest === null || time < previousBest);
-  if (isRecord) saveBest(state.trackId, time);
+  if (isRecord) saveBest(state.trackId, time, getTrack(state.trackId).def.layoutVersion ?? 1);
   if (mode !== 'solo') lobby.render((host ?? guest)?.roster ?? null, 'results');
   ui.showResults(state, isRecord ? time : previousBest, isRecord);
   ui.show('results');
@@ -444,6 +486,7 @@ ui.canvas.addEventListener('webglcontextlost', (event) => {
 
 function frame(now: number): void {
   if (disposed) return;
+  perf?.sample(now);
   const elapsed = Math.min(Math.max((now - lastTime) / 1000, 0), 0.1);
   lastTime = now;
   if (mode === 'guest') {
@@ -512,6 +555,7 @@ if (import.meta.env.DEV) {
     get course(): TrackId { return (host ?? guest)?.course ?? course; },
     render: {
       get drawCalls() { return renderer?.getDrawCalls() ?? 0; },
+      get triangles() { return renderer?.renderer.info.render.triangles ?? 0; },
       get trackId() { return renderer?.getTrackId() ?? null; },
     },
     selectCourse,
@@ -557,4 +601,5 @@ if (import.meta.hot) import.meta.hot.dispose(() => {
   controls.dispose();
   audio.dispose();
   renderer?.dispose();
+  perf?.dispose();
 });

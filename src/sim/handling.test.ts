@@ -3,7 +3,9 @@ import { getAIInput } from './ai';
 import { createRace, DRIFT_BLUE_TIME, DRIFT_ORANGE_TIME, FIXED_DT, KART_RADIUS, NEUTRAL_INPUT, stepRace } from './race';
 import { buildTrack, sampleTrack } from './track';
 import * as tracks from './tracks';
-import type { RaceState } from './types';
+import { corridorAt, exclusionAt, widthAt } from './corridor';
+import { applySteerAssist } from '../input/assist';
+import type { Barrier, RaceState, Track } from './types';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -105,21 +107,52 @@ describe('H1 handling', () => {
   );
 });
 
-// Measured with the v7 sim (5e3aedc) on darwin-arm64 before the H1 physics/AI edits.
-// Three seeds [1, 42, 98765], eight CPUs, three laps each (72 laps per course).
-const V7_CPU = {
-  meadow: { meanLap: 18.50972222222222, wallHits: 3 },
-  canyon: { meanLap: 18.825925925925926, wallHits: 0 },
-  snowpeak: { meanLap: 18.057175925925925, wallHits: 0 },
-  neon: { meanLap: 18.24861111111111, wallHits: 1 },
+// BASELINE: recorded CPU pace per course. Only a story that changes a course's data may replace
+// its row, listing the old and new values with the reason (plan §2.1).
+// Version v7: measured with the v7 sim (5e3aedc) on darwin-arm64 before the H1 physics/AI edits.
+// Method: eight CPUs (racers: []), seeds [1, 42, 98765], three laps each (72 laps per course).
+// wallHits counts hits at the outer corridor edge; bandHits counts hits on a band (none in v7).
+// M1-05 / CANYON layout 2: 4m half-width passage, 50m dirt and two centre pillars.
+// Fix pass: move pillar one to 136–152m for 8m of item-row clearance and hold its approach line;
+// delay the narrow section by 20m for steering recovery; start the move for pillar two at 320m.
+// Band hits by seed [1, 42, 98765]: [0, 0, 0].
+// Recorded on darwin-arm64 with the same 8 CPUs × 3 seeds × 3 laps; table for M1-07 SPEC handoff:
+// | Layout / protocol | Mean lap (s)        | Wall hits | Band hits | Band budget |
+// | 1 / v7 (old)       | 18.825925925925926  | 0         | 0         | 0           |
+// | 2 / v9 (new)       | 21.48611111111111   | 0         | 0         | 2           |
+const BASELINE = {
+  meadow: { version: 'v7', meanLap: 18.50972222222222, wallHits: 3, bandHits: 0 },
+  canyon: { version: 'v9', meanLap: 21.48611111111111, wallHits: 0, bandHits: 2 },
+  snowpeak: { version: 'v7', meanLap: 18.057175925925925, wallHits: 0, bandHits: 0 },
+  neon: { version: 'v7', meanLap: 18.24861111111111, wallHits: 1, bandHits: 0 },
 };
+const SEEDS = [1, 42, 98765];
 
-describe('H1 CPU balance against v7', () => {
-  it.each(tracks.TRACK_IDS)('finishes and replays all 72 laps on %s within the old pace/wall budget', trackId => {
+/**
+ * Splits hit events: value 1 (collideCorridor) is a band hit; a hit without a value with the kart
+ * at the outer wall limit (wallHalfWidth at its arc distance) is a wall hit; anything else (an item hit) is neither.
+ */
+function countHits(state: RaceState, track: Track): { wall: number; band: number } {
+  let wall = 0;
+  let band = 0;
+  for (const event of state.events) {
+    if (event.type !== 'hit') continue;
+    if (event.value === 1) { band++; continue; }
+    const kart = state.karts[event.kartId]!;
+    const offset = kart.lateralOffset;
+    const limit = widthAt(track, kart.trackDistance).wallHalfWidth - KART_RADIUS;
+    if (Math.abs(offset) >= limit - 0.01) wall++;
+  }
+  return { wall, band };
+}
+
+describe('H1 CPU balance: absolute range and recorded baseline', () => {
+  it.each(tracks.TRACK_IDS)('finishes and replays all 72 laps on %s within pace and hit budgets', trackId => {
     let totalLapTime = 0;
     let wallHits = 0;
-    const limit = tracks.getTrack(trackId).def.wallHalfWidth - KART_RADIUS;
-    for (const seed of [1, 42, 98765]) {
+    let bandHits = 0;
+    const track = tracks.getTrack(trackId);
+    for (const seed of SEEDS) {
       const state = createRace(seed, { trackId, racers: [] });
       let restored: RaceState = JSON.parse(JSON.stringify(state));
       for (let tick = 0; tick < 60 * 180 && state.phase !== 'finished'; tick++) {
@@ -127,9 +160,9 @@ describe('H1 CPU balance against v7', () => {
         stepRace(restored, restored.karts.map(kart => getAIInput(restored, kart.id)));
         expect(JSON.stringify(restored), `${trackId}, seed ${seed}, tick ${tick}`).toBe(JSON.stringify(state));
         if (tick % 137 === 0) restored = JSON.parse(JSON.stringify(restored));
-        // Item hits away from the rail do not count as wall impacts.
-        wallHits += state.events.filter(event => event.type === 'hit' &&
-          Math.abs(state.karts[event.kartId]!.lateralOffset) >= limit - 0.01).length;
+        const hits = countHits(state, track);
+        wallHits += hits.wall;
+        bandHits += hits.band;
       }
       expect(state.phase).toBe('finished');
       expect(state.karts).toHaveLength(8);
@@ -141,9 +174,82 @@ describe('H1 CPU balance against v7', () => {
         totalLapTime += kart.lapTimes.reduce((sum, time) => sum + time, 0);
       }
     }
-    const ratio = totalLapTime / 72 / V7_CPU[trackId].meanLap;
-    expect(ratio).toBeGreaterThanOrEqual(0.85);
+    const meanLap = totalLapTime / 72;
+    // Stage 1: absolute range, an average pace of 20 to 40 m/s.
+    expect(meanLap).toBeGreaterThanOrEqual(track.length / 40);
+    expect(meanLap).toBeLessThanOrEqual(track.length / 20);
+    // Stage 2: ratio to the recorded baseline.
+    const ratio = meanLap / BASELINE[trackId].meanLap;
+    expect(ratio).toBeGreaterThanOrEqual(0.95);
     expect(ratio).toBeLessThanOrEqual(1.05);
-    expect(wallHits).toBeLessThanOrEqual(V7_CPU[trackId].wallHits);
+    expect(wallHits).toBeLessThanOrEqual(BASELINE[trackId].wallHits);
+    expect(bandHits).toBeLessThanOrEqual(BASELINE[trackId].bandHits);
+  }, 30_000);
+});
+
+// A stadium loop whose first straight (arc ~100 to ~330 m) carries three centre pillars.
+const pillar = (from: number): Barrier => ({ from, to: from + 20, center: 0, halfWidth: 1.2, taper: 4, scenery: 'pillar' });
+const pillarTrack = buildTrack({
+  ...tracks.TRACKS.meadow, scale: 1, roadHalfWidth: 8, wallHalfWidth: 10,
+  controlPoints: [[-200, 0, 0], [-100, 0, 0], [0, 0, 0], [100, 0, 0], [200, 0, 0], [260, 0, 60],
+    [200, 0, 120], [100, 0, 120], [0, 0, 120], [-100, 0, 120], [-200, 0, 120], [-260, 0, 60]],
+  surfaces: [], racingLine: [], barriers: [pillar(130), pillar(200), pillar(270)],
+});
+
+/** Lateral clearance from the nearest pillar exclusion at the kart's arc distance, if any. */
+function pillarClearance(kart: { trackDistance: number; lateralOffset: number }, time: number): number {
+  let clearance = Infinity;
+  for (const barrier of pillarTrack.def.barriers!) {
+    const exclusion = exclusionAt(pillarTrack, barrier, kart.trackDistance, time);
+    if (exclusion) clearance = Math.min(clearance, Math.abs(kart.lateralOffset - barrier.center) - exclusion.halfWidth);
+  }
+  return clearance;
+}
+
+describe('M1-03 passages around centre pillars', () => {
+  it('keeps an assisted, neutral-steer kart clear of three pillars for 8 seconds', () => {
+    vi.spyOn(tracks, 'getTrack').mockReturnValue(pillarTrack);
+    const state = createRace(1);
+    state.phase = 'racing';
+    state.karts = [state.karts[0]!];
+    state.boxes = [];
+    const kart = state.karts[0]!;
+    const start = sampleTrack(pillarTrack, 60);
+    Object.assign(kart, { human: true, x: start.x, y: start.y, z: start.z, heading: Math.atan2(start.tx, start.tz),
+      speed: 20, trackDistance: 60, lateralOffset: 0 });
+    for (let tick = 0; tick < 8 * 60; tick++) {
+      stepRace(state, [applySteerAssist(state, kart, { ...NEUTRAL_INPUT, throttle: 1 }, 1)]);
+      expect(state.events.filter(event => event.type === 'hit'), `tick ${tick}`).toEqual([]);
+      expect(pillarClearance(kart, state.time), `tick ${tick}`).toBeGreaterThanOrEqual(0.3);
+    }
+    // All three pillars were actually passed.
+    expect(kart.trackDistance).toBeGreaterThan(pillarTrack.def.barriers![2]!.to + KART_RADIUS);
+  });
+
+  // Band hits (value 1) come from M1-02's collideCorridor; entries into an exclusion (judged by
+  // corridorAt alone) also catch a kart that slips into a band without a counted hit.
+  it.each(SEEDS)('8 CPUs finish seed %i with at most 4 band hits and 4 exclusion entries', seed => {
+    vi.spyOn(tracks, 'getTrack').mockReturnValue(pillarTrack);
+    const state = createRace(seed, { racers: [] });
+    const inside = state.karts.map(() => false);
+    let bandHits = 0;
+    let entries = 0;
+    for (let tick = 0; tick < 60 * 180 && state.phase !== 'finished'; tick++) {
+      stepRace(state, state.karts.map(kart => getAIInput(state, kart.id)));
+      bandHits += countHits(state, pillarTrack).band;
+      for (const kart of state.karts) {
+        const now = !corridorAt(pillarTrack, kart.trackDistance, state.time)
+          .some(({ min, max }) => kart.lateralOffset >= min && kart.lateralOffset <= max);
+        if (now && !inside[kart.id]) entries++;
+        inside[kart.id] = now;
+      }
+    }
+    expect(state.phase).toBe('finished');
+    for (const kart of state.karts) {
+      expect(kart.lap).toBe(3);
+      expect(kart.finishTime).not.toBeNull();
+    }
+    expect(bandHits).toBeLessThanOrEqual(4);
+    expect(entries).toBeLessThanOrEqual(4);
   }, 30_000);
 });

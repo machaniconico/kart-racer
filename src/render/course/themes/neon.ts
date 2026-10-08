@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { projectToTrack, sampleTrack } from '../../../sim';
 import type { Track } from '../../../sim';
 import { NEON_TUNNEL } from '../../../sim/tracks/neon';
-import type { CourseTheme } from '../CourseTheme';
+import type { CourseTheme } from '../buildCourse';
 import { material } from '../buildCourse';
 
 const cyan = 0x56efff;
@@ -15,7 +15,8 @@ export const neon: CourseTheme = {
     curb: [cyan, pink], rail: 0x4096aa, post: 0x253d59, dash: 0x89a6bc,
     gate: 0x18283d, bannerBackground: '#142035', bannerText: '#56efff',
     checker: [0xd6fcff, 0x132333], signBackground: '#172337', signText: '#ff78c8',
-    surfaces: { ice: 0x9deaff, boost: cyan, jump: 0xffc76b },
+    surfaces: { ice: 0x9deaff, boost: cyan, jump: 0xffc76b, dirt: 0x80543d, pit: 0x302724, spin: 0xb77ee0 },
+    barrier: 0x725dc2,
   },
   fog: { color: 0x27243e, near: 160, far: 450 },
   lighting: {

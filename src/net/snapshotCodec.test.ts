@@ -534,6 +534,7 @@ describe('protocol layout fingerprint', () => {
     const pinned: Record<number, string> = {
       1: '584a661e', 2: '0af985f8', 3: 'fbe993cf', 4: '2daf5fc7', 5: 'bc5d9d9d', 6: '53ab24b2',
       7: 'f7b2a1f2', 8: 'f7b2a1f2',
+      9: 'f7b2a1f2',
     };
     expect(SNAPSHOT_LAYOUT.slice(0, 2)).toEqual([KART_EFFECT_LAYOUT, ENTITY_KINDS]);
     expect(fingerprint(SNAPSHOT_LAYOUT)).toBe(LAYOUT_FINGERPRINT);
@@ -559,6 +560,7 @@ describe('protocol layout fingerprint', () => {
 
   it('pins the complete course registry to the protocol version', () => {
     const pinned: Record<number, number> = { 6: 1575332991, 7: 1575332991, 8: 1575332991 };
+    pinned[9] = 1138653990;
     const definitions = TRACK_IDS.map(id => TRACKS[id]);
     expect(COURSE_FINGERPRINT).toBe(Number.parseInt(fingerprint(definitions), 16));
     expect(COURSE_FINGERPRINT).toBe(pinned[PROTOCOL_VERSION]);

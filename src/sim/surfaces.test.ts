@@ -336,6 +336,59 @@ describe('surface physics', () => {
   });
 });
 
+describe('dirt', () => {
+  it('settles full throttle at 20 m/s, reports dirt, and keeps ice ahead of dirt where both overlap', () => {
+    const track = syntheticTrack({ surfaces: [{ kind: 'dirt', from: 1000, to: 2500 },
+      { kind: 'ice', from: 2000, to: 2100 }] });
+    expect(surfaceAt(track, 1500, 0)).toBe('dirt');
+    expect(surfaceAt(track, 2050, 0)).toBe('ice');
+    expect(surfaceAt(track, 900, 0)).toBe('road');
+    for (const speed of [0, 32]) {
+      const state = soloRace(track, 1010, speed);
+      const kart = state.karts[0]!;
+      const speeds: number[] = [];
+      for (let tick = 0; tick < 600; tick++) {
+        stepRace(state, [{ ...NEUTRAL_INPUT, throttle: 1 }]);
+        if (tick >= 480) speeds.push(kart.speed);
+      }
+      expect(surfaceAt(track, kart.trackDistance, kart.lateralOffset)).toBe('dirt');
+      expect(Math.min(...speeds)).toBeGreaterThanOrEqual(19.5);
+      expect(Math.max(...speeds)).toBeLessThanOrEqual(20.5);
+    }
+  });
+
+  it('raises the dirt cap to 26 while boosting, like grass, and still holds it', () => {
+    const track = syntheticTrack({ surfaces: [{ kind: 'dirt', from: 1000, to: 2500 }] });
+    for (const speed of [20, 32]) {
+      const state = soloRace(track, 1010, speed);
+      const kart = state.karts[0]!;
+      kart.boostTime = 10;
+      const speeds: number[] = [];
+      for (let tick = 0; tick < 240; tick++) {
+        stepRace(state, [{ ...NEUTRAL_INPUT, throttle: 1 }]);
+        if (tick >= 180) speeds.push(kart.speed);
+      }
+      expect(kart.boostTime).toBeGreaterThan(0);
+      expect(Math.min(...speeds)).toBeGreaterThanOrEqual(25.5);
+      expect(Math.max(...speeds)).toBeLessThanOrEqual(26.6);
+    }
+  });
+
+  it('turns at 0.85x the road rate under identical inputs', () => {
+    const dirt = syntheticTrack({ roadHalfWidth: 300, wallHalfWidth: 400,
+      surfaces: [{ kind: 'dirt', from: 0, to: 9000 }] });
+    const road = syntheticTrack({ roadHalfWidth: 300, wallHalfWidth: 400 });
+    const turn = (track: Track): number => {
+      const state = soloRace(track, 1500, 15);
+      const kart = state.karts[0]!;
+      const heading = kart.heading;
+      stepRace(state, [{ ...NEUTRAL_INPUT, steer: 1 }]);
+      return kart.heading - heading;
+    };
+    expect(turn(dirt) / turn(road)).toBeCloseTo(0.85, 10);
+  });
+});
+
 describe('CPU surface awareness', () => {
   it('uses the same racing line for steering and item decisions', () => {
     const road = syntheticTrack();

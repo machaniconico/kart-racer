@@ -88,12 +88,41 @@ export interface TrackProjection {
 
 export type TrackId = 'meadow' | 'canyon' | 'snowpeak' | 'neon';
 
+export interface WidthKey {
+  readonly distance: number;
+  readonly roadHalfWidth: number;
+  readonly wallHalfWidth: number;
+}
+export interface BankKey { readonly distance: number; readonly roll: number }
+export interface BarrierMotion {
+  readonly kind: 'sweep' | 'gate';
+  readonly amplitude: number;
+  readonly period: number;
+  readonly phase: number;
+  readonly minWidth?: number;
+}
+export interface Barrier {
+  readonly from: number;
+  readonly to: number;
+  readonly center: number;
+  readonly halfWidth: number;
+  readonly taper?: number;
+  readonly motion?: BarrierMotion;
+  readonly scenery?: 'pillar' | 'rock' | 'building' | 'block';
+}
+export interface SplitSection {
+  readonly from: number;
+  readonly to: number;
+  readonly lanes: readonly { readonly offsetMin: number; readonly offsetMax: number; readonly risk: 0 | 1 }[];
+}
+
 export interface SurfaceZone {
-  readonly kind: 'ice' | 'boost' | 'jump';
+  readonly kind: 'ice' | 'boost' | 'jump' | 'dirt' | 'pit' | 'spin';
   readonly from: number;
   readonly to: number;
   readonly offsetMin?: number;
   readonly offsetMax?: number;
+  readonly rate?: number;
 }
 
 export interface TrackDef {
@@ -111,6 +140,14 @@ export interface TrackDef {
   readonly racingLine: readonly { readonly distance: number; readonly offset: number }[];
   readonly surfaces: readonly SurfaceZone[];
   readonly themeId: TrackId;
+  readonly layoutVersion?: number;
+  readonly widthKeys?: readonly WidthKey[];
+  readonly bankKeys?: readonly BankKey[];
+  readonly barriers?: readonly Barrier[];
+  readonly splits?: readonly SplitSection[];
+  readonly decks?: readonly { readonly from: number; readonly to: number }[];
+  /** Fraction of checkpoint spacing, applied to gates 1..n-1; gate 0 stays at zero. */
+  readonly checkpointPhase?: number;
 }
 
 export interface Track {

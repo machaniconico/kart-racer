@@ -2,6 +2,7 @@ import { sampleTrack } from './track';
 import { getTrack } from './tracks';
 import { crossedZone, racingLineOffset, surfaceAt } from './surfaces';
 import { decideItemUse, getSteeringError } from './itemAi';
+import { corridorAt, freeIntervalFor, KART_RADIUS } from './corridor';
 import type { InputFrame, RaceState } from './types';
 
 function angleDifference(angle: number): number {
@@ -16,8 +17,10 @@ export function getAIInput(state: RaceState, kartId: number): InputFrame {
   const lookAhead = 7.5 + Math.max(0, kart.speed) * 0.24;
   const target = sampleTrack(track, kart.trackDistance + lookAhead);
   const error = getSteeringError(state, kart);
-  const icyAhead = surfaceAt(track, kart.trackDistance + lookAhead,
-    racingLineOffset(track, kart.trackDistance + lookAhead)) === 'ice';
+  const surfaceAhead = surfaceAt(track, kart.trackDistance + lookAhead,
+    racingLineOffset(track, kart.trackDistance + lookAhead));
+  const icyAhead = surfaceAhead === 'ice';
+  const dirtAhead = surfaceAhead === 'dirt';
   const inkNoise = kart.effects.inkTime > 0 ? 0.35 * Math.sin(state.time * 7 + kart.aiPhase) : 0;
   let steer = Math.max(-1, Math.min(1, error * (icyAhead ? 2.7 : 2.3) + inkNoise));
   if (kart.finishTime !== null) {
@@ -31,7 +34,14 @@ export function getAIInput(state: RaceState, kartId: number): InputFrame {
     projectile.ownerId === kart.id && projectile.life < 1.5 &&
     Math.hypot(projectile.x - kart.x, projectile.z - kart.z) < 24 &&
     (projectile.x - kart.x) * Math.sin(kart.heading) + (projectile.z - kart.z) * Math.cos(kart.heading) > 0);
-  const shouldBrake = approachingBomb || ((Math.abs(error) > 0.65 || curvature > 0.62) && kart.speed > 21);
+  let narrowAhead = false;
+  if (track.def.barriers?.length) {
+    const passage = freeIntervalFor(corridorAt(track, kart.trackDistance + lookAhead,
+      state.time + lookAhead / Math.max(kart.speed, 8)), kart.lateralOffset);
+    narrowAhead = passage !== undefined && passage.max - passage.min < 2 * (KART_RADIUS + 1) && Math.abs(error) > 0.3;
+  }
+  const shouldBrake = approachingBomb ||
+    ((Math.abs(error) > 0.65 || curvature > 0.62 || narrowAhead || dirtAhead) && kart.speed > 21);
   const driftWindow = (state.racingTicks + kartId * 61) % 220;
   const approachingJump = crossedZone(track, 'jump', kart.trackDistance, kart.trackDistance + lookAhead + 12, kart.lateralOffset);
   const drift = kart.airTime === 0 && !approachingJump && !approachingBomb && driftWindow < 115 &&

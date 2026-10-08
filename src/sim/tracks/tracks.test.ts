@@ -6,6 +6,7 @@ const MEADOW_RACE_JSON = "{\"tick\":0,\"seed\":435756210,\"phase\":\"countdown\"
 
 import { describe, expect, it } from 'vitest';
 import { getAIInput } from '../ai';
+import { validateTrackDef, widthAt } from '../corridor';
 import { TOTAL_LAPS } from '../laps';
 import { createRace, stepRace } from '../race';
 import { buildTrack, projectToTrack, sampleTrack, wrapDistance } from '../track';
@@ -108,8 +109,11 @@ describe('course registry and MEADOW golden baseline', () => {
 describe.each(TRACK_IDS)('%s course contract', id => {
   const track = getTrack(id);
 
+  it('validates the width profile, passages, grid, boxes and racing line', () => {
+    expect(() => validateTrackDef(track.def)).not.toThrow();
+  });
+
   it('keeps curvature radius at least wall half-width plus 2.5m, including the seam', () => {
-    let minimum = Infinity;
     const points = track.samples;
     for (let i = 0; i < points.length; i++) {
       const a = points[(i + points.length - 1) % points.length]!;
@@ -118,9 +122,8 @@ describe.each(TRACK_IDS)('%s course contract', id => {
       const twiceArea = Math.abs((b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x));
       const radius = Math.hypot(b.x - a.x, b.z - a.z) * Math.hypot(c.x - b.x, c.z - b.z) *
         Math.hypot(c.x - a.x, c.z - a.z) / (2 * twiceArea);
-      minimum = Math.min(minimum, radius);
+      expect(radius, `distance ${b.distance}`).toBeGreaterThanOrEqual(widthAt(track, b.distance).wallHalfWidth + 2.5);
     }
-    expect(minimum).toBeGreaterThanOrEqual(track.def.wallHalfWidth + 2.5);
   });
 
   it('projects continuously every 0.5m at every integer offset from -10m to +10m', () => {

@@ -1,5 +1,6 @@
 const BEST_KEY = 'pocket-circuit.best.v1';
 const BEST_KEY_V2 = 'pocket-circuit.best.v2';
+const BEST_KEY_V3 = 'pocket-circuit.best.v3';
 const MUTE_KEY = 'pocket-circuit.muted.v1';
 const SENSITIVITY_KEY = 'pocket-circuit.steer-sensitivity.v1';
 const ASSIST_KEY = 'pocket-circuit.steer-assist.v1';
@@ -14,6 +15,12 @@ const KNOWN_TRACK_IDS: ReadonlySet<string> = new Set(['meadow', 'canyon', 'snowp
 
 function validTime(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+type BestRecord = { time: number; layout: number };
+
+function validLayout(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1;
 }
 
 function readV2(): Record<string, number> | null {
@@ -31,6 +38,23 @@ function readV2(): Record<string, number> | null {
   return out;
 }
 
+function readV3(): Record<string, BestRecord> | null {
+  const raw = localStorage.getItem(BEST_KEY_V3);
+  if (raw === null) return null;
+  const out: Record<string, BestRecord> = {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      for (const [key, value] of Object.entries(parsed)) {
+        if (!KNOWN_TRACK_IDS.has(key) || !value || typeof value !== 'object') continue;
+        const { time, layout } = value as { time?: unknown; layout?: unknown };
+        if (validTime(time) && validLayout(layout)) out[key] = { time, layout };
+      }
+    }
+  } catch { /* Corrupt JSON is treated as empty. */ }
+  return out;
+}
+
 function readLegacyV1(): number | null {
   const raw = localStorage.getItem(BEST_KEY);
   if (raw === null) return null;
@@ -39,7 +63,7 @@ function readLegacyV1(): number | null {
 }
 
 /** Reads v2, migrating the single v1 best into it as MEADOW the first time v2 is missing. */
-function readBests(): Record<string, number> {
+function readBestsV2(): Record<string, number> {
   const bests = readV2();
   if (bests !== null) return bests;
   const legacy = readLegacyV1();
@@ -49,19 +73,34 @@ function readBests(): Record<string, number> {
   return migrated;
 }
 
-export function loadBest(trackId: string): number | null {
+/** Reads v3, importing v2 (itself migrated from v1) as layout 1 the first time v3 is missing. */
+function readBests(): Record<string, BestRecord> {
+  const bests = readV3();
+  if (bests !== null) return bests;
+  const migrated: Record<string, BestRecord> = {};
+  for (const [id, time] of Object.entries(readBestsV2())) migrated[id] = { time, layout: 1 };
+  if (Object.keys(migrated).length > 0) {
+    try { localStorage.setItem(BEST_KEY_V3, JSON.stringify(migrated)); } catch { /* Reads still work from the migrated copy. */ }
+  }
+  return migrated;
+}
+
+/** Only a record taken on the same course layout counts; `layout` is TrackDef.layoutVersion (1 when omitted). */
+export function loadBest(trackId: string, layout = 1): number | null {
   try {
     const bests = readBests();
-    return KNOWN_TRACK_IDS.has(trackId) && Object.prototype.hasOwnProperty.call(bests, trackId) ? bests[trackId] : null;
+    if (!KNOWN_TRACK_IDS.has(trackId) || !Object.prototype.hasOwnProperty.call(bests, trackId)) return null;
+    const record = bests[trackId];
+    return record.layout === layout ? record.time : null;
   } catch { return null; }
 }
 
-export function saveBest(trackId: string, time: number): void {
-  if (!KNOWN_TRACK_IDS.has(trackId) || !validTime(time)) return;
+export function saveBest(trackId: string, time: number, layout = 1): void {
+  if (!KNOWN_TRACK_IDS.has(trackId) || !validTime(time) || !validLayout(layout)) return;
   try {
     const bests = readBests();
-    bests[trackId] = time;
-    localStorage.setItem(BEST_KEY_V2, JSON.stringify(bests));
+    bests[trackId] = { time, layout };
+    localStorage.setItem(BEST_KEY_V3, JSON.stringify(bests));
   } catch { /* Private browsing can deny storage. */ }
 }
 

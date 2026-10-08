@@ -4,18 +4,19 @@ import type {} from './multiplayer.spec';
 // C-010 timing (2026-10-05): npm test, 738 passed, Vitest 4.57 s / wall 4.84 s.
 // .omc/baseline-v3.txt records 3 s before C-001; the 6 s budget needs no seed reduction.
 const courses = [
-  { id: 'meadow', name: 'MEADOW LOOP' },
-  { id: 'canyon', name: 'SUNSCAR CANYON' },
-  { id: 'snowpeak', name: 'FROSTBITE PEAK' },
-  { id: 'neon', name: 'NEON NIGHTLINE' },
+  // M1-04 pre-change baseline (10 stationary frames), recorded in buildCourse.test.ts.
+  { id: 'meadow', name: 'MEADOW LOOP', layout: 1, drawCalls: 123, triangles: 41_530 },
+  { id: 'canyon', name: 'SUNSCAR CANYON', layout: 2, drawCalls: 128, triangles: 46_784 },
+  { id: 'snowpeak', name: 'FROSTBITE PEAK', layout: 1, drawCalls: 125, triangles: 41_810 },
+  { id: 'neon', name: 'NEON NIGHTLINE', layout: 1, drawCalls: 125, triangles: 66_080 },
 ] as const;
 
-for (const { id, name } of courses) {
+for (const { id, name, layout, drawCalls: baselineDrawCalls, triangles: baselineTriangles } of courses) {
   test(`C-010: ${name} selection, three laps, isolated best and draw budget`, async ({ page }, testInfo) => {
     await page.goto('./');
     await expect(page.locator('#title-screen')).toBeVisible();
     await page.waitForFunction(() => !!window.__kartDebug);
-    expect(await page.evaluate(() => localStorage.getItem('pocket-circuit.best.v2'))).toBeNull();
+    expect(await page.evaluate(() => localStorage.getItem('pocket-circuit.best.v3'))).toBeNull();
     await page.locator(`#course-select input[value="${id}"]`).check();
     await expect(page.locator('#course-name')).toHaveText(name);
     await expect.poll(() => page.evaluate(() => ({
@@ -25,20 +26,24 @@ for (const { id, name } of courses) {
     await expect(page.locator('#race-screen')).toBeVisible();
     await expect.poll(() => page.evaluate(() => window.__kartDebug.state.phase)).toBe('racing');
     // Sample completed WebGL frames while all eight racers are still on the grid.
-    const drawCalls = await page.evaluate(async () => {
-      const samples: number[] = [];
+    const renderSamples = await page.evaluate(async () => {
+      const samples: { drawCalls: number; triangles: number }[] = [];
       for (let frame = 0; frame < 5; frame++) {
         await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
-        samples.push(window.__kartDebug.render.drawCalls);
+        const { drawCalls, triangles } = window.__kartDebug.render as typeof window.__kartDebug.render & { triangles: number };
+        samples.push({ drawCalls, triangles });
       }
       return samples;
     });
-    for (const calls of drawCalls) {
-      expect(calls).toBeGreaterThan(0);
-      expect(calls).toBeLessThanOrEqual(200);
+    for (const { drawCalls, triangles } of renderSamples) {
+      expect(drawCalls).toBeGreaterThan(0);
+      expect(drawCalls).toBeLessThanOrEqual(200);
+      expect(drawCalls).toBeLessThanOrEqual(baselineDrawCalls + 20);
+      expect(triangles).toBeGreaterThan(0);
+      expect(triangles).toBeLessThanOrEqual(baselineTriangles + 15_000);
     }
     await testInfo.attach('draw-calls', {
-      body: JSON.stringify({ id, drawCalls }), contentType: 'application/json',
+      body: JSON.stringify({ id, baselineDrawCalls, baselineTriangles, renderSamples }), contentType: 'application/json',
     });
     await page.evaluate(() => window.__kartDebug.advance(60 * 200, true));
     await expect(page.locator('#results-screen')).toBeVisible();
@@ -50,8 +55,8 @@ for (const { id, name } of courses) {
     // Solo results open when the human finishes; trailing CPUs can still be racing.
     expect(state.karts[0].lapTimes).toHaveLength(3);
     expect(state.karts[0].finishTime).toBeGreaterThan(0);
-    const bests = await page.evaluate(() => JSON.parse(localStorage.getItem('pocket-circuit.best.v2') ?? '{}'));
-    expect(bests).toEqual({ [id]: state.karts[0].finishTime });
+    const bests = await page.evaluate(() => JSON.parse(localStorage.getItem('pocket-circuit.best.v3') ?? '{}'));
+    expect(bests).toEqual({ [id]: { time: state.karts[0].finishTime, layout } });
     for (const other of courses.filter(course => course.id !== id)) {
       expect(bests[other.id] ?? null).toBeNull();
     }

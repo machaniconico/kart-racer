@@ -4,9 +4,10 @@ import { hasOpponent } from './itemAi';
 import { chooseItem } from './itemTable';
 import { random } from './random';
 import type { ProjectileState } from './itemTypes';
-import { projectToTrack, sampleTrack, wrapDistance } from './track';
+import { corridorAt, exclusionAt, freeIntervalFor, widthAt } from './corridor';
+import { barrierEscape, insideBarrier, projectToTrack, sampleTrack, wrapDistance } from './track';
 import { getTrack } from './tracks';
-import type { InputFrame, ItemType, KartState, Projectile, RaceState, Track } from './types';
+import type { Barrier, InputFrame, ItemType, KartState, Projectile, RaceState, Track, TrackProjection } from './types';
 
 export { chooseItem } from './itemTable';
 export const BOX_RESPAWN_TIME = 5;
@@ -393,22 +394,92 @@ export function advanceItems(track: Track, state: RaceState, dt: number): void {
     projectile.z += Math.cos(projectile.heading) * travel;
     const projection = projectToTrack(track, projectile.x, projectile.z);
     projectile.y = projection.height;
-    // Seeker hits are resolved before wall expiry below.
-    if (projectile.kind !== 'seeker' && Math.abs(projection.offset) > track.def.wallHalfWidth - 0.4) {
-      const sample = sampleTrack(track, projection.distance);
-      const side = Math.sign(projection.offset);
-      projectile.x = sample.x + sample.nx * side * (track.def.wallHalfWidth - 0.45);
-      projectile.z = sample.z + sample.nz * side * (track.def.wallHalfWidth - 0.45);
-      projectile.bounces++;
-      if (projectile.kind === 'bolt') {
+    const { wallHalfWidth } = widthAt(track, projection.distance);
+    const barriers = track.def.barriers ?? [];
+    const bandAt = (at: TrackProjection): Barrier | undefined => barriers.find(barrier =>
+      insideBarrier(track, barrier, at.distance, at.offset, state.time));
+    // Seeker hits are resolved before wall and band expiry below.
+    const banded = bandAt(projection);
+    if (projectile.kind !== 'seeker' && barriers.length === 0) {
+      // Courses without bands keep the original rail arithmetic exactly.
+      if (Math.abs(projection.offset) > wallHalfWidth - 0.4) {
+        const sample = sampleTrack(track, projection.distance);
+        const side = Math.sign(projection.offset);
+        projectile.x = sample.x + sample.nx * side * (wallHalfWidth - 0.45);
+        projectile.z = sample.z + sample.nz * side * (wallHalfWidth - 0.45);
+        projectile.bounces++;
+        if (projectile.kind === 'bolt') {
+          const vx = Math.sin(projectile.heading);
+          const vz = Math.cos(projectile.heading);
+          const dot = vx * sample.nx + vz * sample.nz;
+          projectile.heading = Math.atan2(vx - 2 * dot * sample.nx, vz - 2 * dot * sample.nz);
+          if (projectile.bounces >= 4) {
+            projectile.life = 0;
+            continue;
+          }
+        }
+      }
+    } else if (projectile.kind !== 'seeker') {
+      // One loop resolves rails and every band together: leaving one obstacle can enter another, and arc
+      // metres differ from world metres on curves, so reproject and recheck everything after each push.
+      const railAt = (at: TrackProjection): number => widthAt(track, at.distance).wallHalfWidth;
+      const clear = (at: TrackProjection): boolean => !bandAt(at) && Math.abs(at.offset) <= railAt(at) - 0.4;
+      // Returns whether this contact counts as a bounce: non-bolts always, bolts only when actually
+      // mirrored, so a corrective nudge of a bolt already heading away does not spend one of its 4 bounces.
+      const reflect = (nx: number, nz: number): boolean => {
+        // Mirror only a bolt still moving into the obstacle (n points away from it).
+        if (projectile.kind !== 'bolt') return true;
         const vx = Math.sin(projectile.heading);
         const vz = Math.cos(projectile.heading);
-        const dot = vx * sample.nx + vz * sample.nz;
-        projectile.heading = Math.atan2(vx - 2 * dot * sample.nx, vz - 2 * dot * sample.nz);
-        if (projectile.bounces >= 4) {
+        const dot = vx * nx + vz * nz;
+        if (dot >= 0) return false;
+        projectile.heading = Math.atan2(vx - 2 * dot * nx, vz - 2 * dot * nz);
+        return true;
+      };
+      let at = projection;
+      for (let correction = 0; correction < 6 && !clear(at); correction++) {
+        const local = sampleTrack(track, at.distance);
+        const band = bandAt(at);
+        if (band) {
+          // Leave the band along its edge normal, then mirror bolts about that normal.
+          const away = exclusionAt(track, band, at.distance, state.time)!.normalAt(at.offset);
+          const escape = barrierEscape(track, band, at.distance, at.offset, away, state.time) + 0.05;
+          const nx = local.tx * away.d + local.nx * away.offset;
+          const nz = local.tz * away.d + local.nz * away.offset;
+          projectile.x += nx * escape;
+          projectile.z += nz * escape;
+          if (reflect(nx, nz)) projectile.bounces++;
+        } else {
+          const side = Math.sign(at.offset);
+          const shift = side * (railAt(at) - 0.45) - at.offset;
+          projectile.x += local.nx * shift;
+          projectile.z += local.nz * shift;
+          if (reflect(-local.nx * side, -local.nz * side)) projectile.bounces++;
+        }
+        at = projectToTrack(track, projectile.x, projectile.z, at.distance);
+      }
+      if (!clear(at)) {
+        // Still blocked: settle sideways into the nearest free interval inside the rails, else expire.
+        const rail = railAt(at) - 0.45;
+        const free = corridorAt(track, at.distance, state.time)
+          .map(interval => ({ min: Math.max(interval.min, -rail) + 0.05, max: Math.min(interval.max, rail) - 0.05 }))
+          .filter(interval => interval.max >= interval.min);
+        const interval = freeIntervalFor(free, at.offset);
+        if (interval) {
+          const shift = Math.max(interval.min, Math.min(interval.max, at.offset)) - at.offset;
+          const local = sampleTrack(track, at.distance);
+          projectile.x += local.nx * shift;
+          projectile.z += local.nz * shift;
+          at = projectToTrack(track, projectile.x, projectile.z, at.distance);
+        }
+        if (!clear(at)) {
           projectile.life = 0;
           continue;
         }
+      }
+      if (projectile.kind === 'bolt' && projectile.bounces >= 4) {
+        projectile.life = 0;
+        continue;
       }
     }
     const owner = state.karts.find(kart => kart.id === projectile.ownerId);
@@ -438,7 +509,7 @@ export function advanceItems(track: Track, state: RaceState, dt: number): void {
         break;
       }
     }
-    if (projectile.kind === 'seeker' && Math.abs(projection.offset) > track.def.wallHalfWidth - 0.4) projectile.life = 0;
+    if (projectile.kind === 'seeker' && (Math.abs(projection.offset) > wallHalfWidth - 0.4 || banded)) projectile.life = 0;
   }
   state.projectiles = state.projectiles.filter((projectile) => projectile.life > 1e-9);
 }

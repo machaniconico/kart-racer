@@ -1,3 +1,4 @@
+import { widthAt } from './corridor';
 import { sampleTrack } from './track';
 import { getTrack } from './tracks';
 import type { KartState, RaceState, Track } from './types';
@@ -25,14 +26,15 @@ export function updateLapTracking(track: Track, state: RaceState, kart: KartStat
   if (!validStep) return;
 
   const crosses = (checkpoint: number): boolean => {
-    const gate = sampleTrack(track, track.checkpointDistances[checkpoint]!);
+    const distance = track.checkpointDistances[checkpoint]!;
+    const gate = sampleTrack(track, distance);
     const oldSide = (previous.x - gate.x) * gate.tx + (previous.z - gate.z) * gate.tz;
     const newSide = (kart.x - gate.x) * gate.tx + (kart.z - gate.z) * gate.tz;
     if (oldSide > 0 || newSide <= 0) return false;
     const t = -oldSide / (newSide - oldSide);
     const x = previous.x + (kart.x - previous.x) * t;
     const z = previous.z + (kart.z - previous.z) * t;
-    return Math.abs((x - gate.x) * gate.nx + (z - gate.z) * gate.nz) <= track.def.wallHalfWidth;
+    return Math.abs((x - gate.x) * gate.nx + (z - gate.z) * gate.nz) <= widthAt(track, distance).wallHalfWidth;
   };
 
   if (crosses(0)) {

@@ -3,7 +3,9 @@ import { getAIInput } from './ai';
 import { random } from './random';
 import { advanceItems, getKartModifiers, giveBoost, onKartContact, useItem } from './items';
 import { createKartEffects } from './itemTypes';
-import { projectToTrack, sampleTrack } from './track';
+import { corridorAt, exclusionAt, freeIntervalFor, widthAt } from './corridor';
+import type { CorridorNormal } from './corridor';
+import { barrierEscape, insideBarrier, projectToTrack, sampleTrack } from './track';
 import { getTrack } from './tracks';
 import { crossedZone, JUMP_DURATION, JUMP_HEIGHT, surfaceAt } from './surfaces';
 import type { InputFrame, KartState, RaceOptions, RaceState, Track } from './types';
@@ -89,8 +91,127 @@ function updateProjection(track: Track, kart: KartState): void {
   }
 }
 
+interface PreviousPose { readonly x: number; readonly z: number; readonly trackDistance: number; readonly lateralOffset: number }
+
+/** Outer walls first, then barrier bands. `previous` is the pre-move position for swept nose contact. */
+function collideCorridor(track: Track, state: RaceState, kart: KartState, time: number, previous?: PreviousPose): void {
+  collideWall(track, state, kart);
+  const barriers = track.def.barriers;
+  if (!barriers?.length) return;
+  const contacts: { normal: CorridorNormal; band: boolean }[] = [];
+  for (const barrier of barriers) {
+    if (!insideBarrier(track, barrier, kart.trackDistance, kart.lateralOffset, time)) continue;
+    if (!previous || insideBarrier(track, barrier, previous.trackDistance, previous.lateralOffset, time)) continue;
+    // A fast kart can jump the 0.95 m nose in one tick; the swept entry point keeps it a head-on hit.
+    // Sweep the straight world segment from the pre-move position, reprojecting each probe.
+    const fromX = previous.x;
+    const fromZ = previous.z;
+    const toX = kart.x;
+    const toZ = kart.z;
+    const probe = (t: number) => projectToTrack(track, fromX + (toX - fromX) * t, fromZ + (toZ - fromZ) * t, kart.trackDistance);
+    let low = 0;
+    let high = 1;
+    for (let i = 0; i < 40; i++) {
+      const mid = (low + high) / 2;
+      const at = probe(mid);
+      if (insideBarrier(track, barrier, at.distance, at.offset, time)) high = mid;
+      else low = mid;
+    }
+    const entry = probe(high);
+    const normal = exclusionAt(track, barrier, entry.distance, time)?.normalAt(entry.offset) ??
+      exclusionAt(track, barrier, kart.trackDistance, time)!.normalAt(kart.lateralOffset);
+    // Arc metres differ from world metres off the centre line of a curve: reproject and keep pushing
+    // along the same contact normal, so a head-on residual is not later resolved sideways.
+    // The world step is found by bisection on reprojected positions, so the arc estimate cannot overshoot.
+    for (let correction = 0; correction < 4; correction++) {
+      const sample = sampleTrack(track, kart.trackDistance);
+      const wx = sample.tx * normal.d + sample.nx * normal.offset;
+      const wz = sample.tz * normal.d + sample.nz * normal.offset;
+      const blocked = (step: number): boolean => {
+        const at = projectToTrack(track, kart.x + wx * step, kart.z + wz * step, kart.trackDistance);
+        return insideBarrier(track, barrier, at.distance, at.offset, time);
+      };
+      let high = barrierEscape(track, barrier, kart.trackDistance, kart.lateralOffset, normal, time);
+      for (let i = 0; i < 16 && blocked(high); i++) high *= 2;
+      let low = 0;
+      for (let i = 0; i < 40; i++) {
+        const mid = (low + high) / 2;
+        if (blocked(mid)) low = mid;
+        else high = mid;
+      }
+      kart.x += wx * (high + 1e-6);
+      kart.z += wz * (high + 1e-6);
+      updateProjection(track, kart);
+      if (!insideBarrier(track, barrier, kart.trackDistance, kart.lateralOffset, time)) break;
+    }
+    // Off the centre line of a curve the arc-space normal is not the world normal, and pushing along it can
+    // exceed the distance back to the entry point. Never correct further than that: it bounds the push by
+    // this tick's travel (<= 1.17 m at 70 m/s) and keeps lapValid's 3.5 m step check far away.
+    const entryGap = Math.hypot(toX - fromX, toZ - fromZ) * (1 - low);
+    if (Math.hypot(kart.x - toX, kart.z - toZ) > entryGap ||
+      insideBarrier(track, barrier, kart.trackDistance, kart.lateralOffset, time)) {
+      kart.x = fromX + (toX - fromX) * low;
+      kart.z = fromZ + (toZ - fromZ) * low;
+      updateProjection(track, kart);
+    }
+    contacts.push({ normal, band: true });
+  }
+  // Settle laterally into the nearest interval that satisfies every band and the wall at once.
+  for (let correction = 0; correction < 4; correction++) {
+    const limit = widthAt(track, kart.trackDistance).wallHalfWidth - KART_RADIUS;
+    const free = corridorAt(track, kart.trackDistance, time)
+      .map(interval => ({ min: Math.max(interval.min, -limit), max: Math.min(interval.max, limit) }))
+      .filter(interval => interval.max >= interval.min);
+    const interval = freeIntervalFor(free, kart.lateralOffset);
+    // An empty corridor is unreachable on validated tracks: validateTrackDef keeps an interval of 2R + 0.6 m
+    // at every distance. The wall clamp in collideWall still holds if it ever happens.
+    if (!interval || (kart.lateralOffset >= interval.min - 1e-9 && kart.lateralOffset <= interval.max + 1e-9)) break;
+    const margin = Math.min(1e-6, (interval.max - interval.min) / 2);
+    const target = kart.lateralOffset < interval.min ? interval.min + margin : interval.max - margin;
+    const shift = target - kart.lateralOffset;
+    const sample = sampleTrack(track, kart.trackDistance);
+    kart.x += sample.nx * shift;
+    kart.z += sample.nz * shift;
+    updateProjection(track, kart);
+    if (contacts.length === 0) {
+      const edge = shift > 0 ? interval.min : interval.max;
+      contacts.push({ normal: { d: 0, offset: Math.sign(shift) }, band: Math.abs(edge) < limit });
+    }
+  }
+  for (const { normal, band } of contacts) {
+    const sample = sampleTrack(track, kart.trackDistance);
+    // Outward from the obstacle in world space; the kart moves into it when travel opposes this.
+    const wx = sample.tx * normal.d + sample.nx * normal.offset;
+    const wz = sample.tz * normal.d + sample.nz * normal.offset;
+    const slip = kart.driftDirection * Math.min(0.23, kart.driftTime * 0.35);
+    const travelHeading = kart.heading - slip;
+    const inward = -(Math.sin(travelHeading) * wx + Math.cos(travelHeading) * wz);
+    if (inward <= 0) continue;
+    // Same incidence response as the outer wall, measured against the obstacle edge.
+    const vx = Math.sin(travelHeading) + wx * inward;
+    const vz = Math.cos(travelHeading) + wz * inward;
+    const tangent = Math.hypot(vx, vz);
+    const angle = Math.atan2(inward, tangent);
+    // A full-slowdown (>= 60 degree) band impact at speed reports even inside a rail hit's cooldown:
+    // riding the rail into a nose would otherwise stop the kart silently. The speed floor keeps the
+    // follow-up nudges after a head-on stop (heading kept, speed nearly zero) under the cooldown.
+    const heavyBand = band && angle >= Math.PI / 3 && kart.speed > 6;
+    if (kart.speed * inward > 4 && (kart.hitCooldown === 0 || heavyBand)) {
+      // Rail hits keep their original value-less event (value 0 by convention).
+      state.events.push(band ? { type: 'hit', kartId: kart.id, value: 1 } : { type: 'hit', kartId: kart.id });
+      kart.hitCooldown = 0.7;
+    }
+    const blend = Math.max(0, Math.min(1, (angle - Math.PI / 9) / (2 * Math.PI / 9)));
+    kart.speed *= 1 + (tangent - 1) * blend;
+    // Beyond 80 degrees the residual tangent is a near-perpendicular sliver: turning onto it leaves the kart
+    // facing sideways and the next rail contact flips it backwards. Keep the heading on near head-on band hits.
+    if (tangent > 1e-12 && !(band && angle > 4 * Math.PI / 9)) kart.heading = Math.atan2(vx, vz) + slip;
+  }
+}
+
 function collideWall(track: Track, state: RaceState, kart: KartState): void {
-  const limit = track.def.wallHalfWidth - KART_RADIUS;
+  // Without widthKeys widthAt returns the definition's value, keeping the original arithmetic.
+  let limit = widthAt(track, kart.trackDistance).wallHalfWidth - KART_RADIUS;
   if (Math.abs(kart.lateralOffset) <= limit) return;
   let sample = sampleTrack(track, kart.trackDistance);
   const side = Math.sign(kart.lateralOffset);
@@ -104,6 +225,7 @@ function collideWall(track: Track, state: RaceState, kart: KartState): void {
     kart.z -= sample.nz * penetration;
     updateProjection(track, kart);
     sample = sampleTrack(track, kart.trackDistance);
+    limit = widthAt(track, kart.trackDistance).wallHalfWidth - KART_RADIUS;
     if (Math.abs(kart.lateralOffset) <= limit + 1e-9) break;
   }
   const slip = kart.driftDirection * Math.min(0.23, kart.driftTime * 0.35);
@@ -143,13 +265,14 @@ function advanceKart(track: Track, state: RaceState, kart: KartState, input: Inp
   // Autopilot replaces driving controls, but roulette edges follow the physical button.
   useItem(state, kart, kart.effects.rouletteTime > 0 ? { ...input, useItem: itemPressed } : input);
   kart.previousItem = itemPressed;
+  const previous: PreviousPose = { x: kart.x, z: kart.z, trackDistance: kart.trackDistance, lateralOffset: kart.lateralOffset };
   if (kart.airTime > 0) {
     kart.airTime = Math.max(0, kart.airTime - FIXED_DT);
     kart.previousDrift = input.drift;
     kart.x += Math.sin(kart.heading) * kart.speed * FIXED_DT;
     kart.z += Math.cos(kart.heading) * kart.speed * FIXED_DT;
     updateProjection(track, kart);
-    collideWall(track, state, kart);
+    collideCorridor(track, state, kart, state.time, previous);
     return;
   }
   if (input.drift && !kart.previousDrift && kart.speed > 5 && kart.spinTime === 0) kart.hopTime = 0.32;
@@ -164,8 +287,10 @@ function advanceKart(track: Track, state: RaceState, kart: KartState, input: Inp
     kart.driftDirection = 0;
   }
   kart.previousDrift = input.drift;
-  const onGrass = Math.abs(kart.lateralOffset) > track.def.roadHalfWidth;
-  const onIce = surfaceAt(track, kart.trackDistance, kart.lateralOffset) === 'ice';
+  const onGrass = Math.abs(kart.lateralOffset) > widthAt(track, kart.trackDistance).roadHalfWidth;
+  const surface = surfaceAt(track, kart.trackDistance, kart.lateralOffset);
+  const onIce = surface === 'ice';
+  const onDirt = surface === 'dirt';
   let maxSpeed = kart.human ? 32 : 30.2 + (kart.id % 3) * 0.35;
   if (!kart.human) {
     const humanProgress = state.karts.filter((racer) => racer.human).map(racer => raceProgress(track, racer));
@@ -177,9 +302,13 @@ function advanceKart(track: Track, state: RaceState, kart: KartState, input: Inp
   maxSpeed *= modifiers.maxSpeedMultiplier;
   if (kart.boostTime > 0) maxSpeed *= 1.46;
   if (onGrass) maxSpeed = Math.min(maxSpeed, kart.boostTime > 0 ? 26 : 14);
+  // Dirt mirrors grass: boosting raises its cap to 26, but the cap always holds.
+  else if (onDirt) maxSpeed = Math.min(maxSpeed, kart.boostTime > 0 ? 26 : 20);
   if (kart.finishTime !== null) maxSpeed = 12;
   const spinning = kart.spinTime > 0;
-  const acceleration = spinning ? 0 : input.throttle * (kart.boostTime > 0 ? 36 : onGrass ? 13 : onIce ? 15 : 22);
+  // Dirt stops driving at its cap (boosted or not) so full throttle settles there instead of overshooting the drag.
+  const acceleration = spinning || (onDirt && kart.speed >= maxSpeed) ? 0 :
+    input.throttle * (kart.boostTime > 0 ? 36 : onGrass ? 13 : onIce ? 15 : onDirt ? 16 : 22);
   const deceleration = spinning ? 12 : input.brake ? (onIce ? 18 : 42) : input.throttle > 0 ? 2.1 : onIce ? 1.8 : 5.5;
   kart.speed = Math.max(0, kart.speed + (acceleration - deceleration) * FIXED_DT);
   if (kart.speed > maxSpeed) kart.speed += (maxSpeed - kart.speed) * Math.min(1, FIXED_DT * (onGrass ? 6 : 4));
@@ -187,7 +316,7 @@ function advanceKart(track: Track, state: RaceState, kart: KartState, input: Inp
   if (!spinning) {
     // Reach full steering at low speed, then ease it off through fast corners.
     const turnRate = Math.max(1.72, 2.1 - Math.max(0, kart.speed - 15) * 0.025) *
-      Math.min(1, kart.speed / 6) * (onIce ? 0.5 : 1);
+      Math.min(1, kart.speed / 6) * (onIce ? 0.5 : onDirt ? 0.85 : 1);
     // Countersteering opens the arc without reversing an established drift.
     const steering = kart.driftDirection === 0 ? kart.steer : kart.driftDirection * 0.75 + kart.steer * 0.6;
     kart.heading += steering * turnRate * FIXED_DT;
@@ -198,7 +327,7 @@ function advanceKart(track: Track, state: RaceState, kart: KartState, input: Inp
   kart.x += Math.sin(travelHeading) * kart.speed * FIXED_DT;
   kart.z += Math.cos(travelHeading) * kart.speed * FIXED_DT;
   updateProjection(track, kart);
-  collideWall(track, state, kart);
+  collideCorridor(track, state, kart, state.time, previous);
 }
 
 function collideKarts(track: Track, state: RaceState): void {
@@ -231,8 +360,8 @@ function collideKarts(track: Track, state: RaceState): void {
       }
       updateProjection(track, first);
       updateProjection(track, second);
-      collideWall(track, state, first);
-      collideWall(track, state, second);
+      collideCorridor(track, state, first, state.time);
+      collideCorridor(track, state, second, state.time);
     }
   }
 }

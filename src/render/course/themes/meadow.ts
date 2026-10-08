@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { projectToTrack, sampleTrack } from '../../../sim';
 import type { Track } from '../../../sim';
-import type { CourseTheme, SceneryBudget } from '../CourseTheme';
+import type { SceneryBudget } from '../CourseTheme';
+import type { CourseTheme } from '../buildCourse';
 import { material, place, terrainHeight } from '../buildCourse';
 
 export const meadow: CourseTheme = {
@@ -11,7 +12,8 @@ export const meadow: CourseTheme = {
     curb: [0xeb695f, 0xfff1d1], rail: 0xe9eee0, post: 0x547e6d, dash: 0xaab8b4,
     gate: 0x175c50, bannerBackground: '#175c50', bannerText: '#ffffff',
     checker: [0xffffee, 0x203a3d], signBackground: '#fff0aa', signText: '#184f43',
-    surfaces: { ice: 0xbdefff, boost: 0x64e3a8, jump: 0xffbe62 },
+    surfaces: { ice: 0xbdefff, boost: 0x64e3a8, jump: 0xffbe62, dirt: 0x99683f, pit: 0x302724, spin: 0xb77ee0 },
+    barrier: 0x927050,
   },
   fog: { color: 0xb4e1df, near: 170, far: 460 },
   lighting: {

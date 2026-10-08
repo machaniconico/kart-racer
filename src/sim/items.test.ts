@@ -12,9 +12,10 @@ import { chooseItem as publicChooseItem } from './index';
 import { getRank } from './laps';
 import { random } from './random';
 import { createRace, FIXED_DT, NEUTRAL_INPUT, stepRace } from './race';
-import { projectToTrack, sampleTrack, wrapDistance } from './track';
+import { buildTrack, insideBarrier, projectToTrack, sampleTrack, wrapDistance } from './track';
 import type { InputFrame, ItemType, KartState, Projectile, RaceEvent, RaceState } from './types';
 import { getTrack } from './tracks';
+import * as trackModule from './tracks';
 
 const track = getTrack('meadow');
 
@@ -541,7 +542,7 @@ describe('effect snapshot compatibility and deterministic replay', () => {
       hash = Math.imul(hash ^ character.charCodeAt(0), 0x01000193) >>> 0;
     }
     expect(hash.toString(16).padStart(8, '0')).toBe(LAYOUT_FINGERPRINT);
-    expect(PROTOCOL_VERSION).toBe(8);
+    expect(PROTOCOL_VERSION).toBe(9);
     const state = race();
     state.karts[0]!.item = 'rapidDash';
     press(state, state.karts[0]!);
@@ -1885,5 +1886,184 @@ describe('I5 orbit guard', () => {
     engine.setMuted(false);
     engine.playEvents([{ ...event, kartId: 3, value: 0 }]);
     expect(tone).toHaveBeenCalled();
+  });
+});
+
+describe('M1 barrier bands for projectiles', () => {
+  const barrier = { from: 1500, to: 1530, center: 0, halfWidth: 1, taper: 4 };
+  const banded = buildTrack({ ...track.def, scale: 1, surfaces: [], racingLine: [], barriers: [barrier],
+    controlPoints: [[-1500, 0, 0], [-1000, 0, 0], [-500, 0, 0], [0, 0, 0],
+      [500, 0, 0], [1000, 0, 0], [1500, 0, 0], [1500, 0, 1000], [-1500, 0, 1000]] });
+
+  it.each([0, 25, 60])('reflects a bolt off the band (approach %i degrees) and keeps it outside afterwards', angle => {
+    const spy = vi.spyOn(trackModule, 'getTrack').mockReturnValue(banded);
+    try {
+      const state = createRace(1);
+      state.phase = 'racing';
+      state.boxes = [];
+      state.karts = [state.karts[0]!];
+      const far = sampleTrack(banded, 300);
+      Object.assign(state.karts[0]!, { x: far.x, z: far.z, trackDistance: 300, lateralOffset: 0 });
+      // Aim 6 m out at the nose (head-on) or at the middle of the band's side.
+      const radians = angle * Math.PI / 180;
+      const start = sampleTrack(banded, (angle === 0 ? 1500 : 1515) - 6 * Math.cos(radians));
+      const offset = -6 * Math.sin(radians);
+      const bolt: Projectile & ProjectileState = { kind: 'bolt', id: state.nextEntityId++, ownerId: 0,
+        x: start.x + start.nx * offset, y: start.y, z: start.z + start.nz * offset,
+        heading: Math.atan2(start.tx * Math.cos(radians) + start.nx * Math.sin(radians),
+          start.tz * Math.cos(radians) + start.nz * Math.sin(radians)),
+        life: 5, bounces: 0, ownerCleared: true };
+      state.projectiles.push(bolt);
+      let bandBounces = 0;
+      for (let tick = 0; tick < 120 && state.projectiles.length; tick++) {
+        const before = bolt.bounces;
+        advanceItems(banded, state, FIXED_DT);
+        if (!state.projectiles.length) break;
+        const projection = projectToTrack(banded, bolt.x, bolt.z);
+        expect(insideBarrier(banded, barrier, projection.distance, projection.offset, state.time)).toBe(false);
+        // Rail bounces land at wallHalfWidth - 0.45; band bounces land just outside the band edge.
+        if (bolt.bounces > before && Math.abs(projection.offset) < 4) bandBounces++;
+      }
+      expect(bandBounces).toBeGreaterThanOrEqual(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('leaves a bolt outside every band when leaving one enters another (regression)', () => {
+    const pair = buildTrack({ ...banded.def, barriers: [{ ...barrier, center: -1 }, { ...barrier, center: 1 }] });
+    const spy = vi.spyOn(trackModule, 'getTrack').mockReturnValue(pair);
+    try {
+      for (const offset of [0, 0.3, -0.3, 0.9]) {
+        const state = createRace(1);
+        state.phase = 'racing';
+        state.boxes = [];
+        state.karts = [state.karts[0]!];
+        const far = sampleTrack(pair, 300);
+        Object.assign(state.karts[0]!, { x: far.x, z: far.z, trackDistance: 300, lateralOffset: 0 });
+        const start = sampleTrack(pair, 1499.5);
+        const bolt: Projectile & ProjectileState = { kind: 'bolt', id: state.nextEntityId++, ownerId: 0,
+          x: start.x + start.nx * offset, y: start.y, z: start.z + start.nz * offset,
+          heading: Math.atan2(start.tx, start.tz), life: 5, bounces: 0, ownerCleared: true };
+        state.projectiles.push(bolt);
+        for (let tick = 0; tick < 30 && state.projectiles.length; tick++) {
+          advanceItems(pair, state, FIXED_DT);
+          if (!state.projectiles.length) break;
+          const projection = projectToTrack(pair, bolt.x, bolt.z);
+          for (const band of pair.def.barriers!) {
+            expect(insideBarrier(pair, band, projection.distance, projection.offset, state.time)).toBe(false);
+          }
+          expect(Math.abs(projection.offset)).toBeLessThanOrEqual(pair.def.wallHalfWidth - 0.4);
+        }
+        expect(bolt.bounces).toBeGreaterThan(0);
+      }
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('does not spend a bolt bounce on a corrective nudge while it already heads away (regression)', () => {
+    const band = { ...barrier, center: 6 };
+    const narrow = buildTrack({ ...banded.def, roadHalfWidth: 6, wallHalfWidth: 7.2, barriers: [band] });
+    const spy = vi.spyOn(trackModule, 'getTrack').mockReturnValue(narrow);
+    try {
+      const state = createRace(1);
+      state.phase = 'racing';
+      state.boxes = [];
+      state.karts = [state.karts[0]!];
+      const far = sampleTrack(narrow, 300);
+      Object.assign(state.karts[0]!, { x: far.x, z: far.z, trackDistance: 300, lateralOffset: 0 });
+      // Just past the rail line (7.2 - 0.4) away from the band, already steering back toward the centre.
+      const start = sampleTrack(narrow, 1400);
+      const radians = -5 * Math.PI / 180;
+      const bolt: Projectile & ProjectileState = { kind: 'bolt', id: state.nextEntityId++, ownerId: 0,
+        x: start.x + start.nx * 7.15, y: start.y, z: start.z + start.nz * 7.15,
+        heading: Math.atan2(start.tx * Math.cos(radians) + start.nx * Math.sin(radians),
+          start.tz * Math.cos(radians) + start.nz * Math.sin(radians)),
+        life: 5, bounces: 0, ownerCleared: true };
+      const heading = bolt.heading;
+      state.projectiles.push(bolt);
+      advanceItems(narrow, state, FIXED_DT);
+      expect(state.projectiles).toContain(bolt);
+      expect(bolt.bounces).toBe(0);
+      expect(bolt.heading).toBe(heading);
+      expect(Math.abs(projectToTrack(narrow, bolt.x, bolt.z).offset)).toBeLessThanOrEqual(7.2 - 0.4 + 1e-9);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('rechecks every band after a rail bounce beside a wall-side band (regression)', () => {
+    const band = { ...barrier, center: 6 };
+    const narrow = buildTrack({ ...banded.def, roadHalfWidth: 6, wallHalfWidth: 7.2, barriers: [band] });
+    const spy = vi.spyOn(trackModule, 'getTrack').mockReturnValue(narrow);
+    try {
+      // [distance, offset, degrees outward from travel]; the first row is the reviewer's reproduction.
+      const cases: [number, number, number][] = [[1499.3, 6.7, 10]];
+      for (const angle of [3, 10, 25, 45, -10]) for (const [distance, offset] of [[1499.3, 6.7], [1498.5, 6.5], [1499, 6.2], [1497, 5]] as const) {
+        cases.push([distance, offset, angle]);
+      }
+      let bounced = 0;
+      for (const [distance, offset, angle] of cases) {
+        expect(insideBarrier(narrow, band, distance, offset, 0)).toBe(false);
+        const state = createRace(1);
+        state.phase = 'racing';
+        state.boxes = [];
+        state.karts = [state.karts[0]!];
+        const far = sampleTrack(narrow, 300);
+        Object.assign(state.karts[0]!, { x: far.x, z: far.z, trackDistance: 300, lateralOffset: 0 });
+        const start = sampleTrack(narrow, distance);
+        const radians = angle * Math.PI / 180;
+        const bolt: Projectile & ProjectileState = { kind: 'bolt', id: state.nextEntityId++, ownerId: 0,
+          x: start.x + start.nx * offset, y: start.y, z: start.z + start.nz * offset,
+          heading: Math.atan2(start.tx * Math.cos(radians) + start.nx * Math.sin(radians),
+            start.tz * Math.cos(radians) + start.nz * Math.sin(radians)),
+          life: 5, bounces: 0, ownerCleared: true };
+        state.projectiles.push(bolt);
+        for (let tick = 0; tick < 120 && state.projectiles.length; tick++) {
+          advanceItems(narrow, state, FIXED_DT);
+          if (!state.projectiles.length) break;
+          const projection = projectToTrack(narrow, bolt.x, bolt.z);
+          expect(insideBarrier(narrow, band, projection.distance, projection.offset, state.time)).toBe(false);
+          expect(Math.abs(projection.offset)).toBeLessThanOrEqual(7.2 - 0.4 + 1e-9);
+        }
+        if (bolt.bounces > 0) bounced++;
+      }
+      expect(bounced).toBe(cases.length);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('reprojects a bolt reflected on a curve until it is clear of the band in the same tick', () => {
+    const band = { from: 420, to: 450, center: -6, halfWidth: 2, taper: 4 };
+    const curved = buildTrack({ ...track.def, barriers: [band] });
+    const spy = vi.spyOn(trackModule, 'getTrack').mockReturnValue(curved);
+    try {
+      let bounced = 0;
+      for (const turn of [-Math.PI / 2, -Math.PI / 4, 0, Math.PI / 4, Math.PI / 2]) {
+        const state = createRace(1);
+        state.phase = 'racing';
+        state.boxes = [];
+        state.karts = [state.karts[0]!];
+        const far = sampleTrack(curved, 100);
+        Object.assign(state.karts[0]!, { x: far.x, z: far.z, trackDistance: 100, lateralOffset: 0 });
+        const start = sampleTrack(curved, 419.9);
+        const offset = -6.9547;
+        const bolt: Projectile & ProjectileState = { kind: 'bolt', id: state.nextEntityId++, ownerId: 0,
+          x: start.x + start.nx * offset, y: start.y, z: start.z + start.nz * offset,
+          heading: Math.atan2(start.tx, start.tz) + turn, life: 5, bounces: 0, ownerCleared: true };
+        state.projectiles.push(bolt);
+        for (let tick = 0; tick < 30 && state.projectiles.length; tick++) {
+          advanceItems(curved, state, FIXED_DT);
+          const projection = projectToTrack(curved, bolt.x, bolt.z);
+          expect(insideBarrier(curved, band, projection.distance, projection.offset, state.time)).toBe(false);
+        }
+        if (bolt.bounces > 0) bounced++;
+      }
+      expect(bounced).toBeGreaterThan(0);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

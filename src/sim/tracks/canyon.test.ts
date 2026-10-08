@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { getAIInput } from '../ai';
+import { widthAt } from '../corridor';
 import { TOTAL_LAPS } from '../laps';
 import { createRace, KART_RADIUS, stepRace } from '../race';
-import { JUMP_DURATION } from '../surfaces';
+import { JUMP_DURATION, surfaceAt } from '../surfaces';
 import { buildTrack, projectToTrack, sampleTrack, wrapDistance } from '../track';
 import type { RaceState } from '../types';
 import { getTrack } from './index';
@@ -35,7 +36,6 @@ describe('SUNSCAR CANYON', () => {
   });
 
   it('places exactly two downhill jumps on straight takeoff and landing corridors', () => {
-    expect(track.def.surfaces).toHaveLength(2);
     expect(jumps).toHaveLength(2);
     for (const jump of jumps) {
       expect(jump.from).toBeGreaterThan(15);
@@ -56,6 +56,104 @@ describe('SUNSCAR CANYON', () => {
       }
       expect(minimumRadius).toBeGreaterThanOrEqual(40);
     }
+  });
+
+  it('narrows one passage to 4m half-width with 20m ramps on layout 2', () => {
+    expect(track.def.layoutVersion).toBe(2);
+    const keys = track.def.widthKeys!;
+    expect(keys).toHaveLength(4);
+    expect(keys.map(key => key.roadHalfWidth)).toEqual([7.2, 4, 4, 7.2]);
+    const [entry, narrowStart, narrowEnd, exit] = keys;
+    expect(narrowStart!.distance - entry!.distance).toBe(20);
+    expect(exit!.distance - narrowEnd!.distance).toBe(20);
+    expect(narrowEnd!.distance).toBeGreaterThan(narrowStart!.distance);
+    for (const key of keys) expect(widthAt(track, key.distance).roadHalfWidth).toBe(key.roadHalfWidth);
+    for (const [a, b] of [[entry!, narrowStart!], [narrowEnd!, exit!]]) {
+      expect(widthAt(track, (a.distance + b.distance) / 2).roadHalfWidth).toBeCloseTo(5.6);
+    }
+    expect(widthAt(track, 0).roadHalfWidth).toBe(7.2);
+    expect(widthAt(track, track.length - 1).roadHalfWidth).toBe(7.2);
+  });
+
+  it('covers the full road width with at least 40m of dirt', () => {
+    const dirt = track.def.surfaces.filter(zone => zone.kind === 'dirt');
+    expect(dirt).toHaveLength(1);
+    for (const zone of dirt) {
+      const length = wrapDistance(track, zone.to - zone.from);
+      expect(length).toBeGreaterThanOrEqual(40);
+      for (let along = 0; along < length; along += 0.5) {
+        const distance = wrapDistance(track, zone.from + along);
+        const half = widthAt(track, distance).roadHalfWidth;
+        for (const offset of [-half, 0, half]) expect(surfaceAt(track, distance, offset)).toBe('dirt');
+      }
+    }
+  });
+
+  it('keeps every grid slot clear of barrier exclusions through the first 100m after the start line', () => {
+    const { karts } = createRace(1, { trackId: 'canyon', racers: [] });
+    expect(karts).toHaveLength(8);
+    expect(new Set(karts.map(kart => kart.lateralOffset))).toEqual(new Set([-2, 2]));
+    for (const kart of karts) {
+      const approach = wrapDistance(track, -kart.trackDistance) + 100;
+      for (const pillar of track.def.barriers!) {
+        // Check the entire expanded band, including both caps, without gaps between samples.
+        // Keeping it out of this arc clears both columns in every row of the grid.
+        const nose = wrapDistance(track, pillar.from - KART_RADIUS - kart.trackDistance);
+        const span = wrapDistance(track, pillar.to - pillar.from) + 2 * KART_RADIUS;
+        expect(nose, `grid slot ${kart.id}`).toBeGreaterThan(approach);
+        expect(nose + span, `grid slot ${kart.id}`).toBeLessThan(track.length);
+      }
+    }
+  });
+
+  it.each(track.def.boxLanes)('keeps every item row in lane %s at least 8m from pillar exclusions', offset => {
+    for (const fraction of track.def.boxRows) {
+      const distance = fraction * track.length;
+      const point = sampleTrack(track, distance);
+      const box = projectToTrack(track, point.x + point.nx * offset, point.z + point.nz * offset, distance);
+      for (const pillar of track.def.barriers!) {
+        // Reserve reaction distance before the nose and after the tail, including the kart radius.
+        // This longitudinal bound clears every lane, even when the box is off the centre line.
+        const fromNose = wrapDistance(track, box.distance - (pillar.from - KART_RADIUS));
+        const span = wrapDistance(track, pillar.to - pillar.from) + 2 * KART_RADIUS;
+        const context = `row ${distance}, lane ${offset}, pillar ${pillar.from}`;
+        expect(fromNose - span, context).toBeGreaterThanOrEqual(8);
+        expect(track.length - fromNose, context).toBeGreaterThanOrEqual(8);
+      }
+    }
+  });
+
+  it('keeps centre pillars on straight shelves clear of jumps and gates and guarantees passage width between samples', () => {
+    const pillars = track.def.barriers!;
+    expect(pillars.length).toBeGreaterThanOrEqual(2);
+    expect(pillars.length).toBeLessThanOrEqual(3);
+    for (const pillar of pillars) {
+      expect(pillar.scenery).toBe('pillar');
+      expect(pillar.halfWidth).toBe(1.2);
+      expect(pillar.taper).toBe(4);
+      expect(Math.abs(pillar.center)).toBeLessThanOrEqual(2);
+      const start = sampleTrack(track, pillar.from);
+      for (let distance = pillar.from; distance <= pillar.to; distance += 0.5) {
+        const point = sampleTrack(track, distance);
+        expect(point.tx * start.tx + point.tz * start.tz).toBeGreaterThan(0.99);
+      }
+      for (const jump of jumps) {
+        expect(pillar.to + KART_RADIUS <= jump.from ||
+          pillar.from - KART_RADIUS >= jump.from + 50 * JUMP_DURATION).toBe(true);
+      }
+      for (const gate of track.checkpointDistances) {
+        const fromNose = wrapDistance(track, gate - (pillar.from - KART_RADIUS));
+        const span = wrapDistance(track, pillar.to - pillar.from) + 2 * KART_RADIUS;
+        expect(fromNose - span).toBeGreaterThanOrEqual(10);
+        expect(track.length - fromNose).toBeGreaterThanOrEqual(10);
+      }
+    }
+    // A conservative bound for the entire lap, including all taper/cap interiors.
+    // Unlike the validator's 0.5m grid this cannot miss a narrow passage between samples:
+    // linear width interpolation never goes below a key and every exclusion stays in this envelope.
+    const minimumWall = Math.min(...track.def.widthKeys!.map(key => key.wallHalfWidth));
+    const envelope = Math.max(...pillars.map(pillar => Math.abs(pillar.center) + pillar.halfWidth + KART_RADIUS));
+    expect(minimumWall - envelope).toBeGreaterThanOrEqual(2 * KART_RADIUS + 0.6);
   });
 
   it.each([1, 42, 98765])('flies every CPU over both jumps on every lap, stays inside walls and replays exactly (seed %i)', seed => {

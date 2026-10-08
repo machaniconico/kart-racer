@@ -1,4 +1,6 @@
-import type { Pose, Track, TrackDef, TrackProjection, TrackSample } from './types';
+import { exclusionAt, widthAt } from './corridor';
+import type { CorridorNormal } from './corridor';
+import type { Barrier, Pose, Track, TrackDef, TrackProjection, TrackSample } from './types';
 
 function catmull(p0: number, p1: number, p2: number, p3: number, t: number): number {
   return 0.5 * (2 * p1 + (-p0 + p2) * t +
@@ -143,7 +145,7 @@ export function projectToTrack(track: Track, x: number, z: number, previousDista
     const previous = sampleTrack(track, previousDistance);
     // Normal driving remains in the previous section, including the start seam.
     // Positions beyond the road corridor (respawns/teleports) reacquire globally.
-    if (Math.hypot(x - previous.x, z - previous.z) <= track.def.wallHalfWidth + 6) {
+    if (Math.hypot(x - previous.x, z - previous.z) <= widthAt(track, previousDistance).wallHalfWidth + 6) {
       startIndex = segmentIndex(track, previousDistance - 20);
       const endIndex = segmentIndex(track, previousDistance + 20);
       segmentCount = (endIndex - startIndex + count) % count + 1;
@@ -178,4 +180,26 @@ export function projectToTrack(track: Track, x: number, z: number, previousDista
     height: sample.y,
     heading: Math.atan2(sample.tx, sample.tz),
   };
+}
+
+/** Strictly inside a barrier's kart-centre exclusion; the boundary itself is free. */
+export function insideBarrier(track: Track, barrier: Barrier, distance: number, offset: number, time: number): boolean {
+  const exclusion = exclusionAt(track, barrier, distance, time);
+  return exclusion !== null && offset > exclusion.min && offset < exclusion.max;
+}
+
+/** Distance along a unit (arc, lateral) normal that leaves the exclusion, with a tiny clearance. */
+export function barrierEscape(track: Track, barrier: Barrier, distance: number, offset: number,
+  normal: CorridorNormal, time: number): number {
+  const inside = (s: number): boolean =>
+    insideBarrier(track, barrier, distance + normal.d * s, offset + normal.offset * s, time);
+  let high = 0.25;
+  for (let i = 0; i < 16 && inside(high); i++) high *= 2;
+  let low = 0;
+  for (let i = 0; i < 40; i++) {
+    const mid = (low + high) / 2;
+    if (inside(mid)) low = mid;
+    else high = mid;
+  }
+  return high + 1e-6;
 }

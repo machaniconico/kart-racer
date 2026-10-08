@@ -4,6 +4,7 @@ import { TRACK_IDS } from './sim/tracks';
 
 const V1 = 'pocket-circuit.best.v1';
 const V2 = 'pocket-circuit.best.v2';
+const V3 = 'pocket-circuit.best.v3';
 
 let store: Map<string, string>;
 
@@ -43,13 +44,13 @@ describe('storage steer assist', () => {
 });
 
 describe('storage best times', () => {
-  it('round-trips per track in v2', () => {
+  it('round-trips per track in v3', () => {
     saveBest('meadow', 41.5);
     saveBest('canyon', 50);
     expect(loadBest('meadow')).toBe(41.5);
     expect(loadBest('canyon')).toBe(50);
     expect(loadBest('other')).toBeNull();
-    expect(JSON.parse(store.get(V2)!)).toEqual({ meadow: 41.5, canyon: 50 });
+    expect(JSON.parse(store.get(V3)!)).toEqual({ meadow: { time: 41.5, layout: 1 }, canyon: { time: 50, layout: 1 } });
   });
 
   it('migrates v1 into meadow on first load and keeps v1', () => {
@@ -58,6 +59,31 @@ describe('storage best times', () => {
     expect(JSON.parse(store.get(V2)!)).toEqual({ meadow: 37.25 });
     expect(store.get(V1)).toBe('37.25');
     expect(loadBest('meadow')).toBe(37.25);
+    expect(JSON.parse(store.get(V3)!)).toEqual({ meadow: { time: 37.25, layout: 1 } });
+  });
+
+  it('migrates v2 records into v3 with layout 1', () => {
+    store.set(V2, JSON.stringify({ meadow: 30, canyon: 55 }));
+    expect(loadBest('canyon')).toBe(55);
+    expect(JSON.parse(store.get(V3)!)).toEqual({ meadow: { time: 30, layout: 1 }, canyon: { time: 55, layout: 1 } });
+    expect(store.get(V2)).toBe(JSON.stringify({ meadow: 30, canyon: 55 }));
+  });
+
+  it('returns only records that match the course layoutVersion', () => {
+    store.set(V2, JSON.stringify({ canyon: 55 }));
+    expect(loadBest('canyon', 1)).toBe(55);
+    expect(loadBest('canyon', 2)).toBeNull();
+    saveBest('canyon', 60, 2);
+    expect(loadBest('canyon', 2)).toBe(60);
+    expect(loadBest('canyon', 1)).toBeNull();
+  });
+
+  it('chains v1 -> v2 -> v3', () => {
+    store.set(V1, '37.25');
+    expect(loadBest('meadow', 1)).toBe(37.25);
+    expect(JSON.parse(store.get(V2)!)).toEqual({ meadow: 37.25 });
+    expect(JSON.parse(store.get(V3)!)).toEqual({ meadow: { time: 37.25, layout: 1 } });
+    expect(loadBest('meadow', 2)).toBeNull();
   });
 
   it('prefers v2 over v1', () => {
@@ -93,17 +119,17 @@ describe('storage best times', () => {
     saveBest('meadow', 0);
     saveBest('meadow', NaN);
     saveBest('meadow', Infinity);
-    expect(store.has(V2)).toBe(false);
-    store.set(V2, '{bad');
+    expect(store.has(V3)).toBe(false);
+    store.set(V3, '{bad');
     saveBest('meadow', 20);
     expect(loadBest('meadow')).toBe(20);
   });
 
   it('ignores unknown track ids on save and drops them from stored data', () => {
-    store.set(V2, JSON.stringify({ meadow: 40, ghost: 5 }));
+    store.set(V3, JSON.stringify({ meadow: { time: 40, layout: 1 }, ghost: { time: 5, layout: 1 } }));
     saveBest('ghost', 9);
     saveBest('canyon', 50);
-    expect(JSON.parse(store.get(V2)!)).toEqual({ meadow: 40, canyon: 50 });
+    expect(JSON.parse(store.get(V3)!)).toEqual({ meadow: { time: 40, layout: 1 }, canyon: { time: 50, layout: 1 } });
   });
 
   it('migrates v1 even when another course is saved before the first load', () => {

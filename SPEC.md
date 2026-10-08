@@ -124,7 +124,7 @@ v1・v2 の設計制約はそのまま維持する。設計の詳細は `.omc/pl
 
 ### COURSE_FINGERPRINT と版数の運用
 - `COURSE_FINGERPRINT`（`src/sim/tracks/index.ts`）は、全コースの `TrackDef` を JSON にして FNV-1a32 でハッシュした値。`Hello.course` に載せて送り、ホストが自分の値と比べる。違うクライアントは参加できない。
-- 現在の `PROTOCOL_VERSION` は 8。`LAYOUT_FINGERPRINT` は v7 から変わらず `f7b2a1f2`（v6 は `53ab24b2`）。`COURSE_FINGERPRINT` は v6 から変わらず、v7・v8 のコースの pin は v6 と同じ値。
+- 現在の `PROTOCOL_VERSION` は 9（`src/net/protocol.ts:7`）。`LAYOUT_FINGERPRINT` は v7 から変わらず `f7b2a1f2`（v6 は `53ab24b2`）。`COURSE_FINGERPRINT` は v6〜v8 が同じ値（1575332991）で、v9 で変わり 1138653990（`src/net/snapshotCodec.test.ts:563`）。
 - **運用**: コースデータ（`src/sim/tracks/*.ts` など `TrackDef` に入る値）を変えたら `PROTOCOL_VERSION` を上げる。そのうえで `src/net/snapshotCodec.test.ts` の 2 つの pin（版数ごとの固定値）の両方に新しい版数を追加する。コースの pin には新しい `COURSE_FINGERPRINT` を、レイアウトの pin には `LAYOUT_FINGERPRINT` を入れる（レイアウトを変えていなければ前の版と同じ値）。さらに `src/sim/items.test.ts` の `PROTOCOL_VERSION` の assert も更新する。例外は、まだ公開していない版数のままコースを作っている間だけで、その間は同じ版数の pin の値を書き換えてよい（v6 はこの方法で 4 コースを作った）。v7 はルーレットでレイアウトを変えたため、2 つの pin のうちレイアウトの pin に `LAYOUT_FINGERPRINT` の新しい値を、コースの pin に前の版と同じ値を追加した。pin テストは指紋の変化を検知するが、版数の上げ忘れまでは検知しない。公開済みの版数の pin を書き換えないこと。
 
 ## v5: ハンドリング・アシスト・壁・カメラ・プロトコル v8
@@ -159,3 +159,101 @@ v1・v2 の設計制約はそのまま維持する。設計の詳細は `.omc/pl
 
 ### E2E（`e2e/handling.spec.ts`）
 アシスト ON・無操作の 8 秒で壁に張り付かないこと、感度スライダーがリロード後も残ること、reduced-motion でカメラの先読みが 0 になること（通常時は 0 より大きいことも確認）を検証する。
+
+## v6: コース複雑化 M1（プロトコル v9）
+`PROTOCOL_VERSION` は 9（`src/net/protocol.ts:7`）、`ROOM_PREFIX` は `pcircuit-v9-`。`LAYOUT_FINGERPRINT` は `f7b2a1f2` のまま（スナップショットのレイアウトは変えていない。`protocol.ts:12`）。変わったのはコースデータなので `COURSE_FINGERPRINT` の pin が 1138653990 になった。
+
+### データ形式（`src/sim/types.ts`）
+| 項目 | 型・意味 |
+| --- | --- |
+| `TrackDef.widthKeys?` | `{ distance, roadHalfWidth, wallHalfWidth }` の列。周回距離（m）で昇順。区間は線形補間し、最後と最初の対も 1 区間（継ぎ目）として扱う。無ければ定義の `roadHalfWidth` / `wallHalfWidth` を使う（`widthAt`、`corridor.ts`）。`types.ts:91-95` |
+| `TrackDef.barriers?` | 帯（路上の障害物）の列。`{ from, to, center, halfWidth, taper?, motion?, scenery? }`。`taper` の既定は 4 m。`scenery` は `pillar` / `rock` / `building` / `block`。`types.ts:97-112` |
+| `TrackDef.layoutVersion?` | コースの配置の版数。無ければ 1。ベストタイムの有効判定に使う（後述）。`types.ts:143` |
+| `SurfaceZone.kind` | `ice` / `boost` / `jump` に加え `dirt` / `pit` / `spin` が増えた（`types.ts:120`）。 |
+
+- `dirt` は `from`〜`to`（周回距離）と、任意の `offsetMin` / `offsetMax`（無ければ `±roadHalfWidth(d)`）で範囲を決める（`src/sim/surfaces.ts:13-16`）。氷が重なれば氷が優先（`surfaces.ts:23-27`）。
+- `pit` / `spin` は型と描画の色（`src/render/course/buildCourse.ts:119`）だけで、M1 のシミュレーションには効果がない（予約）。
+
+### 不変条件と検証規則（`validateTrackDef`、`src/sim/corridor.ts`）
+- 横勾配: `widthKeys` の隣り合うキーで、`roadHalfWidth` と `wallHalfWidth` の差は区間長 × 0.35 以下（継ぎ目も含む。`corridor.ts:154-156`）。
+- テーパー: `taper` は 2 m 以上、`halfWidth > 0` かつ `halfWidth / taper ≤ 0.5`。`scenery` が `rock` / `building` の島は `taper` 8 m 以上（`corridor.ts:173-178`）。
+- 曲率半径: 中心線の曲率半径は `wallHalfWidth(d) + 2.5` 以上（継ぎ目も含む）。`validateTrackDef` ではなく `src/sim/tracks/tracks.test.ts:116-125` が検査する。
+- 通行幅: どの距離でも、帯を除いた空き区間のうち 1 つは幅 `2R + 0.6` 以上（`R = KART_RADIUS = 0.95`、つまり 2.5 m。`corridor.ts:6-7,214-215`）。検査点は 0.5 m 刻みに、キー・帯の端・レーシングラインの点を足したもの（`corridor.ts:212-217`）。
+- レーシングライン、スタート格子の 8 枠、アイテムボックスの列は、帯の除外領域の外にあること（`assertFree`）。ゲートは帯の鼻から 10 m を超えて離すこと（`corridor.ts:219-226`）。
+- 押し出しの上限（70 m/s、1 tick）: 横 0.59 m、縦 1.17 m（`src/sim/walls.test.ts:246-268, 299-300`。縦は 70 / 60 ≒ 1.17 m の 1 tick 分の移動で、`race.ts:149` の注記）。
+
+### 衝突の仕様（`collideCorridor`、`src/sim/race.ts:97-209`）
+- 外壁（`collideWall`）を先に処理し、そのあと帯を処理する。帯は半円の鼻と、テーパー部の除外幅 `half(d) + R` で表す（`corridor.ts:48-65`）。
+- **正面当たり**: 前 tick の位置からの直線を二分探索して、帯に入った点（入口）を求める。高速で鼻（奥行き R = 0.95 m）を飛び越えても、正面の当たりとして扱い、入口の法線で押し出す（`race.ts:104-127`）。押し出しは 1 tick の移動量を超えない（`race.ts:146-157`）。
+- **横寄せ**: 帯に入っていない状態から横にずれて入った場合は、利用できる空き区間のうち最も近いものへ横に寄せる（最大 4 回。`race.ts:160-182`）。
+- **入射角の応答**: 外壁と同じで、入射角 20° 以下は減速なし、60° 以上で接線成分ぶんの減速、その間は連続（`race.ts:204-207`）。
+- **向き**: 入射角が 80°（`4π/9`）を超える帯の当たりでは、向きを変えない。垂直に近い細い接線へ向けると、横向きになり、次のレール接触で後ろ向きに反転するため（`race.ts:206-208`）。外壁は従来どおり向きを変える。
+- **hit イベント**（`race.ts:195-202`）:
+  - 条件は `speed * inward > 4`、かつ `hitCooldown === 0`（クールダウン 0.7 秒）。
+  - 例外: 帯への当たりで、入射角 60°（`π/3`）以上、かつ速度が 6 m/s 超なら、クールダウン中でも hit を出す。外壁に沿って走って鼻へ当たったとき、無音で止まるのを避けるため。速度 6 m/s の下限は、正面で止まったあとの小さな押しが連続して hit を出さないようにするためで、クールダウンに従う。
+  - `value`: 帯の hit は `value: 1`。**外壁の hit は `value` を持たない**（設計では `value: 0` だったが、v8 までの golden（イベントの JSON）を変えないため、従来どおり `value` なしにした）。受け取る側は `value` が無い場合を 0 と読む。
+- 既知の限界（M2 以降）: hit の出し方は速度だけで決まり、「同じ鼻への再接触」と「新しい正面衝突」を区別できない。ブースト中に 40 m/s で当たると hit が 2 tick 続けて出ることがあり、外壁のクールダウン中に 6 m/s 以下で新たに帯へ正面から当たっても hit は出ない。効果音・演出と統計にだけ影響し、物理（速度・位置・貫通）には影響しない。直すには「最後に当たった帯」の状態をスナップショットへ足す必要がある。
+
+### ダート（`src/sim/race.ts:293-319`）
+- 路面は `surfaceAt`（`surfaces.ts:23-27`）が `ice` > `dirt` > `road` の順で返す。
+- 速度の上限は 20 m/s。ブースト中は例外で 26 m/s（草地と同じ構造。草地はブーストなしで 14 m/s、ブースト中は 26 m/s。`race.ts:304-306`）。上限は常に守られる。
+- 加速は 16（通常 22、氷 15、草 13。`race.ts:311`）。上限に達していると加速 0（上限で全開にしても行き過ぎない。`race.ts:310`）。
+- 旋回は × 0.85（氷は × 0.5。`race.ts:319`）。
+- CPU は前方がダートだと、速度が 21 m/s を超えるときにブレーキを使う（`src/sim/ai.ts:23,44`）。
+
+### 周回判定（`src/sim/laps.ts:28-38`）
+ゲートの判定幅は固定値ではなく、ゲートの距離での `widthAt(track, distance).wallHalfWidth`。狭路の中にゲートがあっても、通過判定の幅は壁の位置と一致する。ゲートは帯の鼻から 10 m を超えて離す（検証規則）。
+
+### 弾の帯反射（`src/sim/items.ts:398-480`）
+- 帯のあるコース（`barriers.length > 0`）だけが新しい処理を通る。帯のないコースは従来のレールの計算のまま（`items.ts:403`）。
+- 弾が帯の中に入ったら、帯の縁の法線に沿って外へ出し（`barrierEscape + 0.05`）、`bolt` は法線で鏡映する。壁も同様（`items.ts:429-457`）。
+- `bounces` は、実際に鏡映したときだけ数える。すでに離れる向きの `bolt` が補正で動いても、4 回の上限を使わない（`items.ts:427-433`）。4 回に達した `bolt` は消える（`items.ts:480`）。
+- どうしても自由な区間へ出せない弾は、寿命を 0 にして消す（`items.ts:474-478`）。
+
+### CPU とアシストの帯対応
+- **CPU**（`src/sim/ai.ts:38-42`）: 帯があるコースでは、先読み位置の空き区間の幅が `2 * (KART_RADIUS + 1)`（3.9 m）より狭く、かつ目標との誤差が 0.3 を超えると `narrowAhead` としてブレーキを使う。
+- **アシスト**（`src/input/assist.ts`）: 補正量の上限は従来どおり 0.35（`assist.ts:174`）。帯が 3 つの先読み（`HORIZON = 3`）以内にあるときだけ新しい処理を通る。目標は経路の通過可能性で選ぶ。
+  - 候補はカートの自分の線（世界座標でまっすぐ）に、一定の横加速度 `c * AUTHORITY / speed`（`AUTHORITY = 0.4`、`c` は `PATH_FAMILY` の 9 通り: 0, ±0.25, ±0.5, ±0.75, ±1）を足した 9 本の経路（`assist.ts:10-16`）。通過可能は、全ての帯と壁の限界から `PATH_MARGIN = 0.3` m 離れていること。
+  - ① 自分の線が通れるなら補正しない（まっすぐ前を向く。`assist.ts:109-112`）。② 自分の線が壁にだけ当たり、カートがまだ壁際にいないなら、現在の横位置を保つ（従来の接線追従。`HOLD_REACH = 3`。`assist.ts:114-128`）。③ それ以外は、通れる経路のうち |c| が最小のものを選ぶ（ステア側を優先。`assist.ts:130-138`）。
+  - 介入しない条件: 通れる経路が 1 本もないときは `aim: null` で、フレームをそのまま通す（`assist.ts:134`）。
+  - 柱の区間では中央に寄せず、自分の線を保つ。壁は経路の選択では見ない（壁を避ける経路を優先すると、OFF より悪くなったため。`assist.ts:130-131`）。
+  - 既知の限界: カーブに帯が 2〜3 本密集する配置や、斜めに進入する配置では、ON が OFF より帯に当たることがある（別シードのファズで 0.3%、8/2400、帯が密集した配置で 17/3200、帯 1 本では 0。許容は 1%）。いったん補正して `aim: null` に切り替わると、変わった軌跡のせいで接触が増える例もある。カートの動きの予測を正確にすれば改善できる。帯のある区間で 1 フレーム約 66µs。
+
+### 描画と性能の基準値
+M1-04 の実装前に測った値（Chromium、1280×720、DPR 1、デスクトップの影あり、`createRace(127, { trackId })`、停止した 8 台、`GameRenderer.update` を 10 回描画して全フレームが同じ値。`renderer.info.render` の値で影を含む。`src/render/course/buildCourse.test.ts:12-22`）。
+
+| コース | drawCalls | triangles | meshes（`buildCourse` のみ） |
+| --- | --- | --- | --- |
+| MEADOW | 123 | 41530 | 29 |
+| CANYON | 128 | 46784 | 33 |
+| SNOWPEAK | 125 | 41810 | 33 |
+| NEON | 125 | 66080 | 30 |
+
+- 予算（`e2e/courses.spec.ts:40-43`）: drawCalls は基準値 + 20 以下、かつ 200 以下。triangles は基準値 + 15000 以下。`meshes` は基準値 + 2 以下（`buildCourse.test.ts:457`）。
+- 実機計測の手順: `npx playwright test -c e2e/vite.e2e.config.ts e2e/courses.spec.ts`（コースを選んで開始し、8 台が停止している間に完成した WebGL のフレームを 5 回サンプリングして、上の予算で検査する。結果はテストの添付 `draw-calls` に JSON で残る）。M1 の実装後の値は、この添付で確認する（この節には実装前の基準値だけを固定する）。
+- 幅キーがあるとコース全周にサンプルが入り、neon は約 +12.7k 三角形になる（幅が変わる区間だけに絞る余地がある。M1-04 のレビューの記録）。
+
+### ベストタイム v3（`src/storage.ts`）
+- `localStorage` のキーは `pocket-circuit.best.v3`。値は `{ [コース ID]: { time, layout } }`。`layout` は `TrackDef.layoutVersion ?? 1`（`storage.ts:1-3,20,88-103`）。
+- `loadBest(trackId, layout)` は、保存された `layout` が引数と一致するときだけ時間を返す。一致しないコースのベストはリセットされ（`null`）、表示されない（`storage.ts:89-95`）。古いレイアウトの記録は上書きされるまで残るが、読まれない。
+- v3 が無いときは、v2（v1 から移行したもの）を `layout: 1` として一度だけ取り込む（`storage.ts:76-85`）。
+- 呼び出し側は `getTrack(course).def.layoutVersion ?? 1` を必ず渡す（`src/main.ts:76,204,215,223,226`）。
+
+### CANYON の新レイアウト（`src/sim/tracks/canyon.ts`、`layoutVersion: 2`）
+- **狭路**: 距離 190〜270 m。`widthKeys` は 190 m で道幅 7.2 / 壁 10.5、210 m〜250 m で 4.0 / 7.3、270 m で 7.2 / 10.5 に戻る。入口と出口に 20 m の傾斜（横勾配は 3.2 / 20 = 0.16 で 0.35 以下）（`canyon.ts:21-26`）。
+- **ダート**: 500〜550 m の 50 m（`{ kind: 'dirt', from: 500, to: 550 }`、`canyon.ts:45`）。
+- **柱 2 本**（中央 `center: 0`、`halfWidth: 1.2`、`taper: 4`、`scenery: 'pillar'`。`canyon.ts:28-31`）: 136〜152 m と 361〜377 m。最初の 100 m、アイテム列、ジャンプの着地、ゲートを避けて置いた。柱 1 は、アイテム列から 8 m 以上離すために 136〜152 m にした。
+- レーシングライン: 柱 1 では左（−4.5）を保ち、柱 2 のために 320〜340 m で早めに左へ寄せる（`canyon.ts:36-41`）。
+- **CPU のラップ**（`src/sim/handling.test.ts:110-125`。CPU 8 台、シード [1, 42, 98765]、各 3 周、72 周の平均。darwin-arm64）:
+
+| レイアウト / プロトコル | 平均ラップ（秒） | 外壁ヒット | 帯ヒット | 帯の予算 |
+| --- | --- | --- | --- | --- |
+| 1 / v7（旧） | 18.825925925925926 | 0 | 0 | 0 |
+| 2 / v9（新） | 21.48611111111111 | 0 | 0（シードごとの合計は [0, 0, 0]） | 2 |
+
+  - 基準値の表（`BASELINE`）は、コースのデータを変える story だけが書き換えてよい。ラップ比の上限は 1.05（`handling.test.ts:184`）。他の 3 コース（meadow 18.5097、snowpeak 18.0572、neon 18.2486）は v7 の値のまま。
+  - 柱 1 は 2 回目の修正で 136〜152 m に移し、狭路も 20 m 後ろへずらした（アシスト走行での接触を減らすため）。
+
+### プロトコル v9 と pin の運用
+- マイルストーン（コース複雑化の M1 など）の先頭で `PROTOCOL_VERSION` を一度上げ、そのマイルストーンの間は同じ版数の pin を書き換えてよい（未公開の版数。上の「COURSE_FINGERPRINT と版数の運用」の例外）。v9 は M1 で 4 コース分のデータを変え、コース pin は 1138653990、レイアウト pin は `f7b2a1f2`（`snapshotCodec.test.ts:537,563`）。
+- `src/sim/items.test.ts` の `PROTOCOL_VERSION` の assert も 9 に更新する。公開したあとの版数の pin は書き換えない。
