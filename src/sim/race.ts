@@ -7,7 +7,7 @@ import { corridorAt, exclusionAt, freeIntervalFor, widthAt } from './corridor';
 import type { CorridorNormal } from './corridor';
 import { barrierEscape, insideBarrier, projectToTrack, sampleTrack } from './track';
 import { getTrack } from './tracks';
-import { crossedZone, JUMP_DURATION, JUMP_HEIGHT, surfaceAt } from './surfaces';
+import { crossedZone, insideZone, JUMP_DURATION, JUMP_HEIGHT, surfaceAt } from './surfaces';
 import type { InputFrame, KartState, RaceOptions, RaceState, Track } from './types';
 
 export const FIXED_DT = 1 / 60;
@@ -386,13 +386,23 @@ export function stepRace(state: RaceState, inputs: readonly InputFrame[]): void 
   }
   state.racingTicks++;
   state.time = state.racingTicks * FIXED_DT;
-  const previous = state.karts.map((kart) => ({ x: kart.x, z: kart.z, trackDistance: kart.trackDistance }));
+  const previous = state.karts.map((kart) => ({ x: kart.x, z: kart.z, trackDistance: kart.trackDistance, airTime: kart.airTime }));
   for (const kart of state.karts) advanceKart(track, state, kart, normalizeInput(inputs[kart.id]));
   collideKarts(track, state);
+  const hasPit = track.def.surfaces.some(zone => zone.kind === 'pit');
   for (let i = 0; i < state.karts.length; i++) {
     const kart = state.karts[i]!;
     if (kart.airTime > 0) continue;
     const from = previous[i]!.trackDistance;
+    // A pit catches a grounded forward crossing of its entry, or a landing inside it; never "while inside",
+    // so a kart stopped in the pit is not punished again. Jumping over it lands past `to`.
+    if (hasPit && (previous[i]!.airTime === 0 ?
+      crossedZone(track, 'pit', from, kart.trackDistance, kart.lateralOffset) :
+      insideZone(track, 'pit', kart.trackDistance, kart.lateralOffset))) {
+      kart.speed = Math.min(kart.speed, 3);
+      kart.spinTime = 1.0;
+      state.events.push({ type: 'hit', kartId: kart.id, value: 2 });
+    }
     if (crossedZone(track, 'boost', from, kart.trackDistance, kart.lateralOffset)) giveBoost(state, kart, 0.5);
     if (kart.speed >= 10 && crossedZone(track, 'jump', from, kart.trackDistance, kart.lateralOffset)) {
       kart.airTime = JUMP_DURATION;

@@ -5,6 +5,8 @@ import { buildTrack, sampleTrack } from './track';
 import * as tracks from './tracks';
 import { corridorAt, exclusionAt, widthAt } from './corridor';
 import { applySteerAssist } from '../input/assist';
+import { getAiLineOffset } from './itemAi';
+import { islandSplit } from './tracks/features';
 import type { Barrier, RaceState, Track } from './types';
 
 afterEach(() => vi.restoreAllMocks());
@@ -120,9 +122,16 @@ describe('H1 handling', () => {
 // | Layout / protocol | Mean lap (s)        | Wall hits | Band hits | Band budget |
 // | 1 / v7 (old)       | 18.825925925925926  | 0         | 0         | 0           |
 // | 2 / v9 (new)       | 21.48611111111111   | 0         | 0         | 2           |
+// M2-05 / CANYON layout 3: inner dirt/boost/jump/pit, paved outer lane and a rock island.
+// Recorded on darwin-arm64, 8 CPUs × seeds [1, 42, 98765] × 3 laps:
+// | Layout / protocol | Mean lap (s)       | Wall hits | Band hits | Pit falls | Risky passes | Band budget |
+// | 2 / v9 (old)       | 21.48611111111111  | 0         | 0         | 0         | n/a          | 2           |
+// | 3 / v10 (new)      | 20.094907407407405 | 0         | 1         | 0         | 24 / 72      | 4           |
+// Both lanes were used by all 8 CPU IDs across the three seeds; safe/risky passes: 48/24.
+// The one band hit is an item spin-out into the first centre pillar (seed 98765, 135 m), not the island.
 const BASELINE = {
   meadow: { version: 'v7', meanLap: 18.50972222222222, wallHits: 3, bandHits: 0 },
-  canyon: { version: 'v9', meanLap: 21.48611111111111, wallHits: 0, bandHits: 2 },
+  canyon: { version: 'v10', meanLap: 20.094907407407405, wallHits: 0, bandHits: 4 },
   snowpeak: { version: 'v7', meanLap: 18.057175925925925, wallHits: 0, bandHits: 0 },
   neon: { version: 'v7', meanLap: 18.24861111111111, wallHits: 1, bandHits: 0 },
 };
@@ -138,6 +147,7 @@ function countHits(state: RaceState, track: Track): { wall: number; band: number
   for (const event of state.events) {
     if (event.type !== 'hit') continue;
     if (event.value === 1) { band++; continue; }
+    if (event.value === 2) continue;
     const kart = state.karts[event.kartId]!;
     const offset = kart.lateralOffset;
     const limit = widthAt(track, kart.trackDistance).wallHalfWidth - KART_RADIUS;
@@ -151,12 +161,32 @@ describe('H1 CPU balance: absolute range and recorded baseline', () => {
     let totalLapTime = 0;
     let wallHits = 0;
     let bandHits = 0;
+    let pitFalls = 0;
+    let riskyPasses = 0;
     const track = tracks.getTrack(trackId);
+    const split = track.def.splits?.[0];
+    const passes = new Set<string>();
     for (const seed of SEEDS) {
+      const laneUsers = split?.lanes.map(() => new Set<number>());
       const state = createRace(seed, { trackId, racers: [] });
       let restored: RaceState = JSON.parse(JSON.stringify(state));
       for (let tick = 0; tick < 60 * 180 && state.phase !== 'finished'; tick++) {
+        if (split) {
+          for (const kart of state.karts) {
+            if (kart.finishTime !== null || kart.trackDistance < split.from ||
+              kart.trackDistance >= split.to) continue;
+            const key = `${seed}:${kart.id}:${kart.lap}`;
+            if (passes.has(key)) continue;
+            const laneIndex = split.lanes.findIndex(lane =>
+              kart.lateralOffset >= lane.offsetMin && kart.lateralOffset <= lane.offsetMax);
+            if (laneIndex < 0) continue;
+            passes.add(key);
+            laneUsers![laneIndex]!.add(kart.id);
+            if (split.lanes[laneIndex]!.risk === 1) riskyPasses++;
+          }
+        }
         stepRace(state, state.karts.map(kart => getAIInput(state, kart.id)));
+        pitFalls += state.events.filter(event => event.type === 'hit' && event.value === 2).length;
         stepRace(restored, restored.karts.map(kart => getAIInput(restored, kart.id)));
         expect(JSON.stringify(restored), `${trackId}, seed ${seed}, tick ${tick}`).toBe(JSON.stringify(state));
         if (tick % 137 === 0) restored = JSON.parse(JSON.stringify(restored));
@@ -165,6 +195,7 @@ describe('H1 CPU balance: absolute range and recorded baseline', () => {
         bandHits += hits.band;
       }
       expect(state.phase).toBe('finished');
+      if (laneUsers) for (const users of laneUsers) expect(users.size).toBeGreaterThanOrEqual(2);
       expect(state.karts).toHaveLength(8);
       for (const kart of state.karts) {
         expect(kart.human).toBe(false);
@@ -175,6 +206,13 @@ describe('H1 CPU balance: absolute range and recorded baseline', () => {
       }
     }
     const meanLap = totalLapTime / 72;
+    if (trackId === 'canyon') {
+      expect(split).toBeDefined();
+      expect(passes.size).toBe(72);
+      expect(riskyPasses).toBeGreaterThan(0);
+      expect(pitFalls).toBeLessThanOrEqual(riskyPasses * 0.3);
+      expect(bandHits).toBeLessThanOrEqual(4);
+    }
     // Stage 1: absolute range, an average pace of 20 to 40 m/s.
     expect(meanLap).toBeGreaterThanOrEqual(track.length / 40);
     expect(meanLap).toBeLessThanOrEqual(track.length / 20);
@@ -252,4 +290,65 @@ describe('M1-03 passages around centre pillars', () => {
     expect(bandHits).toBeLessThanOrEqual(4);
     expect(entries).toBeLessThanOrEqual(4);
   }, 30_000);
+});
+
+// The pillar stadium with one islandSplit on its first straight (approach 125-160 m, island 160-230 m).
+const island = islandSplit({ from: 160, to: 230, islandHalf: 6, laneWidth: 9, taper: 10,
+  scenery: 'rock', risky: 'inner', bend: 1 });
+const islandTrack = buildTrack({
+  ...tracks.TRACKS.meadow, scale: 1, roadHalfWidth: 8, wallHalfWidth: 10,
+  controlPoints: pillarTrack.def.controlPoints,
+  surfaces: [], racingLine: [], ...island,
+});
+
+describe('M2-02 CPU lane choice at an island split', () => {
+  const split = island.splits[0]!;
+  const middle = (split.from + split.to) / 2;
+  const riskyLane = split.lanes.findIndex(lane => lane.risk === 1);
+
+  it('uses both lanes, picks the risky one 25-45% of the time, never switches on the approach, and finishes', () => {
+    vi.spyOn(tracks, 'getTrack').mockReturnValue(islandTrack);
+    let passes = 0;
+    let riskyPasses = 0;
+    for (const seed of [1, 42, 98765]) {
+      const state = createRace(seed, { racers: [] });
+      const users = split.lanes.map(() => new Set<number>());
+      const approachSign = state.karts.map(() => 0);
+      let switches = 0;
+      let bandHits = 0;
+      for (let tick = 0; tick < 60 * 180 && state.phase !== 'finished'; tick++) {
+        for (const kart of state.karts) {
+          const ahead = ((split.from - kart.trackDistance) % islandTrack.length + islandTrack.length) % islandTrack.length;
+          if (kart.finishTime !== null || ahead === 0 || ahead > 35) { approachSign[kart.id] = 0; continue; }
+          const sign = Math.sign(getAiLineOffset(state, kart));
+          if (sign === 0) continue;
+          if (approachSign[kart.id] !== 0 && approachSign[kart.id] !== sign) switches++;
+          approachSign[kart.id] = sign;
+        }
+        const before = state.karts.map(kart => kart.trackDistance);
+        stepRace(state, state.karts.map(kart => getAIInput(state, kart.id)));
+        bandHits += countHits(state, islandTrack).band;
+        for (const kart of state.karts) {
+          if (!(before[kart.id]! < middle && kart.trackDistance >= middle && kart.trackDistance - before[kart.id]! < 5)) continue;
+          const lane = split.lanes.findIndex(candidate =>
+            kart.lateralOffset >= candidate.offsetMin && kart.lateralOffset <= candidate.offsetMax);
+          expect(lane, `seed ${seed}, kart ${kart.id}`).toBeGreaterThanOrEqual(0);
+          users[lane]!.add(kart.id);
+          passes++;
+          if (lane === riskyLane) riskyPasses++;
+        }
+      }
+      expect(state.phase).toBe('finished');
+      for (const kart of state.karts) {
+        expect(kart.lap).toBe(3);
+        expect(kart.finishTime).not.toBeNull();
+      }
+      expect(switches, `seed ${seed}`).toBe(0);
+      expect(bandHits, `seed ${seed}`).toBeLessThanOrEqual(2);
+      for (const lane of users) expect(lane.size, `seed ${seed}`).toBeGreaterThanOrEqual(2);
+    }
+    expect(passes).toBeGreaterThanOrEqual(72);
+    expect(riskyPasses / passes).toBeGreaterThanOrEqual(0.25);
+    expect(riskyPasses / passes).toBeLessThanOrEqual(0.45);
+  }, 40_000);
 });

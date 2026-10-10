@@ -579,6 +579,11 @@ if (import.meta.env.DEV) {
       },
     },
     start,
+    clearItems() {
+      state.projectiles = [];
+      state.traps = [];
+      for (const kart of state.karts) kart.item = null;
+    },
     advance(ticks: number, autopilot = false) {
       for (let i = 0; i < Math.min(ticks, 60 * 600) && state.phase !== 'finished'; i++) {
         stepRace(state, state.karts.map((kart) => autopilot || kart.id > 0 ? getAIInput(state, kart.id) : controls.sample(state, kart.id)));

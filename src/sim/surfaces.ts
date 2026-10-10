@@ -41,6 +41,13 @@ export function crossedZone(track: Track, kind: SurfaceZone['kind'], previousDis
   });
 }
 
+/** Closed [from, to] membership (with lane bounds), for the landing tick of a pit. */
+export function insideZone(track: Track, kind: SurfaceZone['kind'], distance: number, offset: number): boolean {
+  const d = wrap(track, distance);
+  return track.def.surfaces.some(zone => zone.kind === kind && containsOffset(track, zone, d, offset) &&
+    wrap(track, d - zone.from) <= wrap(track, zone.to - zone.from));
+}
+
 /** Periodic linear interpolation, including the segment across the start line. */
 export function racingLineOffset(track: Track, distance: number): number {
   const line = track.def.racingLine;

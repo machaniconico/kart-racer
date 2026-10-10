@@ -419,3 +419,125 @@ describe('CPU surface awareness', () => {
     expect(getAIInput(state, 0).drift).toBe(false);
   });
 });
+
+describe('M2-02 pits', () => {
+  // Relative to the spec's "jump 100, pit 106-118" (clear speed (18 m) / 0.8 s = 22.5), shifted onto the straight.
+  const J = 1600;
+  const pitTrack = syntheticTrack({ surfaces: [
+    { kind: 'jump', from: J, to: J + 2 }, { kind: 'pit', from: J + 6, to: J + 18 },
+  ] });
+  const pitHits = (state: RaceState) => state.events.filter(event => event.type === 'hit' && event.value === 2);
+
+  /** Steps `ticks` ticks, returning the tick indices (with the kart's state) of every pit hit. */
+  function drive(state: RaceState, ticks: number, input: InputFrame) {
+    const kart = state.karts[0]!;
+    const fired: { tick: number; speed: number; spinTime: number; trackDistance: number; landed: boolean }[] = [];
+    for (let tick = 0; tick < ticks; tick++) {
+      const wasAirborne = kart.airTime > 0;
+      stepRace(state, [input]);
+      const hits = pitHits(state);
+      expect(hits.every(hit => hit.kartId === kart.id)).toBe(true);
+      for (let i = 0; i < hits.length; i++) {
+        fired.push({ tick, speed: kart.speed, spinTime: kart.spinTime, trackDistance: kart.trackDistance,
+          landed: wasAirborne && kart.airTime === 0 });
+      }
+    }
+    return fired;
+  }
+
+  it('lets a 30 m/s full-throttle kart jump over the pit untouched', () => {
+    const state = soloRace(pitTrack, J - 5, 30);
+    const kart = state.karts[0]!;
+    let launched = false;
+    for (let tick = 0; tick < 120; tick++) {
+      stepRace(state, [{ ...NEUTRAL_INPUT, throttle: 1 }]);
+      launched ||= kart.airTime > 0;
+      expect(kart.spinTime).toBe(0);
+      expect(pitHits(state)).toEqual([]);
+    }
+    expect(launched).toBe(true);
+    expect(kart.trackDistance).toBeGreaterThan(J + 18);
+  });
+
+  it('drops an 18 m/s kart that lands inside the pit, once, on the landing tick (condition b)', () => {
+    const state = soloRace(pitTrack, J - 0.2, 18);
+    const fired = drive(state, 240, { ...NEUTRAL_INPUT, throttle: 1 });
+    expect(fired).toHaveLength(1);
+    expect(fired[0]!.landed).toBe(true);
+    expect(fired[0]!.speed).toBeLessThanOrEqual(3);
+    expect(fired[0]!.spinTime).toBe(1.0);
+    expect(fired[0]!.trackDistance).toBeGreaterThanOrEqual(J + 6);
+    expect(fired[0]!.trackDistance).toBeLessThanOrEqual(J + 18);
+  });
+
+  it('drops an 8 m/s kart (no launch) on the tick it crosses the pit entry on the ground (condition a)', () => {
+    const state = soloRace(pitTrack, J - 0.1, 8);
+    const kart = state.karts[0]!;
+    let before = kart.trackDistance;
+    let crossTick = -1;
+    const fired: number[] = [];
+    for (let tick = 0; tick < 300; tick++) {
+      stepRace(state, [{ ...NEUTRAL_INPUT, throttle: 1 }]);
+      expect(kart.airTime).toBe(0);
+      if (before < J + 6 && kart.trackDistance >= J + 6) crossTick = tick;
+      before = kart.trackDistance;
+      if (pitHits(state).length) {
+        fired.push(tick);
+        expect(kart.speed).toBeLessThanOrEqual(3);
+        expect(kart.spinTime).toBe(1.0);
+      }
+    }
+    expect(fired).toEqual([crossTick]);
+    expect(kart.trackDistance).toBeGreaterThan(J + 18);
+  });
+
+  it('does not fire when the entry is crossed backwards', () => {
+    const state = soloRace(pitTrack, J + 7, 8);
+    const kart = state.karts[0]!;
+    kart.heading += Math.PI;
+    for (let tick = 0; tick < 60; tick++) {
+      stepRace(state, [NEUTRAL_INPUT]);
+      expect(pitHits(state)).toEqual([]);
+    }
+    expect(kart.trackDistance).toBeLessThan(J + 6);
+    expect(kart.spinTime).toBe(0);
+  });
+
+  it('uses the previous tick airTime: a landing short of the pit fires on the ground crossing, a landing inside fires on landing', () => {
+    // Jump 16 m before the pit: 12 m/s lands about 9.6 m later, short of the entry (condition a).
+    const early = syntheticTrack({ surfaces: [
+      { kind: 'jump', from: J - 10, to: J - 8 }, { kind: 'pit', from: J + 6, to: J + 18 },
+    ] });
+    const shortLanding = soloRace(early, J - 10.1, 12);
+    const a = drive(shortLanding, 180, NEUTRAL_INPUT);
+    expect(a).toHaveLength(1);
+    expect(a[0]!.landed).toBe(false);
+    expect(a[0]!.spinTime).toBe(1.0);
+    const inside = soloRace(pitTrack, J - 0.2, 18);
+    const b = drive(inside, 180, NEUTRAL_INPUT);
+    expect(b).toHaveLength(1);
+    expect(b[0]!.landed).toBe(true);
+  });
+
+  it('fires exactly once per lap for a CPU driving three laps over a grounded pit', () => {
+    // A stadium loop; with no jump, every lap crosses the pit entry on the ground.
+    const loop = buildTrack({
+      ...tracks.TRACKS.meadow, scale: 1, roadHalfWidth: 8, wallHalfWidth: 10,
+      controlPoints: [[-200, 0, 0], [-100, 0, 0], [0, 0, 0], [100, 0, 0], [200, 0, 0], [260, 0, 60],
+        [200, 0, 120], [100, 0, 120], [0, 0, 120], [-100, 0, 120], [-200, 0, 120], [-260, 0, 60]],
+      surfaces: [{ kind: 'pit', from: 200, to: 212 }], racingLine: [],
+    });
+    vi.spyOn(tracks, 'getTrack').mockReturnValue(loop);
+    const state = createRace(7, { racers: [] });
+    state.karts = [state.karts[0]!];
+    state.boxes = [];
+    let fired = 0;
+    for (let tick = 0; tick < 60 * 150 && state.phase !== 'finished'; tick++) {
+      stepRace(state, state.karts.map(kart => getAIInput(state, kart.id)));
+      fired += pitHits(state).length;
+    }
+    expect(state.phase).toBe('finished');
+    expect(state.karts[0]!.lap).toBe(3);
+    expect(fired).toBe(3);
+  });
+});

@@ -10,6 +10,7 @@ import {
 import type { InputFrame, KartState, RaceState } from './types';
 import { formatResultTime } from '../ui/GameUI';
 import { getTrack, TRACK_IDS } from './tracks';
+import { widthAt } from './corridor';
 
 const track = getTrack('meadow');
 
@@ -684,8 +685,9 @@ describe('CPU race integration', () => {
         expect(JSON.stringify(restored), `tick ${tick}`).toBe(JSON.stringify(state));
         for (const kart of state.karts) {
           const projection = projectToTrack(course, kart.x, kart.z, kart.trackDistance);
+          // Widths vary along CANYON (narrow passage, island split), so use the local wall.
           expect(Math.abs(projection.offset) + KART_RADIUS, `tick ${tick}, kart ${kart.id}`)
-            .toBeLessThanOrEqual(course.def.wallHalfWidth + 1e-6);
+            .toBeLessThanOrEqual(widthAt(course, projection.distance).wallHalfWidth + 1e-6);
         }
         if (state.karts.some(kart => kart.effects.rouletteTime > 0)) rouletteTicks++;
         if (tick % 137 === 0) restored = JSON.parse(JSON.stringify(restored));

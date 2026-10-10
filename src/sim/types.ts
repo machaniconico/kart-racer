@@ -111,6 +111,7 @@ export interface Barrier {
   readonly scenery?: 'pillar' | 'rock' | 'building' | 'block';
 }
 export interface SplitSection {
+  readonly name?: string;
   readonly from: number;
   readonly to: number;
   readonly lanes: readonly { readonly offsetMin: number; readonly offsetMax: number; readonly risk: 0 | 1 }[];

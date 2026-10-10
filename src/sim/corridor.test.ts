@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { corridorAt, exclusionAt, freeIntervalFor, KART_RADIUS, validateTrackDef, widthAt } from './corridor';
+import { corridorAt, exclusionAt, freeIntervalFor, KART_RADIUS, validateCoursePlayability, validateTrackDef, widthAt } from './corridor';
 import { KART_RADIUS as RACE_RADIUS } from './race';
 import { buildTrack } from './track';
 import { getTrack, TRACK_IDS, TRACKS } from './tracks';
@@ -175,13 +175,18 @@ describe('corridorAt and freeIntervalFor', () => {
 });
 
 describe('validateTrackDef', () => {
+  const band: Barrier = { from: 125, to: 140, center: 0, halfWidth: 2, taper: 4 };
+  const fixture = (overrides: Partial<TrackDef> = {}): TrackDef => ({
+    ...base, checkpointCount: 1, boxRows: [0.35, 0.5, 0.7, 0.85], ...overrides,
+  });
   it.each(TRACK_IDS)('accepts the existing %s definition without changing its JSON', id => {
     const def = TRACKS[id];
     const before = JSON.stringify(def);
     expect(() => validateTrackDef(def)).not.toThrow();
     expect(JSON.stringify(def)).toBe(before);
-    // Only CANYON was re-laid out in M1 (narrow section, dirt, pillars); the rest stay on layout 1.
-    expect(def.layoutVersion ?? 1).toBe(id === 'canyon' ? 2 : 1);
+    // Only CANYON was re-laid out: M1 (narrow section, dirt, pillars) and M2-05 (island shortcut).
+    // The rest stay on layout 1.
+    expect(def.layoutVersion ?? 1).toBe(id === 'canyon' ? 3 : 1);
   });
 
   it('accepts a safe band and leaves mutable input unchanged', () => {
@@ -189,11 +194,6 @@ describe('validateTrackDef', () => {
     const before = JSON.stringify(def);
     expect(() => validateTrackDef(def)).not.toThrow();
     expect(JSON.stringify(def)).toBe(before);
-  });
-
-  it('accepts a safe wrapped band when both noses clear the gates', () => {
-    expect(() => validateTrackDef(fixture({ barriers: [{ ...band, from: length - 25, to: 25, center: 7 }] })))
-      .not.toThrow();
   });
 
   it.each(['roadHalfWidth', 'wallHalfWidth'] as const)('rejects excessive %s key slope', field => {
@@ -228,28 +228,30 @@ describe('validateTrackDef', () => {
   it('rejects a location with no passage of width 2R + 0.6', () => {
     const def = fixture({ roadHalfWidth: 3.6, wallHalfWidth: 5.4,
       barriers: [{ ...band, halfWidth: 2, taper: 4 }] });
-    expect(corridorAt(buildTrack(def), 32, 0).every(interval => interval.max - interval.min < 2 * KART_RADIUS + 0.6))
+    expect(corridorAt(buildTrack(def), 132, 0).every(interval => interval.max - interval.min < 2 * KART_RADIUS + 0.6))
       .toBe(true);
     expect(() => validateTrackDef(def)).toThrow(/free interval/);
   });
 
   it('accepts the exact passage threshold and a narrow gap when another lane is wide enough', () => {
-    expect(() => validateTrackDef(fixture({ roadHalfWidth: 3.6, wallHalfWidth: 5.45, barriers: [band] }))).not.toThrow();
+    expect(() => validateTrackDef(fixture({ roadHalfWidth: 3.6, wallHalfWidth: 5.5, barriers: [band] }))).not.toThrow();
+    expect(() => validateTrackDef(fixture({ roadHalfWidth: 3.6, wallHalfWidth: 5.45, barriers: [band] })))
+      .toThrow(/free interval/);
     expect(() => validateTrackDef(fixture({ barriers: [{ ...band, center: 7 }] }))).not.toThrow();
   });
 
   it('rejects a racing-line anchor in an exclusion and a crossing between safe anchors', () => {
-    expect(() => validateTrackDef(fixture({ barriers: [band], racingLine: [{ distance: 32, offset: 0 }] })))
+    expect(() => validateTrackDef(fixture({ barriers: [band], racingLine: [{ distance: 132, offset: 0 }] })))
       .toThrow(/racingLine/);
     expect(() => validateTrackDef(fixture({ barriers: [band], racingLine: [
-      { distance: 20, offset: 0 }, { distance: 45, offset: 0 },
+      { distance: 120, offset: 0 }, { distance: 145, offset: 0 },
     ] }))).toThrow(/racingLine/);
   });
 
   it('checks the effective racing line after the simulation clamps its offset', () => {
     expect(() => validateTrackDef(fixture({
       racingLine: [{ distance: 0, offset: 7.1 }],
-      barriers: [{ from: 28, to: 43, center: 6, halfWidth: 0.1 }],
+      barriers: [{ from: 128, to: 143, center: 6, halfWidth: 0.1 }],
     }))).toThrow(/racingLine/);
   });
 
@@ -262,7 +264,7 @@ describe('validateTrackDef', () => {
   it.each(Array.from({ length: 12 }, (_, box) => box))('rejects occupied item box %i', box => {
     const d = base.boxRows[Math.floor(box / 3)]! * length;
     const barrier: Barrier = { from: d - 2, to: d + 2, center: base.boxLanes[box % 3]!, halfWidth: 0.5, taper: 2 };
-    expect(() => validateTrackDef(fixture({ barriers: [barrier] }))).toThrow(/item box/);
+    expect(() => validateTrackDef(fixture({ barriers: [barrier], boxRows: base.boxRows }))).toThrow(/item box/);
   });
 
   it('rejects a gate within ±10 m of either tip, also across the seam', () => {
@@ -272,21 +274,186 @@ describe('validateTrackDef', () => {
       { ...band, from: gate - 24, to: gate - 9, center: 7 },
       { ...band, from: length - 20, to: length - 5, center: 7 },
       { ...band, from: 10, to: 25, center: 7 },
-    ]) expect(() => validateTrackDef(fixture({ barriers: [barrier] }))).toThrow(/checkpoint gate/);
+    ]) expect(() => validateTrackDef(fixture({ barriers: [barrier], checkpointCount: base.checkpointCount })))
+      .toThrow(/checkpoint gate/);
   });
 
   it('applies checkpointPhase only to non-start gates', () => {
+    const gateBand = { ...band, from: 25, to: 40 };
     expect(() => validateTrackDef(fixture({ barriers: [band] }))).not.toThrow();
-    expect(() => validateTrackDef(fixture({ barriers: [band], checkpointPhase: -0.3 }))).toThrow(/checkpoint gate/);
+    expect(() => validateTrackDef(fixture({ barriers: [gateBand], checkpointCount: 12, checkpointPhase: -0.3 })))
+      .toThrow(/checkpoint gate/);
     expect(() => validateTrackDef(fixture({ barriers: [{ ...band, from: 5, to: 20, center: 7 }], checkpointPhase: 0.4 })))
       .toThrow(/checkpoint gate/);
   });
 
   it('checks critical taper endpoints between the 0.5 m sampling locations', () => {
-    const tinyPeak: Barrier = { from: 25.1, to: 29.4, halfWidth: 1.05, center: 0, taper: 2.1 };
+    const tinyPeak: Barrier = { from: 125.1, to: 129.4, halfWidth: 1.05, center: 0, taper: 2.1 };
     const def = fixture({ roadHalfWidth: 3.6, wallHalfWidth: 4.49, barriers: [tinyPeak] });
-    expect(corridorAt(buildTrack(def), 27, 0)[0]!.max + 4.49).toBeGreaterThan(2.5);
+    expect(corridorAt(buildTrack(def), 127, 0)[0]!.max + 4.49).toBeGreaterThan(2.5);
     expect(() => validateTrackDef(def)).toThrow(/free interval/);
+  });
+
+  // At d=132.25 the two facing caps have equal longitudinal radius 0.5.
+  // Their combined lateral extent is exactly 2*sqrt(R² - 0.5²).
+  const noseFixture = (minimum: number): TrackDef => {
+    const center = (minimum + 2 * Math.sqrt(KART_RADIUS ** 2 - 0.5 ** 2)) / 2;
+    return fixture({ roadHalfWidth: 3.6, wallHalfWidth: 3.6, barriers: [
+      { from: 120, to: 131.75, center: -center, halfWidth: 0.1, taper: 2 },
+      { from: 132.75, to: 145, center, halfWidth: 0.1, taper: 2 },
+    ] });
+  };
+  const taperFixture = (minimum: number): TrackDef => {
+    const center = (minimum + 2 * (KART_RADIUS + 1.05)) / 2;
+    return fixture({ roadHalfWidth: 3.6, wallHalfWidth: 6, barriers: [-center, center].map(center => ({
+      from: 130.15, to: 134.35, center, halfWidth: 1.05, taper: 2.1,
+    })) });
+  };
+  // The widest route switches sides inside the overlapping tapers. With a
+  // shifted right barrier the crossing is no longer at the taper midpoint.
+  const crossingTaperFixture = (minimum: number, from = 130.25, shift = 0): TrackDef =>
+    fixture({ roadHalfWidth: 3.6, wallHalfWidth: minimum + 2 + KART_RADIUS + 0.5 + shift / 2,
+      barriers: [
+        { from: from - 10, to: from + 2, center: -2, halfWidth: 1, taper: 2 },
+        { from, to: from + 12, center: 2 + shift, halfWidth: 1, taper: 2 },
+      ] });
+
+  it.each([[130.25, 0], [130, 0], [130.25, 0.2], [130, 0.2]])(
+    'rejects crossing taper valleys independently of scan alignment (%s, shift %s)', (from, shift) => {
+      for (const minimum of [2.425, 2.5]) {
+        const def = crossingTaperFixture(minimum, from, shift);
+        const widths = corridorAt(buildTrack(def), from + 1 - shift, 0).map(interval => interval.max - interval.min);
+        expect(Math.max(...widths)).toBeCloseTo(minimum, 10);
+        expect(() => validateTrackDef(def)).toThrow(/free interval/);
+      }
+    },
+  );
+
+  it('rejects the M1 critic counterexample: a 2.45 m gap hidden between 0.5 m samples', () => {
+    const def = noseFixture(2.45);
+    const track = buildTrack(def);
+    for (let d = 0; d < length; d += 0.5) {
+      expect(Math.max(...corridorAt(track, d, 0).map(interval => interval.max - interval.min)))
+        .toBeGreaterThanOrEqual(2.5);
+    }
+    expect(Math.max(...corridorAt(track, 132.25, 0).map(interval => interval.max - interval.min)))
+      .toBeCloseTo(2.45, 10);
+    expect(() => validateTrackDef(def)).toThrow(/free interval/);
+  });
+
+  it.each([
+    ['taper breakpoints', taperFixture], ['interior of the noses', noseFixture],
+    ['crossing tapers', crossingTaperFixture],
+    ['asymmetric crossing tapers', (minimum: number) => crossingTaperFixture(minimum, 130.25, 0.2)],
+  ] as const)(
+    'places the rejection boundary within 0.06 m of the analytic minimum (%s)', (_label, makeDef) => {
+      let rejected = 2.4;
+      let accepted = 2.7;
+      for (let i = 0; i < 12; i++) {
+        const minimum = (accepted + rejected) / 2;
+        try { validateTrackDef(makeDef(minimum)); accepted = minimum; }
+        catch (error) { expect(String(error)).toMatch(/free interval/); rejected = minimum; }
+      }
+      expect(Math.abs(accepted - 2.5)).toBeLessThanOrEqual(0.06);
+      expect(accepted).toBeGreaterThanOrEqual(2.5);
+      expect(accepted).toBeCloseTo(2.55, 2);
+    },
+  );
+
+  const island: Barrier = { from: 120 + KART_RADIUS, to: 160 - KART_RADIUS,
+    center: 0, halfWidth: 2, taper: 8, scenery: 'rock' };
+  const split = { from: 120, to: 160, lanes: [
+    { offsetMin: -10, offsetMax: -3, risk: 0 as const },
+    { offsetMin: 3, offsetMax: 10, risk: 1 as const },
+  ] };
+  const splitFixture = (overrides: Partial<TrackDef> = {}): TrackDef =>
+    fixture({ barriers: [island], splits: [split], ...overrides });
+
+  it('accepts a contained island with two lanes and 35 m of unsplit approach', () => {
+    expect(() => validateTrackDef(splitFixture())).not.toThrow();
+  });
+
+  it('rejects a split with the wrong free interval count', () => {
+    expect(() => validateTrackDef(splitFixture({ barriers: [] }))).toThrow(/split free interval count/);
+  });
+
+  it('rejects narrow lanes, lanes outside their corridor, and two lanes in one corridor', () => {
+    const left = split.lanes[0]!;
+    expect(() => validateTrackDef(splitFixture({ splits: [{ ...split, lanes: [left,
+      { ...split.lanes[1]!, offsetMin: 6.51 }] }] }))).toThrow(/split lane width/);
+    expect(() => validateTrackDef(splitFixture({ splits: [{ ...split, lanes: [left,
+      { ...split.lanes[1]!, offsetMin: 2.9 }] }] }))).toThrow(/distinct free intervals/);
+    expect(() => validateTrackDef(splitFixture({ splits: [{ ...split, lanes: [left, left] }] })))
+      .toThrow(/distinct free intervals/);
+  });
+
+  it('rejects a split approach with a second interval, including a short cap between scan points', () => {
+    const blocker = { from: 119.2, to: 119.3, center: 7, halfWidth: 0.1, taper: 2 };
+    expect(() => validateTrackDef(splitFixture({ barriers: [island, blocker] }))).toThrow(/split.*count|split approach/);
+    expect(() => validateTrackDef(splitFixture({ barriers: [island, { ...band, from: 102, to: 108, center: 7 }] })))
+      .toThrow(/split approach/);
+  });
+
+  it('rejects an island that extends outside its split or has no split', () => {
+    expect(() => validateTrackDef(splitFixture({ barriers: [{ ...island, to: 163 }] }))).toThrow(/island.*contained/);
+    expect(() => validateTrackDef(fixture({ barriers: [island] }))).toThrow(/island.*contained/);
+  });
+
+  const pit = { kind: 'pit' as const, from: 158, to: 166, offsetMin: -5, offsetMax: -3 };
+  const jump = { kind: 'jump' as const, from: 150, to: 152, offsetMin: -5, offsetMax: -3 };
+
+  it('accepts a pit and matching jump, including exact spacing and clear-speed limits', () => {
+    expect(() => validateTrackDef(fixture({ surfaces: [jump, pit] }))).not.toThrow();
+    for (const [gap, speed] of [[4, 15], [12, 26]]) {
+      expect(() => validateTrackDef(fixture({ surfaces: [jump,
+        { ...pit, from: jump.from + gap!, to: jump.from + 0.8 * speed! }] }))).not.toThrow();
+    }
+  });
+
+  it('requires a jump 4–12 m before the pit covering its full lateral range', () => {
+    expect(() => validateTrackDef(fixture({ surfaces: [pit] }))).toThrow(/pit needs a jump/);
+    for (const gap of [3.99, 12.01]) {
+      expect(() => validateTrackDef(fixture({ surfaces: [{ ...jump, from: pit.from - gap }, pit] })))
+        .toThrow(/4–12 m/);
+    }
+    expect(() => validateTrackDef(fixture({ surfaces: [{ ...jump, offsetMax: -3.01 }, pit] })))
+      .toThrow(/covering its lateral range/);
+  });
+
+  it.each([14.99, 26.01])('rejects a pit requiring a clear speed of %s m/s', speed => {
+    expect(() => validateTrackDef(fixture({ surfaces: [jump, { ...pit, to: jump.from + 0.8 * speed }] })))
+      .toThrow(/pit clear speed/);
+  });
+
+  it('rejects pit overlap with a barrier body while allowing the neighboring lane', () => {
+    // Noses outside the jump guard; only the body touches the pit lane.
+    const barrier = { ...band, from: 130, to: 195, center: -1, halfWidth: 2 };
+    expect(() => validateTrackDef(fixture({ barriers: [barrier], surfaces: [jump, pit] })))
+      .toThrow(/pit.*barrier exclusion/);
+    expect(() => validateTrackDef(fixture({ barriers: [{ ...barrier, center: 1 }], surfaces: [jump, pit] })))
+      .not.toThrow();
+  });
+
+  it('uses the road width at takeoff when a jump has no explicit lateral range', () => {
+    expect(() => validateTrackDef(fixture({ surfaces: [
+      { kind: 'jump', from: 150, to: 152 }, { kind: 'pit', from: 158, to: 166 },
+    ] }))).not.toThrow();
+    expect(() => validateTrackDef(fixture({ widthKeys: [
+      { distance: 150, roadHalfWidth: 3.6, wallHalfWidth: 10.5 },
+      { distance: 158, roadHalfWidth: 5, wallHalfWidth: 10.5 },
+    ], surfaces: [{ kind: 'jump', from: 150, to: 152 }, { kind: 'pit', from: 158, to: 166 }] })))
+      .toThrow(/covering its lateral range/);
+  });
+
+  it('rejects a gate inside a pit, honoring checkpointPhase and the fixed start gate', () => {
+    const gate = 3 * length / 12;
+    const offset = gate - 162;
+    const surfaces = [jump, pit].map(zone => ({ ...zone, from: zone.from + offset, to: zone.to + offset }));
+    expect(() => validateTrackDef(fixture({ surfaces, checkpointCount: 12 }))).toThrow(/pit.*checkpoint gate/);
+    expect(() => validateTrackDef(fixture({ surfaces, checkpointCount: 12, checkpointPhase: 0.3 }))).not.toThrow();
+    expect(() => validateTrackDef(fixture({ surfaces: [
+      { ...jump, from: length - 12, to: length - 10 }, { ...pit, from: length - 4, to: 4 },
+    ], checkpointPhase: 0.3 }))).toThrow(/pit.*checkpoint gate/);
   });
 
   it.each([NaN, Infinity, -Infinity])('rejects non-finite geometry (%s) before JSON cloning', value => {
@@ -305,5 +472,79 @@ describe('validateTrackDef', () => {
     ] }))).toThrow(/strictly increasing/);
     expect(() => validateTrackDef(fixture({ wallHalfWidth: 7 }))).toThrow(/wallHalfWidth/);
     expect(() => validateTrackDef(fixture({ barriers: [{ ...band, to: band.from }] }))).toThrow(/endpoints/);
+  });
+});
+
+describe('validateCoursePlayability', () => {
+  const band: Barrier = { from: 125, to: 140, center: 0, halfWidth: 2, taper: 4 };
+  const fixture = (overrides: Partial<TrackDef> = {}): TrackDef => ({
+    ...base, checkpointCount: 1, boxRows: [0.35, 0.5, 0.7, 0.85], ...overrides,
+  });
+  const validateAll = (def: TrackDef): void => {
+    validateTrackDef(def);
+    validateCoursePlayability(def);
+  };
+
+  it('is not part of validateTrackDef, so synthetic layouts may break playability rules', () => {
+    const jump = { kind: 'jump' as const, from: 160, to: 164, offsetMin: -1, offsetMax: 1 };
+    const cases = [
+      fixture({ barriers: [{ ...band, from: length - 25, to: 25, center: 7 }] }),
+      fixture({ barriers: [band], boxRows: [(band.from - KART_RADIUS - 7.49) / length, 0.5, 0.7, 0.85] }),
+      fixture({ barriers: [{ ...band, from: 150, to: 160 }], surfaces: [jump] }),
+    ];
+    for (const def of cases) {
+      expect(() => validateTrackDef(def)).not.toThrow();
+      expect(() => validateCoursePlayability(def)).toThrow();
+    }
+  });
+
+  // Registry coverage lives here because tracks.test.ts is outside M2-01's file lock.
+  it.each(TRACK_IDS)('accepts registered course %s without changing its JSON', id => {
+    const def = TRACKS[id];
+    const before = JSON.stringify(def);
+    expect(() => validateTrackDef(def)).not.toThrow();
+    expect(() => validateCoursePlayability(def)).not.toThrow();
+    expect(JSON.stringify(def)).toBe(before);
+  });
+
+  it('rejects a wrapped band across the protected start even when both noses clear the gates', () => {
+    const def = fixture({ barriers: [{ ...band, from: length - 25, to: 25, center: 7 }] });
+    expect(() => validateAll(def)).toThrow(/start grid/);
+    expect(() => validateCoursePlayability(def)).toThrow(/start grid/);
+  });
+
+  it('protects the whole 100 m ahead of every grid row, including the lap seam and cap', () => {
+    const barrier = { ...band, from: 92 + KART_RADIUS, to: 110, center: 7 };
+    const def = fixture({ barriers: [barrier] });
+    // The first grid row is L-8, so its 100 m endpoint is 92. Other rows see a shorter reach.
+    expect(() => validateAll(def)).toThrow(/start grid slot 0.*100 m/);
+    expect(() => validateAll(fixture({ barriers: [{ ...barrier, from: barrier.from + 0.001 }] })))
+      .not.toThrow();
+    expect(() => validateAll(fixture({ barriers: [{ ...band, center: 7, from: length - 40, to: length - 21.5 }] })))
+      .toThrow(/start grid slot 6/);
+  });
+
+  it('requires 8 m from item rows to the expanded band, even when boxes miss it laterally', () => {
+    const row = (band.from - KART_RADIUS - 8) / length;
+    expect(() => validateAll(fixture({ barriers: [band], boxRows: [row, 0.5, 0.7, 0.85] })))
+      .not.toThrow();
+    for (const gap of [7.49, 7.99]) {
+      const def = fixture({ barriers: [band], boxRows: [(band.from - KART_RADIUS - gap) / length, 0.5, 0.7, 0.85] });
+      expect(() => validateAll(def)).toThrow(/item box row.*8 m/);
+    }
+    expect(() => validateAll(fixture({ barriers: [{ ...band, center: 9 }],
+      boxRows: [132 / length, 0.5, 0.7, 0.85] }))).toThrow(/item box row.*8 m/);
+  });
+
+  it.each([-10, 40])('rejects an overlapping nose at jump.from %+i and permits a separate lane', delta => {
+    const jump = { kind: 'jump' as const, from: 160, to: 164, offsetMin: -1, offsetMax: 1 };
+    const barrier = { ...band, from: jump.from + delta, to: jump.from + delta + 10 };
+    const def = fixture({ barriers: [barrier], surfaces: [jump] });
+    expect(() => validateAll(def)).toThrow(/jump.*nose/);
+    expect(() => validateAll(fixture({ barriers: [{ ...barrier, center: 5 }], surfaces: [jump] })))
+      .not.toThrow();
+    const fullWidth = { kind: 'jump' as const, from: 160, to: 164 };
+    expect(() => validateAll(fixture({ barriers: [{ ...barrier, center: 5 }], surfaces: [fullWidth] })))
+      .toThrow(/jump.*nose/);
   });
 });

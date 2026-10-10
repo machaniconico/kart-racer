@@ -1,6 +1,7 @@
 import { getRank, TOTAL_LAPS } from '../sim/laps';
 import { getFinishTimeRemaining, isRaceTimedOut } from '../sim/race';
 import { getTrack, TRACK_IDS } from '../sim/tracks';
+import { sampleTrack } from '../sim/track';
 import type { ItemType, KartState, RaceState, Track, TrackId } from '../sim/types';
 import { ROULETTE_TIME } from '../sim/items';
 import { emptyItemIcon as emptyItem, icon, itemIcon, itemName, itemShortName, createRouletteView, stepRoulette } from './itemIcons';
@@ -44,6 +45,8 @@ export class GameUI {
   private readonly map: HTMLCanvasElement;
   private readonly mapContext: CanvasRenderingContext2D | null;
   private trackPath = new Path2D();
+  private lanePath = new Path2D();
+  private laneWidth = 5;
   private mapTrack: Track | null = null;
   private readonly refs: Record<string, HTMLElement> = {};
   private screen: Screen = 'title';
@@ -471,6 +474,8 @@ export class GameUI {
   private prepareMap(track: Track): void {
     this.mapTrack = track;
     this.trackPath = new Path2D();
+    this.lanePath = new Path2D();
+    this.laneWidth = 5;
     if (track.samples.length === 0) return;
     const minX = Math.min(...track.samples.map((point) => point.x));
     const maxX = Math.max(...track.samples.map((point) => point.x));
@@ -479,13 +484,31 @@ export class GameUI {
     this.mapScale = Math.min(144 / (maxX - minX), 99 / (maxZ - minZ));
     this.mapOffsetX = 90 - (minX + maxX) / 2 * this.mapScale;
     this.mapOffsetZ = 64 - (minZ + maxZ) / 2 * this.mapScale;
-    track.samples.forEach((point, index) => {
-      const x = point.x * this.mapScale + this.mapOffsetX;
-      const y = point.z * this.mapScale + this.mapOffsetZ;
-      if (index === 0) this.trackPath.moveTo(x, y);
-      else this.trackPath.lineTo(x, y);
-    });
-    this.trackPath.closePath();
+    const splits = track.def.splits ?? [];
+    const boundaries = [...new Set([0, track.length, ...splits.flatMap(split => [split.from, split.to])])]
+      .sort((a, b) => a - b);
+    for (let section = 0; section < boundaries.length - 1; section++) {
+      const from = boundaries[section], to = boundaries[section + 1];
+      const middle = (from + to) / 2;
+      const split = splits.find(s => s.from <= s.to ? middle >= s.from && middle < s.to
+        : middle >= s.from || middle < s.to);
+      const path = split ? this.lanePath : this.trackPath;
+      const points = [sampleTrack(track, from), ...track.samples.filter(p => p.distance > from && p.distance < to),
+        sampleTrack(track, to)];
+      for (const offset of split ? split.lanes.map(lane => (lane.offsetMin + lane.offsetMax) / 2) : [0]) {
+        points.forEach((point, index) => {
+          const x = (point.x + point.nx * offset) * this.mapScale + this.mapOffsetX;
+          const y = (point.z + point.nz * offset) * this.mapScale + this.mapOffsetZ;
+          if (index === 0) path.moveTo(x, y);
+          else path.lineTo(x, y);
+        });
+      }
+      if (split) {
+        // Scale both strokes to the lanes so their outlines cannot fill the island.
+        this.laneWidth = Math.min(this.laneWidth,
+          ...split.lanes.map(lane => (lane.offsetMax - lane.offsetMin) * this.mapScale * 0.5));
+      }
+    }
   }
 
   private drawMap(state: RaceState): void {
@@ -502,6 +525,12 @@ export class GameUI {
     context.strokeStyle = 'rgba(255, 255, 255, .7)';
     context.lineWidth = 5;
     context.stroke(this.trackPath);
+    context.strokeStyle = 'rgba(9, 39, 31, .9)';
+    context.lineWidth = this.laneWidth * 1.6;
+    context.stroke(this.lanePath);
+    context.strokeStyle = 'rgba(255, 255, 255, .7)';
+    context.lineWidth = this.laneWidth;
+    context.stroke(this.lanePath);
     const start = track.samples[0];
     if (start) {
       const x = start.x * this.mapScale + this.mapOffsetX;

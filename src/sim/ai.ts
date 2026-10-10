@@ -40,8 +40,10 @@ export function getAIInput(state: RaceState, kartId: number): InputFrame {
       state.time + lookAhead / Math.max(kart.speed, 8)), kart.lateralOffset);
     narrowAhead = passage !== undefined && passage.max - passage.min < 2 * (KART_RADIUS + 1) && Math.abs(error) > 0.3;
   }
-  const shouldBrake = approachingBomb ||
-    ((Math.abs(error) > 0.65 || curvature > 0.62 || narrowAhead || dirtAhead) && kart.speed > 21);
+  // Braking within 20 m of a pit would drop the kart into it instead of carrying it over the jump.
+  const shouldBrake = (approachingBomb ||
+    ((Math.abs(error) > 0.65 || curvature > 0.62 || narrowAhead || dirtAhead) && kart.speed > 21)) &&
+    !crossedZone(track, 'pit', kart.trackDistance, kart.trackDistance + 20, kart.lateralOffset);
   const driftWindow = (state.racingTicks + kartId * 61) % 220;
   const approachingJump = crossedZone(track, 'jump', kart.trackDistance, kart.trackDistance + lookAhead + 12, kart.lateralOffset);
   const drift = kart.airTime === 0 && !approachingJump && !approachingBomb && driftWindow < 115 &&

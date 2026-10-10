@@ -33,22 +33,53 @@ export function terrainHeight(track: Track, projection: TrackProjection): number
 }
 
 function ribbonGeometry(track: Track, offsets: RibbonOffsets, lift = 0, slope = false,
-  from = 0, to = track.length): THREE.BufferGeometry {
+  from = 0, to = track.length, boundaries: readonly number[] = [],
+  cutouts: readonly SurfaceZone[] = []): THREE.BufferGeometry {
   const positions: number[] = [];
   const indices: number[] = [];
   const count = Math.max(1, Math.ceil(384 * (to - from) / track.length));
   // A variable-width edge must also follow the sampled centerline's corners;
   // otherwise a straight chord between width keys cuts inside curved sections.
   const distances = sectionDistances(track, count, from, to,
-    [...track.def.surfaces.flatMap(zone => [zone.from, zone.to]),
+    [...boundaries, ...track.def.surfaces.flatMap(zone => [zone.from, zone.to]),
       ...(track.def.widthKeys?.length ? track.samples.map(point => point.distance) : [])]);
-  for (const [i, distance] of distances.entries()) {
+  for (const distance of distances) {
     const p = sampleTrack(track, distance);
     for (const [j, offset] of offsets(distance).entries()) {
       positions.push(p.x + p.nx * offset, slope && j === 1 ? -1.35 : p.y + lift, p.z + p.nz * offset);
     }
-    if (i < distances.length - 1) {
+  }
+  // Keep the road beside a lane-sized pit, leaving the lowered decal visible.
+  for (let i = 0; i < distances.length - 1; i++) {
+    const a = distances[i], b = distances[i + 1];
+    const middle = (a + b) / 2 % track.length;
+    const holes = cutouts.filter(zone => zone.from <= zone.to
+      ? middle >= zone.from && middle < zone.to : middle >= zone.from || middle < zone.to);
+    if (!holes.length) {
       const n = i * 2;
+      indices.push(n, n + 2, n + 1, n + 1, n + 2, n + 3);
+      continue;
+    }
+    let bands: [number, number][] = [[-Infinity, Infinity]];
+    for (const hole of holes) {
+      const left = hole.offsetMin ?? -Infinity, right = hole.offsetMax ?? Infinity;
+      bands = bands.flatMap(([lo, hi]): [number, number][] => {
+        if (right <= lo || left >= hi) return [[lo, hi]];
+        const remaining: [number, number][] = [];
+        if (left > lo) remaining.push([lo, left]);
+        if (right < hi) remaining.push([right, hi]);
+        return remaining;
+      });
+    }
+    for (const [lo, hi] of bands) {
+      const n = positions.length / 3;
+      for (const d of [a, b]) {
+        const p = sampleTrack(track, d);
+        const [left, right] = offsets(d);
+        for (const offset of [Math.max(left, Math.min(right, lo)), Math.max(left, Math.min(right, hi))]) {
+          positions.push(p.x + p.nx * offset, p.y + lift, p.z + p.nz * offset);
+        }
+      }
       indices.push(n, n + 2, n + 1, n + 1, n + 2, n + 3);
     }
   }
@@ -72,8 +103,9 @@ function sectionDistances(track: Track, count: number, from = 0, to = track.leng
   return [...distances].sort((a, b) => a - b);
 }
 
-function ribbon(track: Track, scene: THREE.Group, offsets: RibbonOffsets, color: number, lift = 0, slope = false): THREE.Mesh {
-  const geo = ribbonGeometry(track, offsets, lift, slope);
+function ribbon(track: Track, scene: THREE.Group, offsets: RibbonOffsets, color: number, lift = 0, slope = false,
+  cutouts: readonly SurfaceZone[] = []): THREE.Mesh {
+  const geo = ribbonGeometry(track, offsets, lift, slope, 0, track.length, [], cutouts);
   const mat = material(color);
   mat.side = THREE.DoubleSide;
   const mesh = new THREE.Mesh(geo, mat);
@@ -108,7 +140,7 @@ export function buildCourse(track: Track, theme: CourseTheme): Course {
     const geometry = ribbonGeometry(track, d => {
       const { roadHalfWidth } = widthAt(track, d);
       return [zone.offsetMin ?? -roadHalfWidth, zone.offsetMax ?? roadHalfWidth];
-    }, 0.1, false, zone.from, to);
+    }, zone.kind === 'pit' ? 0.06 - 0.3 : 0.1, false, zone.from, to);
     const parts = surfaces.get(zone.kind) ?? [];
     parts.push(geometry);
     surfaces.set(zone.kind, parts);
@@ -129,6 +161,7 @@ export function buildCourse(track: Track, theme: CourseTheme): Course {
     group.add(mesh);
   }
   buildBarriers(track, theme, group);
+  buildIslands(track, theme, group);
   buildScenery(track, theme, group);
   return { group, sky, dispose() { disposeObjectTree(group); group.removeFromParent(); } };
 }
@@ -142,6 +175,7 @@ function buildBarriers(track: Track, theme: CourseTheme, group: THREE.Group): vo
   const batches = new Map<NonNullable<Barrier['scenery']>, Barrier[]>();
   for (const barrier of track.def.barriers ?? []) {
     const scenery = barrier.scenery ?? 'block';
+    if (scenery === 'rock' || scenery === 'building') continue;
     const batch = batches.get(scenery) ?? [];
     batch.push(barrier);
     batches.set(scenery, batch);
@@ -204,6 +238,78 @@ function buildBarriers(track: Track, theme: CourseTheme, group: THREE.Group): vo
   }
 }
 
+function buildIslands(track: Track, theme: CourseTheme, group: THREE.Group): void {
+  const islands = (track.def.barriers ?? []).filter(b => b.scenery === 'rock' || b.scenery === 'building');
+  if (!islands.length) return;
+  const spanOf = (b: Barrier) => (b.to - b.from + track.length) % track.length;
+  const halfAt = (b: Barrier, along: number) => b.halfWidth * Math.min(1,
+    along / (b.taper ?? 4), (spanOf(b) - along) / (b.taper ?? 4));
+  const parts = islands.map(b => {
+    const span = spanOf(b), taper = Math.min(b.taper ?? 4, span / 2);
+    return ribbonGeometry(track, d => {
+      const half = halfAt(b, d - b.from);
+      return [b.center - half, b.center + half];
+    }, 0.06 + 0.15, false, b.from, b.from + span, [b.from + taper, b.from + span - taper]);
+  });
+  const geometry = mergeGeometries(parts)!;
+  parts.forEach(part => part.dispose());
+  const ground = material(theme.colors.ground);
+  ground.side = THREE.DoubleSide;
+  const island = new THREE.Mesh(geometry, ground);
+  island.name = 'islands';
+  island.receiveShadow = true;
+  group.add(island);
+
+  for (const scenery of ['rock', 'building'] as const) {
+    const bodies = islands.filter(b => b.scenery === scenery);
+    if (!bodies.length) continue;
+    const counts = bodies.map(b => Math.max(1, Math.floor(spanOf(b) / 6)));
+    const shape = scenery === 'rock' ? new THREE.DodecahedronGeometry(1, 0) : new THREE.BoxGeometry(1, 1, 1);
+    shape.computeBoundingBox();
+    const size = shape.boundingBox!.getSize(new THREE.Vector3());
+    shape.scale(1 / size.x, 1 / size.y, 1 / size.z);
+    const props = new THREE.InstancedMesh(shape, material(theme.colors.barrier ?? theme.colors.post),
+      counts.reduce((sum, count) => sum + count, 0));
+    const transform = new THREE.Object3D();
+    let index = 0;
+    bodies.forEach((b, bodyIndex) => {
+      const span = spanOf(b), count = counts[bodyIndex];
+      for (let i = 0; i < count; i++) {
+        const along = (span - (count - 1) * 6) / 2 + i * 6;
+        const point = sampleTrack(track, b.from + along);
+        const height = scenery === 'rock' ? 4 - i % 3 : 4 + i % 5;
+        const width = Math.min(scenery === 'rock' ? height : 4, 2 * halfAt(b, along));
+        transform.position.set(point.x + point.nx * b.center, point.y + 0.21 + height / 2,
+          point.z + point.nz * b.center);
+        transform.rotation.set(0, Math.atan2(point.tx, point.tz), 0);
+        transform.scale.set(width, height, scenery === 'rock' ? height : 4);
+        transform.updateMatrix();
+        props.setMatrixAt(index++, transform.matrix);
+      }
+    });
+    props.name = `island-scenery:${scenery}`;
+    props.receiveShadow = true;
+    // InstancedMesh has one shadow flag: the building batch includes heights > 4 m.
+    props.castShadow = scenery === 'rock';
+    group.add(props);
+  }
+  for (const [index, split] of (track.def.splits ?? []).entries()) {
+    const point = sampleTrack(track, split.from - 30);
+    const wall = widthAt(track, split.from - 30).wallHalfWidth;
+    const lanes = [...split.lanes].sort((a, b) => a.offsetMin - b.offsetMin);
+    for (const [side, lane] of lanes.entries()) {
+      const sign = textPlane(split.name ?? (lane.risk ? 'SHORT' : 'SAFE'), 512, 128,
+        theme.colors.signBackground, theme.colors.signText);
+      const offset = (side === 0 ? -1 : 1) * (wall + 0.25);
+      sign.name = `lane-sign:${index}:${side}`;
+      sign.position.set(point.x + point.nx * offset, point.y + 3, point.z + point.nz * offset);
+      sign.rotation.y = Math.atan2(-point.tx, -point.tz);
+      sign.scale.set(4.8, 1.2, 1);
+      group.add(sign);
+    }
+  }
+}
+
 /** Dispose shared resources once, including instancing buffers and every texture slot. */
 export function disposeObjectTree(root: THREE.Object3D): void {
   const geometries = new Set<THREE.BufferGeometry>();
@@ -241,7 +347,7 @@ function buildRoad(track: Track, theme: CourseTheme, scene: THREE.Group): void {
   ribbon(track, scene, d => {
     const { roadHalfWidth } = widthAt(track, d);
     return [-roadHalfWidth, roadHalfWidth];
-  }, colors.road, 0.06).name = 'road';
+  }, colors.road, 0.06, false, track.def.surfaces.filter(zone => zone.kind === 'pit')).name = 'road';
   for (const side of [-1, 1]) {
     ribbon(track, scene, d => {
       const w = widthAt(track, d);

@@ -1,7 +1,10 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import { buildTrack, getTrack, sampleTrack } from '../../sim';
-import type { Barrier, SurfaceZone } from '../../sim';
+import type { Barrier, RaceState, SurfaceZone, Track } from '../../sim';
+import * as trackRegistry from '../../sim/tracks';
+import { islandSplit } from '../../sim/tracks/features';
+import { GameUI } from '../../ui/GameUI';
 import { exclusionAt, KART_RADIUS, widthAt } from '../../sim/corridor';
 import { buildCourse, type Course } from './buildCourse';
 import { meadow } from './themes/meadow';
@@ -23,10 +26,11 @@ const RENDER_BASELINE = {
 
 // Only the browser's text drawing context is supplied. All three objects and
 // their dispose events are real; these tests run in Vitest's node environment.
+const drawText = vi.fn();
 beforeAll(() => {
   vi.stubGlobal('document', {
     createElement: () => ({ width: 0, height: 0, getContext: () => ({
-      fillRect() {}, fillText() {},
+      fillRect() {}, fillText: drawText,
     }) }),
   });
 });
@@ -39,6 +43,24 @@ function build(...args: Parameters<typeof buildCourse>): Course {
   return course;
 }
 afterEach(() => { courses.splice(0).forEach(course => course.dispose()); });
+
+function islandTrack(scenery: 'rock' | 'building' = 'rock'): Track {
+  return buildTrack({ ...getTrack('meadow').def, scale: 1, controlPoints: [
+    [0, 0, 0], [100, 0, 0], [200, 0, 0], [300, 0, 0], [400, 0, 0],
+    [400, 0, 200], [0, 0, 200], [-100, 0, 200], [-100, 0, 0],
+  ], ...islandSplit({ from: 100.37, to: 180.83, islandHalf: 6, laneWidth: 9, taper: 12,
+    scenery, risky: 'inner', bend: 1 }), surfaces: [
+    { kind: 'ice', from: 40, to: 50 }, { kind: 'ice', from: 70, to: 80 },
+    { kind: 'dirt', from: 115, to: 130, offsetMin: 7, offsetMax: 15 },
+    { kind: 'pit', from: 145, to: 155, offsetMin: 7, offsetMax: 15 },
+  ] });
+}
+
+function meshCount(group: THREE.Group): number {
+  let count = 0;
+  group.traverse(object => { if (object instanceof THREE.Mesh) count++; });
+  return count;
+}
 
 function hash(array: Float32Array): number {
   // Ignore signed zero and sub-pixel trigonometric differences across JS engines.
@@ -126,7 +148,7 @@ describe('track-driven surfaces', () => {
         const point = sampleTrack(track, zone.from + i / segments * (zone.to - zone.from));
         for (const [side, offset] of [zone.offsetMin ?? -track.def.roadHalfWidth, zone.offsetMax ?? track.def.roadHalfWidth].entries()) {
           expect(positions.getX(i * 2 + side)).toBeCloseTo(point.x + point.nx * offset, 4);
-          expect(positions.getY(i * 2 + side)).toBeCloseTo(point.y + 0.1, 4);
+          expect(positions.getY(i * 2 + side)).toBeCloseTo(point.y + (zone.kind === 'pit' ? -0.24 : 0.1), 4);
           expect(positions.getZ(i * 2 + side)).toBeCloseTo(point.z + point.nz * offset, 4);
         }
       }
@@ -450,11 +472,154 @@ describe('variable widths and batched barriers', () => {
 
   it.each([
     ['meadow', meadow], ['canyon', canyon], ['snowpeak', snowpeak], ['neon', neon],
-  ] as const)('%s stays within the pre-story mesh count + 2', (id, theme) => {
-    const { group } = build(getTrack(id), theme);
-    let meshes = 0;
-    group.traverse(object => { if (object instanceof THREE.Mesh) meshes++; });
-    expect(meshes).toBeLessThanOrEqual(RENDER_BASELINE[id].meshes + 2);
+  ] as const)('%s stays within its pre-story mesh budget', (id, theme) => {
+    const track = getTrack(id);
+    const hasIsland = track.def.barriers?.some(b => b.scenery === 'rock' || b.scenery === 'building');
+    // Every course keeps +2. Islands add ribbon 1 + scenery 1 + lane signs 2 + pit decal 1.
+    // CANYON layout 3 (M2-05) uses the +2 for its earlier growth and its new boost decal.
+    expect(meshCount(build(track, theme).group)).toBeLessThanOrEqual(RENDER_BASELINE[id].meshes + 2 + (hasIsland ? 5 : 0));
+  });
+});
+
+describe('island splits', () => {
+  it.each(['rock', 'building'] as const)('draws the %s island body and one scenery instance every 6 m', scenery => {
+    const track = islandTrack(scenery);
+    const barrier = track.def.barriers![0];
+    const { group } = build(track, canyon);
+    const ribbon = group.getObjectByName('islands') as THREE.Mesh<THREE.BufferGeometry, THREE.MeshLambertMaterial>;
+    expect(ribbon.material.color.getHex()).toBe(canyon.colors.ground);
+    const vertices = ribbon.geometry.getAttribute('position');
+    for (let i = 0; i < vertices.count; i++) {
+      const distance = vertices.getX(i);
+      const half = barrier.halfWidth * Math.min(1, (distance - barrier.from) / barrier.taper!,
+        (barrier.to - distance) / barrier.taper!);
+      expect(-vertices.getZ(i)).toBeCloseTo(barrier.center + (i % 2 * 2 - 1) * half, 4);
+      expect(vertices.getY(i)).toBeCloseTo(0.06 + 0.15, 4);
+    }
+    for (const d of [barrier.from, barrier.from + barrier.taper!, barrier.to - barrier.taper!, barrier.to]) {
+      expect(Array.from({ length: vertices.count }, (_, i) => vertices.getX(i)).some(x => Math.abs(x - d) < 0.001)).toBe(true);
+    }
+    expect(group.children.filter(o => o.name.startsWith('island-scenery:'))).toHaveLength(1);
+    expect(group.children.some(o => o.name === `barriers:${scenery}`)).toBe(false);
+    const props = group.getObjectByName(`island-scenery:${scenery}`) as THREE.InstancedMesh;
+    expect(props).toBeInstanceOf(THREE.InstancedMesh);
+    expect(props.count).toBeGreaterThanOrEqual(Math.floor((barrier.to - barrier.from) / 6));
+    expect(props.geometry.type).toBe(scenery === 'rock' ? 'DodecahedronGeometry' : 'BoxGeometry');
+    const matrix = new THREE.Matrix4();
+    const heights: number[] = [];
+    const positions: number[] = [];
+    props.geometry.computeBoundingBox();
+    for (let i = 0; i < props.count; i++) {
+      props.getMatrixAt(i, matrix);
+      const bounds = props.geometry.boundingBox!.clone().applyMatrix4(matrix);
+      const height = bounds.max.y - bounds.min.y;
+      heights.push(height);
+      positions.push(new THREE.Vector3().setFromMatrixPosition(matrix).x);
+      expect(height).toBeGreaterThanOrEqual(scenery === 'rock' ? 2 : 4);
+      expect(height).toBeLessThanOrEqual(scenery === 'rock' ? 4 : 8);
+      expect(bounds.min.y).toBeCloseTo(0.21, 5);
+      if (props.castShadow) expect(height).toBeLessThanOrEqual(4);
+    }
+    expect(Math.max(...heights)).toBeGreaterThanOrEqual(4);
+    positions.slice(1).forEach((x, i) => expect(x - positions[i]).toBeCloseTo(6, 4));
+  });
+
+  it.each([undefined, 'CANYON FORK'])('places two lane labels outside the walls 30 m before the nose (%s)', name => {
+    const base = islandTrack();
+    const split = { ...base.def.splits![0], name };
+    const track = buildTrack({ ...base.def, splits: [split] });
+    drawText.mockClear();
+    const { group } = build(track, canyon);
+    const signs = group.children.filter((o): o is THREE.Mesh => o instanceof THREE.Mesh && o.name.startsWith('lane-sign:'));
+    expect(signs).toHaveLength(2);
+    expect(drawText.mock.calls.map(call => call[0]).filter(text => ['SHORT', 'SAFE', name].includes(text)))
+      .toEqual(name ? [name, name] : ['SAFE', 'SHORT']);
+    signs.forEach((sign, side) => {
+      expect(sign.position.x).toBeCloseTo(split.from - 30, 4);
+      expect(Math.abs(sign.position.x - (track.def.barriers![0].from - 30))).toBeLessThanOrEqual(1);
+      expect(Math.abs(sign.position.z)).toBeGreaterThanOrEqual(widthAt(track, split.from - 30).wallHalfWidth + 0.25);
+      expect(Math.sign(-sign.position.z)).toBe(side === 0 ? -1 : 1);
+      expect((sign.material as THREE.MeshBasicMaterial).map).toBeInstanceOf(THREE.CanvasTexture);
+      const normal = new THREE.Vector3(0, 0, 1).applyEuler(sign.rotation);
+      const point = sampleTrack(track, split.from - 30);
+      expect(normal.dot(new THREE.Vector3(-point.tx, 0, -point.tz))).toBeCloseTo(1, 5);
+    });
+  });
+
+  it('merges ice 2 + dirt 1 + pit 1 into three decals and exposes a pit 0.3 m below the road', () => {
+    const track = islandTrack();
+    const { group } = build(track, canyon);
+    const decals = group.children.filter(o => o.name.startsWith('surface:'));
+    expect(decals.map(o => o.name).sort()).toEqual(['surface:dirt', 'surface:ice', 'surface:pit']);
+    const pit = group.getObjectByName('surface:pit') as THREE.Mesh<THREE.BufferGeometry, THREE.MeshLambertMaterial>;
+    expect(pit.material.color.getHex()).toBe(canyon.colors.surfaces.pit);
+    const vertices = pit.geometry.getAttribute('position');
+    for (let i = 0; i < vertices.count; i++) expect(vertices.getY(i)).toBeCloseTo(0.06 - 0.3, 4);
+    group.updateMatrixWorld(true);
+    const road = group.getObjectByName('road')!;
+    for (const [distance, offset, expected] of [[150, 11, 'surface:pit'], [150, -11, 'road'], [144, 11, 'road'], [156, 11, 'road']] as const) {
+      const ray = new THREE.Raycaster(new THREE.Vector3(distance, 10, -offset), new THREE.Vector3(0, -1, 0));
+      expect(ray.intersectObjects([road, pit], false)[0]?.object.name).toBe(expected);
+    }
+  });
+
+  it.each(['rock', 'building'] as const)('adds at most five meshes for a %s island', scenery => {
+    const track = islandTrack(scenery);
+    const plain = buildTrack({ ...track.def, barriers: [], splits: [], surfaces: track.def.surfaces.filter(z => z.kind !== 'pit') });
+    // Island ribbon 1 + scenery 1 + lane signs 2 + merged pit decal 1.
+    expect(meshCount(build(track, canyon).group)).toBeLessThanOrEqual(meshCount(build(plain, canyon).group) + 5);
+  });
+});
+
+describe('minimap lane drawing', () => {
+  class RecordedPath {
+    readonly segments: number[][] = [];
+    private current = [0, 0];
+    moveTo(x: number, y: number) { this.current = [x, y]; }
+    lineTo(x: number, y: number) {
+      this.segments.push([...this.current, x, y]);
+      this.current = [x, y];
+    }
+  }
+
+  it.each([false, true])('leaves the island center clear and strokes both lane centers (wrapped: %s)', wrapped => {
+    const base = islandTrack();
+    const split = base.def.splits![0];
+    const track = wrapped ? buildTrack({ ...base.def, splits: [{ ...split, from: base.length - 40, to: 180.83 }] }) : base;
+    vi.stubGlobal('Path2D', RecordedPath);
+    const lookup = vi.spyOn(trackRegistry, 'getTrack').mockReturnValue(track);
+    try {
+      const strokes: { path: RecordedPath; width: number; color: string }[] = [];
+      const context = { lineWidth: 0, strokeStyle: '', setTransform() {}, clearRect() {}, beginPath() {}, moveTo() {}, lineTo() {},
+        stroke(path?: RecordedPath) { if (path) strokes.push({ path, width: this.lineWidth, color: this.strokeStyle }); } };
+      // Node has no canvas rasterizer: exercise the real prepareMap/drawMap and
+      // inspect every submitted stroke, including outline widths, in pixel space.
+      const ui = Object.assign(Object.create(GameUI.prototype), { mapContext: context }) as {
+        prepareMap(track: Track): void; drawMap(state: RaceState): void;
+        mapScale: number; mapOffsetX: number; mapOffsetZ: number;
+      };
+      ui.prepareMap(track);
+      ui.drawMap({ trackId: track.def.id, karts: [] } as unknown as RaceState);
+      const hits = (distance: number, offset: number) => {
+        const p = sampleTrack(track, distance);
+        const x = (p.x + p.nx * offset) * ui.mapScale + ui.mapOffsetX;
+        const y = (p.z + p.nz * offset) * ui.mapScale + ui.mapOffsetZ;
+        return strokes.filter(stroke => stroke.path.segments.some(([ax, ay, bx, by]) => {
+          const dx = bx - ax, dy = by - ay;
+          const t = ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy);
+          if (t < 0 || t > 1) return false; // Canvas paths use the default butt caps.
+          return Math.hypot(x - ax - t * dx, y - ay - t * dy) <= stroke.width / 2;
+        }));
+      };
+      expect(hits(140, 0)).toHaveLength(0);
+      for (const lane of split.lanes) {
+        expect(hits(140, (lane.offsetMin + lane.offsetMax) / 2).at(-1)?.color).toBe('rgba(255, 255, 255, .7)');
+      }
+      if (wrapped) expect(hits(track.length - 20, 0)).toHaveLength(0);
+      else expect(hits(50, 0).at(-1)?.color).toBe('rgba(255, 255, 255, .7)');
+    } finally {
+      lookup.mockRestore();
+    }
   });
 });
 
@@ -464,9 +629,12 @@ describe('course resource ownership', () => {
   ] as const)('%s releases every geometry, material, label texture and instance buffer on repeated disposal', (id, theme) => {
     const scene = new THREE.Scene();
     for (let iteration = 0; iteration < 2; iteration++) {
-      const course = build(buildTrack({ ...getTrack(id).def,
-        barriers: [{ from: 80, to: 100, center: 0, halfWidth: 2, scenery: 'block' }],
-        surfaces: [{ kind: 'dirt', from: 110, to: 140 }, { kind: 'dirt', from: 170, to: 200 }],
+      const island = islandSplit({ from: 240, to: 320, islandHalf: 6, laneWidth: 9, taper: 12,
+        scenery: iteration === 0 ? 'rock' : 'building', risky: 'inner', bend: 1 });
+      const course = build(buildTrack({ ...getTrack(id).def, ...island,
+        barriers: [...island.barriers, { from: 80, to: 100, center: 0, halfWidth: 2, scenery: 'block' }],
+        surfaces: [{ kind: 'dirt', from: 110, to: 140 }, { kind: 'dirt', from: 170, to: 200 },
+          { kind: 'pit', from: 280, to: 290, offsetMin: 7, offsetMax: 15 }],
       }), theme);
       scene.add(course.group);
       const geometries = new Set<THREE.BufferGeometry>();
@@ -486,7 +654,13 @@ describe('course resource ownership', () => {
         }
       });
       expect(geometries.size).toBeGreaterThan(20);
-      expect(textures.size).toBe(6); // Banner, four chevrons, and one per-instance morph texture.
+      expect(textures.size).toBe(8); // Banner, four chevrons, two lane signs, one instance morph texture.
+      for (const name of ['islands', `island-scenery:${iteration === 0 ? 'rock' : 'building'}`,
+        'lane-sign:0:0', 'lane-sign:0:1', 'surface:pit']) {
+        const mesh = course.group.getObjectByName(name) as THREE.Mesh;
+        expect(mesh).toBeInstanceOf(THREE.Mesh);
+        expect(geometries.has(mesh.geometry)).toBe(true);
+      }
       let geometryDisposals = 0;
       const initialGeometries = geometries.size;
       geometries.forEach(geometry => geometry.addEventListener('dispose', () => { geometries.delete(geometry); geometryDisposals++; }));

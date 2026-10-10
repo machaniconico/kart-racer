@@ -4,13 +4,39 @@ import { racingLineOffset } from './surfaces';
 import { corridorAt, freeIntervalFor, KART_RADIUS, widthAt } from './corridor';
 import { getRank } from './laps';
 import type { ProjectileState } from './itemTypes';
-import type { KartState, RaceState } from './types';
+import type { KartState, RaceState, Track } from './types';
 
-/** Shared by steering and item decisions so both use the same driving line. */
-export function getSteeringError(state: RaceState, kart: KartState): number {
+const LANE_APPROACH = 35;
+
+function wrap(length: number, distance: number): number {
+  const remainder = distance % length;
+  return remainder < 0 ? remainder + length : remainder;
+}
+
+/**
+ * The split lane a CPU commits to from `from - 35` to `to`: rank-free and stateless, so it cannot
+ * flip during the approach. `ahead` is the distance left to `from` (0 inside the split).
+ */
+function splitLane(track: Track, kart: KartState): { center: number; ahead: number } | undefined {
+  if (!track.def.splits?.length) return undefined;
+  for (const split of track.def.splits) {
+    const ahead = wrap(track.length, split.from - kart.trackDistance);
+    const inside = wrap(track.length, kart.trackDistance - split.from) <= wrap(track.length, split.to - split.from);
+    if (!inside && ahead > LANE_APPROACH) continue;
+    // One lap in three per kart, with a seed-dependent (aiPhase) offset. The story's
+    // `(id + lap) % 3 === 0 || sin(aiPhase + lap) > 0.6` picks risky ~53% of the time (61% measured),
+    // above the 25-45% acceptance band.
+    const risky = (kart.id + kart.lap + Math.floor(kart.aiPhase * 3 / (2 * Math.PI))) % 3 === 0;
+    const lane = split.lanes.find(candidate => candidate.risk === (risky ? 1 : 0)) ?? split.lanes[0]!;
+    return { center: (lane.offsetMin + lane.offsetMax) / 2, ahead: inside ? 0 : ahead };
+  }
+  return undefined;
+}
+
+/** The lateral target of the CPU driving line at its look-ahead point. */
+export function getAiLineOffset(state: RaceState, kart: KartState): number {
   const track = getTrack(state.trackId);
   const targetDistance = kart.trackDistance + 7.5 + Math.max(0, kart.speed) * 0.24;
-  const target = sampleTrack(track, targetDistance);
   // Tighter tracking still needs enough lane variety to reach the outer boxes.
   let lineOffset = Math.sin(kart.aiPhase + state.time * 0.12) * 2.5;
   if (track.def.racingLine.length > 0) {
@@ -18,16 +44,33 @@ export function getSteeringError(state: RaceState, kart: KartState): number {
     const limit = Math.max(0, widthAt(track, targetDistance).roadHalfWidth - 1);
     lineOffset = Math.max(-limit, Math.min(limit, lineOffset));
   }
+  const lane = splitLane(track, kart);
+  if (lane) {
+    // Ease onto the lane centre over the approach, starting from the lane's side of the road so the
+    // target never crosses the island's nose line.
+    const t = 1 - lane.ahead / LANE_APPROACH;
+    const side = Math.sign(lane.center);
+    lineOffset = Math.max(0, lineOffset * side) * side * (1 - t) + lane.center * t;
+  }
   if (track.def.barriers?.length) {
-    // Stay in the passage nearest the kart, evaluated when the kart will arrive there.
+    // Stay in the passage nearest the kart (or its chosen split lane), evaluated when the kart will arrive there.
     const intervals = corridorAt(track, targetDistance, state.time + (targetDistance - kart.trackDistance) / Math.max(kart.speed, 8));
-    const passage = freeIntervalFor(intervals, kart.lateralOffset);
+    const passage = freeIntervalFor(intervals, lane ? lane.center : kart.lateralOffset);
     if (passage) {
       const margin = KART_RADIUS + 0.6;
       lineOffset = passage.max - passage.min < 2 * margin ? (passage.min + passage.max) / 2 :
         Math.max(passage.min + margin, Math.min(passage.max - margin, lineOffset));
     }
   }
+  return lineOffset;
+}
+
+/** Shared by steering and item decisions so both use the same driving line. */
+export function getSteeringError(state: RaceState, kart: KartState): number {
+  const track = getTrack(state.trackId);
+  const targetDistance = kart.trackDistance + 7.5 + Math.max(0, kart.speed) * 0.24;
+  const target = sampleTrack(track, targetDistance);
+  const lineOffset = getAiLineOffset(state, kart);
   const desired = Math.atan2(target.x + target.nx * lineOffset - kart.x, target.z + target.nz * lineOffset - kart.z);
   const travelHeading = kart.heading - kart.driftDirection * Math.min(0.23, kart.driftTime * 0.35);
   return Math.atan2(Math.sin(desired - travelHeading), Math.cos(desired - travelHeading));

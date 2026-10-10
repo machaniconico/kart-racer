@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { projectToTrack, sampleTrack } from '../../../sim';
 import type { Track } from '../../../sim';
+import { widthAt } from '../../../sim/corridor';
 import type { SceneryBudget } from '../CourseTheme';
 import type { CourseTheme } from '../buildCourse';
 import { material, place, terrainHeight } from '../buildCourse';
@@ -56,11 +57,11 @@ function buildProps(track: Track, scene: THREE.Group, budget: SceneryBudget): vo
   const roadside = (clearance: number) => {
     for (let attempt = 0; attempt < 100; attempt++) {
       const point = sampleTrack(track, random() * track.length);
-      const offset = (track.def.wallHalfWidth + clearance + random() * 65) * (random() < 0.5 ? -1 : 1);
+      const offset = (widthAt(track, point.distance).wallHalfWidth + clearance + random() * 65) * (random() < 0.5 ? -1 : 1);
       const x = point.x + point.nx * offset;
       const z = point.z + point.nz * offset;
       const projection = projectToTrack(track, x, z);
-      if (Math.abs(projection.offset) > track.def.wallHalfWidth + clearance) {
+      if (Math.abs(projection.offset) > widthAt(track, projection.distance).wallHalfWidth + clearance) {
         return { x, y: terrainHeight(track, projection), z };
       }
     }
@@ -145,8 +146,9 @@ function buildLandmarks(track: Track, scene: THREE.Group): void {
   const transform = new THREE.Object3D();
   for (const [i, jump] of jumps.entries()) {
     const point = sampleTrack(track, jump.from);
-    const left = jump.offsetMin ?? -track.def.roadHalfWidth;
-    const right = jump.offsetMax ?? track.def.roadHalfWidth;
+    const half = widthAt(track, jump.from).roadHalfWidth;
+    const left = jump.offsetMin ?? -half;
+    const right = jump.offsetMax ?? half;
     place(track, transform, point, (left + right) / 2, 0);
     transform.scale.set(right - left, 1, 4);
     transform.updateMatrix();
