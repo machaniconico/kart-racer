@@ -28,11 +28,11 @@ function bandClearance(row: readonly Interval[], y: number): number {
  * - Without a band from the kart to three look-aheads: the road centre, with edge distance
  *   roadHalfWidth - |offset|, exactly as before bands existed.
  * - Near bands, paths in (arc metres, lateral metres): the kart's own line (straight in the world,
- *   so a curve carries it outward; walls make it slide) plus a constant added lateral acceleration
- *   c * AUTHORITY / speed for each c in PATH_FAMILY. Clear means PATH_MARGIN off every band and
- *   off the wall limit (or the kart's current margin, if smaller). In order (numbered below): the
- *   own line if clear (no correction); when it only meets a wall and the kart is still off the
- *   wall, holding the offset along the track if clear and within HOLD_REACH times the assist's
+ *   so a curve carries it outward; walls make it slide) plus an added lateral acceleration
+ *   c * AUTHORITY / speed for each c in PATH_FAMILY (near a split, at the speed predicted for each
+ *   metre). Clear means PATH_MARGIN off every band and off the wall limit (or the kart's current
+ *   margin, if smaller). In order (numbered below): the own line if clear (no correction); when it
+ *   only meets a wall and the kart is still off the wall, holding the offset along the track if clear and within HOLD_REACH times the assist's
  *   authority (the original tangent following); the band-clear path with the least |c|; with no
  *   band-clear path the assist does not intervene (`aim` null: the frame passes through).
  *   `center` is the lateral offset aimed at and `edgeDistance` the chosen path's band clearance.
@@ -83,12 +83,14 @@ export function assistPassage(state: RaceState, kart: KartState, steer: number, 
   let heading = kart.heading;
   let speed = Math.max(kart.speed, 1);
   for (let step = 1; step <= horizon; step++) {
+    // Speed over this metre: the path family's authority (AUTHORITY / speed) shrinks as the kart speeds up.
+    const stepSpeed = speed;
+    speed = Math.max(1, speed + (22 * throttle - (throttle > 0 ? 2.1 : 5.5) - 4 * Math.max(0, speed - 32)) / speed);
     if (curving) {
-      const curvature = curvatureAt(speed);
+      const curvature = curvatureAt(stepSpeed);
       wx += Math.sin(heading + curvature / 2);
       wz += Math.cos(heading + curvature / 2);
       heading += curvature;
-      speed = Math.max(1, speed + (22 * throttle - (throttle > 0 ? 2.1 : 5.5) - 4 * Math.max(0, speed - 32)) / speed);
     } else {
       wx = kart.x + dx * step;
       wz = kart.z + dz * step;
@@ -98,13 +100,15 @@ export function assistPassage(state: RaceState, kart: KartState, steer: number, 
     const point = sampleTrack(track, projection.distance);
     const wall = widthAt(track, projection.distance).wallHalfWidth;
     own.push({ y: projection.offset, x: point.x, z: point.z, nx: point.nx, nz: point.nz, limit: wall - KART_RADIUS,
-      distance: projection.distance, wall, intervals: corridorAt(track, projection.distance, timeAt(step)), wx, wz });
+      distance: projection.distance, wall, intervals: corridorAt(track, projection.distance, timeAt(step)), wx, wz, speed: stepSpeed });
   }
   // The input already turns the kart along a curved own line: a path point is aimed at relative
   // to that line, not to the heading.
   const at = own[Math.max(0, Math.min(own.length, Math.round(lookAhead)) - 1)]!;
   const turn = curving ? Math.atan2(at.wx - kart.x, at.wz - kart.z) - kart.heading : 0;
-  const plan = { track, kart, steer, lookAhead, horizon, alongRow, own, dx, dz, turn };
+  // Near a split the path family's authority follows the predicted speed (see trace); elsewhere it
+  // stays at the current speed, as the M1-03 band rules were accepted with.
+  const plan = { track, kart, steer, lookAhead, horizon, alongRow, own, dx, dz, turn, accelerating: splits.length > 0 };
   if (!splits.length) return choosePassage(plan, [], false);
   const inLanes = choosePassage(plan, splits, true);
   return inLanes.aim !== null ? inLanes : choosePassage(plan, [], true);
@@ -114,7 +118,7 @@ type Passage = { center: number; edgeDistance: number; banded: boolean; aim?: { 
 interface Row { readonly distance: number; readonly wall: number; readonly intervals: Interval[] }
 interface OwnPoint extends Row {
   readonly y: number; readonly x: number; readonly z: number; readonly nx: number; readonly nz: number; readonly limit: number;
-  readonly wx: number; readonly wz: number;
+  readonly wx: number; readonly wz: number; readonly speed: number;
 }
 
 const wrapLap = (value: number, length: number): number => ((value % length) + length) % length;
@@ -137,9 +141,9 @@ function bandEdges(track: Track, { distance, wall, intervals }: Row, splits: rea
 }
 
 function choosePassage(plan: { track: Track; kart: KartState; steer: number; lookAhead: number; horizon: number;
-  alongRow: (step: number) => Row; own: OwnPoint[]; dx: number; dz: number; turn: number }, splits: readonly SplitSection[],
+  alongRow: (step: number) => Row; own: OwnPoint[]; dx: number; dz: number; turn: number; accelerating: boolean }, splits: readonly SplitSection[],
   island: boolean): Passage {
-  const { track, kart, steer, lookAhead, horizon, alongRow, own, dx, dz, turn } = plan;
+  const { track, kart, steer, lookAhead, horizon, alongRow, own, dx, dz, turn, accelerating } = plan;
   const offset = kart.lateralOffset;
   const required = Math.min(PATH_MARGIN, Math.max(bandClearance(bandEdges(track, alongRow(0), splits), offset), 0));
   const wallNow = widthAt(track, kart.trackDistance).wallHalfWidth - KART_RADIUS - Math.abs(offset);
@@ -147,17 +151,22 @@ function choosePassage(plan: { track: Track; kart: KartState; steer: number; loo
   const ownRows = own.map(point => bandEdges(track, point, splits));
 
   const acceleration = AUTHORITY / Math.max(kart.speed, 8);
-  /** The own line's drift plus a constant added lateral acceleration, sliding on walls. */
-  const trace = (c: number) => {
+  /**
+   * The own line's drift plus an added lateral acceleration, sliding on walls: `scale` times
+   * AUTHORITY / speed. Near a split, at the speed predicted for each metre: a lane is committed to
+   * from far ahead, and a path reachable only at the current speed was chosen, then dropped as the
+   * kart sped up, leaving it pulled toward the nose.
+   */
+  const trace = (scale: number) => {
     const ys: number[] = [];
     let wallLeast = Infinity;
     let y = offset;
     let previousOwn = offset;
     let extra = 0;
-    for (const { y: ownY, limit } of own) {
+    for (const { y: ownY, limit, speed } of own) {
       const drift = ownY - previousOwn;
       previousOwn = ownY;
-      extra += c;
+      extra += accelerating ? scale * AUTHORITY / Math.max(speed, 8) : scale * acceleration;
       y += drift + extra;
       wallLeast = Math.min(wallLeast, limit - Math.abs(y));
       if (Math.abs(y) > limit) {
@@ -170,11 +179,10 @@ function choosePassage(plan: { track: Track; kart: KartState; steer: number; loo
     return { ys, wallLeast };
   };
   const paths = PATH_FAMILY.map(scale => {
-    const c = scale * acceleration;
-    const { ys, wallLeast } = trace(c);
+    const { ys, wallLeast } = trace(scale);
     let least = Infinity;
     ys.forEach((y, index) => { least = Math.min(least, bandClearance(ownRows[index]!, y)); });
-    return { scale, c, ys, least, wallLeast };
+    return { scale, ys, least, wallLeast };
   });
   const index = Math.max(0, Math.min(own.length, Math.round(lookAhead)) - 1);
   const at = own[index]!;

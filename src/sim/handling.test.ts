@@ -129,11 +129,26 @@ describe('H1 handling', () => {
 // | 3 / v10 (new)      | 20.094907407407405 | 0         | 1         | 0         | 24 / 72      | 4           |
 // Both lanes were used by all 8 CPU IDs across the three seeds; safe/risky passes: 48/24.
 // The one band hit is an item spin-out into the first centre pillar (seed 98765, 135 m), not the island.
+// M2.5-01: +30% road/wall widths and box lanes; open MEADOW/SNOWPEAK bends, widen NEON's line.
+// Recorded on darwin-arm64, 8 CPUs × seeds [1, 42, 98765] × 3 laps (72 laps per course).
+// | Course   | Protocol  | Mean lap (s)       | Wall hits | Band hits |
+// | meadow   | v7 (old)  | 18.50972222222222   | 3         | 0         |
+// | meadow   | v11 (new) | 18.537268518518516  | 0         | 0         |
+// | snowpeak | v7 (old)  | 18.057175925925925  | 0         | 0         |
+// | snowpeak | v11 (new) | 17.939814814814813  | 0         | 0         |
+// | neon     | v7 (old)  | 18.24861111111111   | 1         | 0         |
+// | neon     | v11 (new) | 18.441435185185185  | 0         | 0         |
+// M2.5-02 / CANYON layout 4: +30% widths (narrow passage 5.2 / 9.49, island lanes 11.7, line -5.85),
+// inner dirt from +26 instead of +32. Recorded on darwin-arm64, 8 CPUs × seeds [1, 42, 98765] × 3 laps:
+// | Layout / protocol | Mean lap (s)       | Wall hits | Band hits | Pit falls | Risky passes | Band budget |
+// | 3 / v10 (old)      | 20.094907407407405 | 0         | 1         | 0         | 24 / 72      | 4           |
+// | 4 / v11 (new)      | 19.67476851851852  | 0         | 0         | 0         | 24 / 72      | 4           |
+// Ratio new/old 0.979. Both lanes were used by all 8 CPU IDs in every seed; safe/risky passes: 48/24.
 const BASELINE = {
-  meadow: { version: 'v7', meanLap: 18.50972222222222, wallHits: 3, bandHits: 0 },
-  canyon: { version: 'v10', meanLap: 20.094907407407405, wallHits: 0, bandHits: 4 },
-  snowpeak: { version: 'v7', meanLap: 18.057175925925925, wallHits: 0, bandHits: 0 },
-  neon: { version: 'v7', meanLap: 18.24861111111111, wallHits: 1, bandHits: 0 },
+  meadow: { version: 'v11', meanLap: 18.537268518518516, wallHits: 0, bandHits: 0 },
+  canyon: { version: 'v11', meanLap: 19.67476851851852, wallHits: 0, bandHits: 4 },
+  snowpeak: { version: 'v11', meanLap: 17.939814814814813, wallHits: 0, bandHits: 0 },
+  neon: { version: 'v11', meanLap: 18.441435185185185, wallHits: 0, bandHits: 0 },
 };
 const SEEDS = [1, 42, 98765];
 

@@ -12,16 +12,21 @@ import { canyon } from './themes/canyon';
 import { snowpeak } from './themes/snowpeak';
 import { neon } from './themes/neon';
 
-// M1-04 BEFORE implementation, 2026-10-07: Chromium, 1280x720, DPR 1,
+// M2.5 re-measured by e2e/courses.spec.ts, 2026-10-11: Chromium, 1280x720, DPR 1,
 // desktop shadows, createRace(127, { trackId }), 8 stationary grid karts.
 // GameRenderer.update(state, captureRenderSnapshot(state), 1, 0, 'race')
 // rendered 10 times per course; EVERY frame had the calls/triangles below
 // (renderer.info.render, including shadows). Meshes count buildCourse only.
+// M1-04 -> M2.5 (drawCalls / triangles / meshes):
+// meadow 123 / 41_530 / 29 -> 123 / 41_530 / 29 (layout 2).
+// canyon 128 / 46_784 / 33 -> 129 / 54_564 / 40 (layout 4).
+// snowpeak 125 / 41_810 / 33 -> 125 / 41_952 / 31 (layout 2).
+// neon 125 / 66_080 / 30 -> 125 / 62_748 / 30 (layout 2).
 const RENDER_BASELINE = {
-  meadow: { drawCalls: 123, triangles: 41530, meshes: 29 },
-  canyon: { drawCalls: 128, triangles: 46784, meshes: 33 },
-  snowpeak: { drawCalls: 125, triangles: 41810, meshes: 33 },
-  neon: { drawCalls: 125, triangles: 66080, meshes: 30 },
+  meadow: { drawCalls: 123, triangles: 41_530, meshes: 29 },
+  canyon: { drawCalls: 129, triangles: 54_564, meshes: 40 },
+  snowpeak: { drawCalls: 125, triangles: 41_952, meshes: 31 },
+  neon: { drawCalls: 125, triangles: 62_748, meshes: 30 },
 } as const;
 
 // Only the browser's text drawing context is supplied. All three objects and
@@ -75,12 +80,13 @@ function hash(array: Float32Array): number {
 describe('MEADOW appearance regression', () => {
   it('keeps the original seed-127 instance transforms and colors, including distant scenery', () => {
     const { group } = build(getTrack('meadow'), meadow);
-    // Captured by running the pre-extraction GameRenderer.buildScenery in node.
+    // Captured by running the pre-extraction GameRenderer.buildScenery in node; re-captured for the M2.5 +30% width
+    // (layout 2): trunks, crowns, rocks and flowers sit relative to the road edge, peaks and clouds do not.
     const golden = [
-      ['trunks', 150, 1182538673, undefined, 0x927050],
-      ['crowns', 150, 2832418568, 334877105, 0x34a67b],
-      ['rocks', 54, 2362437325, undefined, 0xa3b7a6],
-      ['flowers', 120, 2170573238, undefined, 0xffe97e],
+      ['trunks', 150, 2263195858, undefined, 0x927050],
+      ['crowns', 150, 2780632739, 1144846729, 0x34a67b],
+      ['rocks', 54, 3559987222, undefined, 0xa3b7a6],
+      ['flowers', 120, 959266697, undefined, 0xffe97e],
       ['peaks', 16, 2858478304, 3380652807, 0x75b99d],
       ['clouds', 36, 2799982802, undefined, 0xf7fff0],
     ] as const;
@@ -472,11 +478,10 @@ describe('variable widths and batched barriers', () => {
 
   it.each([
     ['meadow', meadow], ['canyon', canyon], ['snowpeak', snowpeak], ['neon', neon],
-  ] as const)('%s stays within its pre-story mesh budget', (id, theme) => {
+  ] as const)('%s stays within its measured mesh budget', (id, theme) => {
     const track = getTrack(id);
     const hasIsland = track.def.barriers?.some(b => b.scenery === 'rock' || b.scenery === 'building');
-    // Every course keeps +2. Islands add ribbon 1 + scenery 1 + lane signs 2 + pit decal 1.
-    // CANYON layout 3 (M2-05) uses the +2 for its earlier growth and its new boost decal.
+    // Retain the existing allowance: +2 per course, plus 5 for island courses.
     expect(meshCount(build(track, theme).group)).toBeLessThanOrEqual(RENDER_BASELINE[id].meshes + 2 + (hasIsland ? 5 : 0));
   });
 });

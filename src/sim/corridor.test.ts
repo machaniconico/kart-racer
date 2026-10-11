@@ -5,7 +5,8 @@ import { buildTrack } from './track';
 import { getTrack, TRACK_IDS, TRACKS } from './tracks';
 import type { Barrier, TrackDef } from './types';
 
-const base = TRACKS.meadow;
+// Synthetic corridor cases keep their original dimensions, independent of MEADOW's layout.
+const base: TrackDef = { ...TRACKS.meadow, roadHalfWidth: 7.2, wallHalfWidth: 10.5, boxLanes: [-4.1, 0, 4.1] };
 const length = getTrack('meadow').length;
 const band: Barrier = { from: 25, to: 40, center: 0, halfWidth: 2, taper: 4 };
 const fixture = (overrides: Partial<TrackDef> = {}): TrackDef => ({ ...base, ...overrides });
@@ -184,9 +185,8 @@ describe('validateTrackDef', () => {
     const before = JSON.stringify(def);
     expect(() => validateTrackDef(def)).not.toThrow();
     expect(JSON.stringify(def)).toBe(before);
-    // Only CANYON was re-laid out: M1 (narrow section, dirt, pillars) and M2-05 (island shortcut).
-    // The rest stay on layout 1.
-    expect(def.layoutVersion ?? 1).toBe(id === 'canyon' ? 3 : 1);
+    // M2.5-01 widens three courses; CANYON keeps its M2 island layout until M2.5-02.
+    expect(def.layoutVersion ?? 1).toBe(id === 'canyon' ? 4 : 2);
   });
 
   it('accepts a safe band and leaves mutable input unchanged', () => {

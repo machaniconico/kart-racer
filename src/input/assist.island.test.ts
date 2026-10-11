@@ -17,8 +17,8 @@ describe('M2-03 one island on a straight', () => {
 
 describe('M2-03 island entry', () => {
   // Head-on entries without input: 40-55 m before the split (the lane-selection approach is 35 m),
-  // within 0.5 m and 1° of the island's axis. Lanes are 6-9 m wide, so the approach is at least
-  // 5 m wide (a 3.6 m approach pins a centred kart until the ramp). Each run ends at from + 10.
+  // within 0.5 m and 1° of the island's axis. Lanes are 6-12 m wide (CANYON is 11.7), so the approach is at least
+  // 4.95 m wide (islandHalf 5 + R + lane 6 - 7; a 3.6 m approach pins a centred kart until the ramp). Each run ends at from + 10.
   it('enters a lane without input from 100 head-on approaches, never striking the nose', () => {
     const { random, between } = seeded(0x2050e);
     const failures: string[] = [];

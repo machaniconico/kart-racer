@@ -7,6 +7,7 @@ import { JUMP_DURATION, surfaceAt } from '../surfaces';
 import { buildTrack, projectToTrack, sampleTrack, wrapDistance } from '../track';
 import type { RaceState } from '../types';
 import * as tracks from './index';
+import { BASE_ROAD_HALF_WIDTH } from './widths';
 import * as THREE from 'three';
 import { buildCourse } from '../../render/course/buildCourse';
 import { canyon as canyonTheme } from '../../render/course/themes/canyon';
@@ -86,7 +87,7 @@ describe('SUNSCAR CANYON', () => {
     }
     expect(split.from - 35).toBeGreaterThan(0);
     expect(split.to).toBeLessThan(track.length - 21.5 - 100);
-    for (const lane of split.lanes) expect(lane.offsetMax - lane.offsetMin).toBe(9);
+    for (const lane of split.lanes) expect(lane.offsetMax - lane.offsetMin).toBeCloseTo(11.7, 9);
     const inner = split.lanes.find(lane => lane.risk === 1)!;
     const a = sampleTrack(track, split.from + 20);
     const b = sampleTrack(track, split.from + 30);
@@ -166,21 +167,21 @@ describe('SUNSCAR CANYON', () => {
     }
   });
 
-  it('narrows one passage to 4m half-width with 20m ramps on layout 3', () => {
-    expect(track.def.layoutVersion).toBe(3);
+  it('narrows one passage to 5.2m half-width with 20m ramps on layout 4', () => {
+    expect(track.def.layoutVersion).toBe(4);
     const keys = track.def.widthKeys!.filter(key => key.distance <= 270);
     expect(keys).toHaveLength(4);
-    expect(keys.map(key => key.roadHalfWidth)).toEqual([7.2, 4, 4, 7.2]);
+    expect(keys.map(key => key.roadHalfWidth)).toEqual([BASE_ROAD_HALF_WIDTH, 5.2, 5.2, BASE_ROAD_HALF_WIDTH]);
     const [entry, narrowStart, narrowEnd, exit] = keys;
     expect(narrowStart!.distance - entry!.distance).toBe(20);
     expect(exit!.distance - narrowEnd!.distance).toBe(20);
     expect(narrowEnd!.distance).toBeGreaterThan(narrowStart!.distance);
     for (const key of keys) expect(widthAt(track, key.distance).roadHalfWidth).toBe(key.roadHalfWidth);
     for (const [a, b] of [[entry!, narrowStart!], [narrowEnd!, exit!]]) {
-      expect(widthAt(track, (a.distance + b.distance) / 2).roadHalfWidth).toBeCloseTo(5.6);
+      expect(widthAt(track, (a.distance + b.distance) / 2).roadHalfWidth).toBeCloseTo((BASE_ROAD_HALF_WIDTH + 5.2) / 2);
     }
-    expect(widthAt(track, 0).roadHalfWidth).toBe(7.2);
-    expect(widthAt(track, track.length - 1).roadHalfWidth).toBe(7.2);
+    expect(widthAt(track, 0).roadHalfWidth).toBe(BASE_ROAD_HALF_WIDTH);
+    expect(widthAt(track, track.length - 1).roadHalfWidth).toBe(BASE_ROAD_HALF_WIDTH);
   });
 
   it('limits dirt and shortcut surfaces to the inner lane and leaves the outer lane paved', () => {
@@ -188,7 +189,7 @@ describe('SUNSCAR CANYON', () => {
     const outer = split.lanes.find(lane => lane.risk === 0)!;
     const dirt = track.def.surfaces.filter(zone => zone.kind === 'dirt');
     expect(dirt.length).toBeGreaterThanOrEqual(1);
-    expect(dirt[0]).toEqual({ kind: 'dirt', from: split.from + 32, to: split.from + 50,
+    expect(dirt[0]).toEqual({ kind: 'dirt', from: split.from + 26, to: split.from + 50,
       offsetMin: inner.offsetMin, offsetMax: inner.offsetMax });
     for (let d = split.from; d <= split.to; d += 0.5) {
       expect(surfaceAt(track, d, (outer.offsetMin + outer.offsetMax) / 2)).toBe('road');

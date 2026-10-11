@@ -2,15 +2,19 @@ import { test, expect } from '@playwright/test';
 import type {} from './multiplayer.spec';
 import { getTrack } from '../src/sim/tracks';
 import { sampleTrack } from '../src/sim/track';
+import type { GameRenderer } from '../src/render/GameRenderer';
 
 // C-010 timing (2026-10-05): npm test, 738 passed, Vitest 4.57 s / wall 4.84 s.
 // .omc/baseline-v3.txt records 3 s before C-001; the 6 s budget needs no seed reduction.
 const courses = [
-  // M1-04 pre-change baseline (10 stationary frames), recorded in buildCourse.test.ts.
-  { id: 'meadow', name: 'MEADOW LOOP', layout: 1, drawCalls: 123, triangles: 41_530 },
-  { id: 'canyon', name: 'SUNSCAR CANYON', layout: 3, drawCalls: 128, triangles: 46_784 },
-  { id: 'snowpeak', name: 'FROSTBITE PEAK', layout: 1, drawCalls: 125, triangles: 41_810 },
-  { id: 'neon', name: 'NEON NIGHTLINE', layout: 1, drawCalls: 125, triangles: 66_080 },
+  // M2.5 re-measured 2026-10-11: Chromium 1280x720, DPR 1, seed 127, 10 stationary frames.
+  // M1-04 -> M2.5 (drawCalls / triangles), including shadows:
+  // meadow 123 / 41_530 -> 123 / 41_530; canyon 128 / 46_784 -> 129 / 54_564.
+  // snowpeak 125 / 41_810 -> 125 / 41_952; neon 125 / 66_080 -> 125 / 62_748.
+  { id: 'meadow', name: 'MEADOW LOOP', layout: 2, drawCalls: 123, triangles: 41_530 },
+  { id: 'canyon', name: 'SUNSCAR CANYON', layout: 4, drawCalls: 129, triangles: 54_564 },
+  { id: 'snowpeak', name: 'FROSTBITE PEAK', layout: 2, drawCalls: 125, triangles: 41_952 },
+  { id: 'neon', name: 'NEON NIGHTLINE', layout: 2, drawCalls: 125, triangles: 62_748 },
 ] as const;
 
 for (const { id, name, layout, drawCalls: baselineDrawCalls, triangles: baselineTriangles } of courses) {
@@ -19,24 +23,40 @@ for (const { id, name, layout, drawCalls: baselineDrawCalls, triangles: baseline
     await expect(page.locator('#title-screen')).toBeVisible();
     await page.waitForFunction(() => !!window.__kartDebug);
     expect(await page.evaluate(() => localStorage.getItem('pocket-circuit.best.v3'))).toBeNull();
+    // An unbeatable old-layout record must be hidden and replaced on completion.
+    await page.evaluate(({ id, layout }) => localStorage.setItem('pocket-circuit.best.v3',
+      JSON.stringify({ [id]: { time: 0.001, layout: layout - 1 } })), { id, layout });
+    await page.reload();
+    await page.waitForFunction(() => !!window.__kartDebug);
     await page.locator(`#course-select input[value="${id}"]`).check();
     await expect(page.locator('#course-name')).toHaveText(name);
+    await expect(page.locator('#title-best')).toHaveText('まだ記録はありません');
     await expect.poll(() => page.evaluate(() => ({
       selected: window.__kartDebug.course, rendered: window.__kartDebug.render.trackId,
     }))).toEqual({ selected: id, rendered: id });
-    await page.locator('#start-race').click();
-    await expect(page.locator('#race-screen')).toBeVisible();
-    await expect.poll(() => page.evaluate(() => window.__kartDebug.state.phase)).toBe('racing');
-    // Sample completed WebGL frames while all eight racers are still on the grid.
-    const renderSamples = await page.evaluate(async () => {
+    // Reproduce the seed-127 baseline: ten stationary frames, including shadows.
+    // Synchronous renders avoid CPU movement and wall-clock-dependent culling.
+    const { renderSamples, grid, meshes } = await page.evaluate(async id => {
+      const simPath = `${location.pathname}src/sim/index.ts`;
+      const snapshotPath = `${location.pathname}src/render/snapshot.ts`;
+      const { createRace } = await import(simPath) as typeof import('../src/sim');
+      const { captureRenderSnapshot } = await import(snapshotPath) as typeof import('../src/render/snapshot');
+      const { renderer } = window.__kartDebug as typeof window.__kartDebug & { renderer: GameRenderer };
+      const state = createRace(127, { trackId: id });
+      const snapshot = captureRenderSnapshot(state);
       const samples: { drawCalls: number; triangles: number }[] = [];
-      for (let frame = 0; frame < 5; frame++) {
-        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
-        const { drawCalls, triangles } = window.__kartDebug.render as typeof window.__kartDebug.render & { triangles: number };
+      for (let frame = 0; frame < 10; frame++) {
+        renderer.update(state, snapshot, 1, 0, 'race');
+        const { calls: drawCalls, triangles } = renderer.renderer.info.render;
         samples.push({ drawCalls, triangles });
       }
-      return samples;
-    });
+      let meshes = 0;
+      // Count course meshes only, matching buildCourse.test.ts (exclude karts/items).
+      const course = (renderer as unknown as { course: import('../src/render/course/buildCourse').Course }).course;
+      course.group.traverse(object => { if ((object as import('three').Mesh).isMesh) meshes++; });
+      return { renderSamples: samples, meshes, grid: renderer.renderer.domElement.toDataURL('image/png').split(',')[1] };
+    }, id);
+    await testInfo.attach(`${id}-start-grid`, { body: Buffer.from(grid, 'base64'), contentType: 'image/png' });
     for (const { drawCalls, triangles } of renderSamples) {
       expect(drawCalls).toBeGreaterThan(0);
       expect(drawCalls).toBeLessThanOrEqual(200);
@@ -45,8 +65,11 @@ for (const { id, name, layout, drawCalls: baselineDrawCalls, triangles: baseline
       expect(triangles).toBeLessThanOrEqual(baselineTriangles + 15_000);
     }
     await testInfo.attach('draw-calls', {
-      body: JSON.stringify({ id, baselineDrawCalls, baselineTriangles, renderSamples }), contentType: 'application/json',
+      body: JSON.stringify({ id, layout, baselineDrawCalls, baselineTriangles, meshes, renderSamples }), contentType: 'application/json',
     });
+    await page.locator('#start-race').click();
+    await expect(page.locator('#race-screen')).toBeVisible();
+    await expect.poll(() => page.evaluate(() => window.__kartDebug.state.phase)).toBe('racing');
     await page.evaluate(() => {
       const debug = window.__kartDebug as typeof window.__kartDebug & { clearItems(): void };
       for (let second = 0; second < 200 && debug.state.phase !== 'finished'; second++) {
@@ -91,13 +114,14 @@ for (const missedBoost of [false, true]) {
     const split = track.def.splits![0];
     const lane = split.lanes.find(candidate => candidate.risk === 1)!;
     const center = (lane.offsetMin + lane.offsetMax) / 2;
-    const start = split.from - 40;
+    const start = track.def.widthKeys!.filter(key => key.distance < split.from).at(-1)!.distance;
+    const mergeEnd = track.def.racingLine!.find(point => point.distance > split.to && point.offset === 0)!.distance;
     // Sample the actual course at 10 cm intervals for a lane-centre steering target.
     const points = Array.from({ length: Math.ceil((split.to + 30 - start) * 10) + 1 },
       (_, i) => sampleTrack(track, start + i / 10));
-    const boost = track.def.surfaces.find(zone => zone.kind === 'boost')!;
-    const jump = track.def.surfaces.find(zone => zone.kind === 'jump' && zone.offsetMin !== undefined)!;
-    const log = await page.evaluate(({ split, center, start, points, boost, jump, missedBoost }) => {
+    const boost = track.def.surfaces.find(zone => zone.kind === 'boost' && zone.from >= split.from && zone.to <= split.to)!;
+    const jump = track.def.surfaces.find(zone => zone.kind === 'jump' && zone.from >= split.from && zone.to <= split.to)!;
+    const { approach, ...log } = await page.evaluate(({ split, center, start, mergeEnd, points, boost, jump, missedBoost }) => {
       const debug = window.__kartDebug as typeof window.__kartDebug & { clearItems(): void };
       const kart = debug.state.karts[0];
       const point = points[0];
@@ -107,6 +131,12 @@ for (const missedBoost of [false, true]) {
         speed: 0, steer: 0, boostTime: 0, spinTime: 0, airTime: 0,
       });
       const initial = { trackDistance: kart.trackDistance, lateralOffset: kart.lateralOffset, speed: kart.speed };
+      const { renderer } = debug as typeof debug & { renderer: GameRenderer };
+      const snapshot = { karts: debug.state.karts, entities: new Map() };
+      // Switch camera modes to snap to the placed kart, then capture before any sim tick.
+      renderer.update(debug.state, snapshot, 1, 0, 'title');
+      renderer.update(debug.state, snapshot, 1, 0, 'race');
+      const approach = renderer.renderer.domElement.toDataURL('image/png').split(',')[1];
       let axis = 0;
       const originalGamepads = Object.getOwnPropertyDescriptor(navigator, 'getGamepads');
       // Feed full throttle and analogue steering through the real Controls path, never autopilot.
@@ -121,14 +151,14 @@ for (const missedBoost of [false, true]) {
           for (let tick = 0; tick < 60 && kart.trackDistance <= split.to + 20; tick++) {
             const distance = kart.trackDistance + 4;
             const target = points[Math.max(0, Math.min(points.length - 1, Math.round((distance - start) * 10)))];
-            // Merge back to the road centre over the 20 m after the island.
-            const offset = center * Math.max(0, Math.min(1, (split.to + 20 - distance) / 20));
+            // Follow the course definition's return to the road centre after the island.
+            const offset = center * Math.max(0, Math.min(1, (mergeEnd - distance) / (mergeEnd - split.to)));
             const desired = Math.atan2(target.x + target.nx * offset - kart.x, target.z + target.nz * offset - kart.z);
             const error = Math.atan2(Math.sin(desired - kart.heading), Math.cos(desired - kart.heading));
             const steer = Math.max(-1, Math.min(1, error * 4));
             // Invert playerSteerToSim and the gamepad's 0.14 deadzone.
             axis = steer === 0 ? 0 : -Math.sign(steer) * (0.14 + Math.abs(steer) * 0.86);
-            // The pad spans the whole lane in M2-05: a 0.5 m lateral miss hits a wall.
+            // The pad spans the whole inner lane: a lateral miss would also change the flight line.
             // Use the authorized counterfactual, removing boost through takeoff instead.
             if (missedBoost && kart.trackDistance >= boost.from && kart.trackDistance <= jump.to) kart.boostTime = 0;
             debug.clearItems();
@@ -144,8 +174,9 @@ for (const missedBoost of [false, true]) {
         if (originalGamepads) Object.defineProperty(navigator, 'getGamepads', originalGamepads);
         else Reflect.deleteProperty(navigator, 'getGamepads');
       }
-      return { initial, ticks, events, trackDistance: kart.trackDistance };
-    }, { split, center, start, points, boost, jump, missedBoost });
+      return { approach, initial, ticks, events, trackDistance: kart.trackDistance };
+    }, { split, center, start, mergeEnd, points, boost, jump, missedBoost });
+    await testInfo.attach('canyon-island-approach', { body: Buffer.from(approach, 'base64'), contentType: 'image/png' });
     await testInfo.attach('canyon-shortcut', { body: JSON.stringify(log), contentType: 'application/json' });
     expect(log.initial).toEqual({ trackDistance: start, lateralOffset: center, speed: 0 });
     expect(log.ticks.some(tick => tick.airTime > 0)).toBe(true);

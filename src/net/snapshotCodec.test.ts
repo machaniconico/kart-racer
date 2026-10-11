@@ -536,6 +536,7 @@ describe('protocol layout fingerprint', () => {
       7: 'f7b2a1f2', 8: 'f7b2a1f2',
       9: 'f7b2a1f2',
       10: 'f7b2a1f2',
+      11: 'f7b2a1f2',
     };
     expect(SNAPSHOT_LAYOUT.slice(0, 2)).toEqual([KART_EFFECT_LAYOUT, ENTITY_KINDS]);
     expect(fingerprint(SNAPSHOT_LAYOUT)).toBe(LAYOUT_FINGERPRINT);
@@ -563,6 +564,7 @@ describe('protocol layout fingerprint', () => {
     const pinned: Record<number, number> = { 6: 1575332991, 7: 1575332991, 8: 1575332991 };
     pinned[9] = 1138653990;
     pinned[10] = 574910572;
+    pinned[11] = 1042567012;
     const definitions = TRACK_IDS.map(id => TRACKS[id]);
     expect(COURSE_FINGERPRINT).toBe(Number.parseInt(fingerprint(definitions), 16));
     expect(COURSE_FINGERPRINT).toBe(pinned[PROTOCOL_VERSION]);

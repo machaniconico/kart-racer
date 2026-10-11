@@ -8,28 +8,28 @@ import { buildTrack, projectToTrack, sampleTrack } from './track';
 import * as tracks from './tracks';
 import type { InputFrame, RaceState, Track, TrackDef } from './types';
 
-// Protocol v8 final JSON after a full 8-CPU MEADOW race, pinned outside the test.
+// Protocol v11 final JSON after a full 8-CPU MEADOW race, pinned outside the test.
 // Long races amplify floating-point differences between architectures, so each
-// platform has its own column. darwin-arm64 was measured after H5; linux-x64
-// stays 'pending-ci' until the coordinator records the first v8 CI run.
+// platform has its own column. darwin-arm64 was measured after M2.5-01.
+// linux-x64: CI のログから M2.5-05 で置き換える。
 const MEADOW_FINAL_JSON = [
-  [1, '4e0b96af5c90c7ccc2a99aced4f5e92f2755c04735ffcde8434c92725ae092a8', '2511581ba4777c4845a3fa4f75eb7cb6a71671a4d95c82c1b62a0dd92105724b'],
-  [2, '56cd64b8cebb47826b3209c37b5e716c94716088bee71d89b88614215456c639', '29f8eb7a0612988ca0fb2de4d0762d6ffc7968d6c9f8cbe55a398b999048fbcf'],
-  [3, 'cc4128a4b835698a3cb894fa01c0fc3c4eadf26ba43bf03b1abe30b6bf4f337c', '604f01dba3f9122560ddc24245a951ad3cb4ded7c7805cab9dce8a8af7323c64'],
-  [4, 'fcae47d127ea8995909a12351cc6b44e6a533586712b2e8cf1927565db7c39e8', '633a56f800f55734634bc174b62f08a8c4ba408e01e19a565a665a1ab4b35fc1'],
-  [5, '9acdc82a96cb83b9d949b629f78b9330ac3a693876c9f7932cf5c713c700847b', '9fcb00999327b5114a15282243a584ca34693b65f216c7e07d64fcb5edd2f175'],
-  [42, '80dadc978c30de16ae4ec1e9fb1f41a28c256bb7ade3e7892c58349f546ed655', '5008d83647f36f81746ad6b942c703a6c4edcc3238caf880d0d883cc9f024e67'],
-  [123, '89c67f4179ec10afdf9909cd671be414220f79ae67c86b3bc062e1298296bf6b', 'd988758511e4215b7fb3469ae5837d011525d7f1ba641f347c2209bc8c1aff06'],
-  [999, '0464fa8755b2ef7030378d3df2c7150487d2e784245574d8684e3f00ec6cba4b', 'd3abc23bc3e61d7541ebcbcef67841a2d752e67e6012821c6e1150b883525b26'],
-  [12345, 'b8569b60de380fa0403f29dc8de0be2a5bb2164e89cbc4850a2c389e6d5e323d', 'c5489d9ac63481b48636cff2e08a0d17ffa7ec11806701e5e254620671f765b3'],
-  [98765, '7d86c6acd3ea5f6597e51d29796c7cc08c6fded9cc53f4132048c9fc7c144f7e', '909665cd33fcc7db60629535f33b7dccb516a405091f88f090393d3dc78fc133'],
+  [1, 'b50b6cc2d3068df4c911735fb2667fe4ffb9d77e5a300e73492649108a5d022c', 'pending-ci'],
+  [2, '953c1167c5a8fadb366564139313c1a6206878135351912dcf6fd5264fcd5550', 'pending-ci'],
+  [3, 'ec98fcb5d544b6aee5c3e51419edf6b0060cbc055f029c18fae974a56ff9fcb4', 'pending-ci'],
+  [4, '449695f02fdfb4742117fda34efa8db3fd4b10db668954a455e8a86cb8fed9da', 'pending-ci'],
+  [5, 'b17c02d273da975def7ab9092432060d71de5a00d4ab697a4d31cff83058a412', 'pending-ci'],
+  [42, '9a2f6abea6f319d1249058bd98dec8cced03ea5b1cb4088b9ca442e4c41677d6', 'pending-ci'],
+  [123, 'f0a6963739b3d99ce285af2838eb1b95a5c369bcf56856de71b55c79c525535a', 'pending-ci'],
+  [999, 'a79cd93500c2a8bf80e82117c5b74abf5b57470fb3c2515fd4c0250e8570bd64', 'pending-ci'],
+  [12345, '311c1fb05bcd5ba22bb6c19e6ee834f782375980e8bc49f99f772f74087363e5', 'pending-ci'],
+  [98765, 'f4d6d1d7ba678b973ae3f3212ac276580f0dc95ff25034c3d15b0ff81fe97fbe', 'pending-ci'],
 ] as const;
 const PLATFORM_COLUMN: Record<string, 1 | 2> = { 'darwin-arm64': 1, 'linux-x64': 2 };
 const column = PLATFORM_COLUMN[`${process.platform}-${process.arch}`];
 
 afterEach(() => vi.restoreAllMocks());
 
-it.each(MEADOW_FINAL_JSON)('pins v8 MEADOW final JSON (seed %i)', (seed, ...hashes) => {
+it.each(MEADOW_FINAL_JSON)('pins v11 MEADOW final JSON (seed %i)', (seed, ...hashes) => {
   const state = createRace(seed, { racers: [] });
   for (let tick = 0; tick < 60 * 180 && state.phase !== 'finished'; tick++) {
     stepRace(state, state.karts.map(kart => getAIInput(state, kart.id)));

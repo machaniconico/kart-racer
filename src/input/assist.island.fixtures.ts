@@ -56,13 +56,13 @@ export const courses = [
 ];
 
 /** A validated layout: one islandSplit (half-width 5-8), plus `pillars` bands placed until it validates. */
-export const islandCourse = (between: (min: number, max: number) => number, curve: boolean, pillars: number, minLane = 4.5) => {
+export const islandCourse = (between: (min: number, max: number) => number, curve: boolean, pillars: number, minLane = 6) => {
   const { def: base, from } = courses[curve ? 1 : 0]!;
   for (let attempt = 0; attempt < 2000; attempt++) {
     const islandHalf = between(5, 8);
     const taper = between(8, 16);
     const to = from + Math.max(2 * (KART_RADIUS + Math.max(taper, 2 * islandHalf)) + 4, between(50, 75));
-    const island = islandSplit({ from, to, islandHalf, laneWidth: between(minLane, 9), taper, scenery: 'rock', risky: 'inner', bend: 1 });
+    const island = islandSplit({ from, to, islandHalf, laneWidth: between(minLane, 12), taper, scenery: 'rock', risky: 'inner', bend: 1 });
     const wide = island.widthKeys[1]!.wallHalfWidth;
     // Pillars either before the 35 m lane-selection approach (anywhere across) or against a lane's wall.
     const extra = Array.from({ length: pillars }, () => {
