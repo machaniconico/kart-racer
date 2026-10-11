@@ -11,18 +11,18 @@ import type { InputFrame, RaceState, Track, TrackDef } from './types';
 // Protocol v11 final JSON after a full 8-CPU MEADOW race, pinned outside the test.
 // Long races amplify floating-point differences between architectures, so each
 // platform has its own column. darwin-arm64 was measured after M2.5-01.
-// linux-x64: CI のログから M2.5-05 で置き換える。
+// linux-x64 was copied from the CI log of 8024037 (run 38098401104).
 const MEADOW_FINAL_JSON = [
-  [1, 'b50b6cc2d3068df4c911735fb2667fe4ffb9d77e5a300e73492649108a5d022c', 'pending-ci'],
-  [2, '953c1167c5a8fadb366564139313c1a6206878135351912dcf6fd5264fcd5550', 'pending-ci'],
-  [3, 'ec98fcb5d544b6aee5c3e51419edf6b0060cbc055f029c18fae974a56ff9fcb4', 'pending-ci'],
-  [4, '449695f02fdfb4742117fda34efa8db3fd4b10db668954a455e8a86cb8fed9da', 'pending-ci'],
-  [5, 'b17c02d273da975def7ab9092432060d71de5a00d4ab697a4d31cff83058a412', 'pending-ci'],
-  [42, '9a2f6abea6f319d1249058bd98dec8cced03ea5b1cb4088b9ca442e4c41677d6', 'pending-ci'],
-  [123, 'f0a6963739b3d99ce285af2838eb1b95a5c369bcf56856de71b55c79c525535a', 'pending-ci'],
-  [999, 'a79cd93500c2a8bf80e82117c5b74abf5b57470fb3c2515fd4c0250e8570bd64', 'pending-ci'],
-  [12345, '311c1fb05bcd5ba22bb6c19e6ee834f782375980e8bc49f99f772f74087363e5', 'pending-ci'],
-  [98765, 'f4d6d1d7ba678b973ae3f3212ac276580f0dc95ff25034c3d15b0ff81fe97fbe', 'pending-ci'],
+  [1, 'b50b6cc2d3068df4c911735fb2667fe4ffb9d77e5a300e73492649108a5d022c', '05d2d34ac739ec935dd2e8183d37013037afc60c32ea6b51e0dc570ccde77a3f'],
+  [2, '953c1167c5a8fadb366564139313c1a6206878135351912dcf6fd5264fcd5550', '5958e16000f60de519f3647eb371eac20f49c95492aa71b52191290ceb2e6eb4'],
+  [3, 'ec98fcb5d544b6aee5c3e51419edf6b0060cbc055f029c18fae974a56ff9fcb4', 'b424bd0e8eec73f79e3d65a2be2a5af0b9ed0da1ee1d786fda83e7f16d3db289'],
+  [4, '449695f02fdfb4742117fda34efa8db3fd4b10db668954a455e8a86cb8fed9da', '1cb82ebcfdab8676e77edc051da64f5744941963feb1e75d98ddefd5cc27b39f'],
+  [5, 'b17c02d273da975def7ab9092432060d71de5a00d4ab697a4d31cff83058a412', '4f78d6f7fae70cf3fed685aeece622f2d9f5cc05306bbfe441f0580556ca0ec9'],
+  [42, '9a2f6abea6f319d1249058bd98dec8cced03ea5b1cb4088b9ca442e4c41677d6', '35fa0e128aa4987d4302c6c8b5afcef9cf57672375aa160d7cc6e37d863dc0f6'],
+  [123, 'f0a6963739b3d99ce285af2838eb1b95a5c369bcf56856de71b55c79c525535a', '4640d9c59a7c8435832124fd5580f6d56eaea5a3cfacc5e83e159daae7a5bd69'],
+  [999, 'a79cd93500c2a8bf80e82117c5b74abf5b57470fb3c2515fd4c0250e8570bd64', 'e4888552fd38c1b14b4efde3444144f6e4a4b89a8d4fdc2c53b0cac042bd87be'],
+  [12345, '311c1fb05bcd5ba22bb6c19e6ee834f782375980e8bc49f99f772f74087363e5', '58e3b4a349bd366a1125ce0f0cd3c2a0b6b3969aa853d2492cc1e7147523e8e3'],
+  [98765, 'f4d6d1d7ba678b973ae3f3212ac276580f0dc95ff25034c3d15b0ff81fe97fbe', 'd138a5e60b487b5393e2a0e8f447aba8ccd3700e27412c113bb3f4b7ed348752'],
 ] as const;
 const PLATFORM_COLUMN: Record<string, 1 | 2> = { 'darwin-arm64': 1, 'linux-x64': 2 };
 const column = PLATFORM_COLUMN[`${process.platform}-${process.arch}`];
