@@ -36,10 +36,10 @@ function bandClearance(row: readonly Interval[], y: number): number {
  *   authority (the original tangent following); the band-clear path with the least |c|; with no
  *   band-clear path the assist does not intervene (`aim` null: the frame passes through).
  *   `center` is the lateral offset aimed at and `edgeDistance` the chosen path's band clearance.
- * - Islands (split sections): the same rules, first with each split's lanes at full width from
- *   its first metre, so the kart is in a lane before the nose widens; without input the lane on
- *   the side where the own line meets the island comes first. When no path reaches a lane in
- *   time, the bands alone decide, as above.
+ * - Islands (split sections): with steering input, use the actual bands so a clear turn around
+ *   the tapered nose is not pulled into another lane. Without input, first try each split's lanes
+ *   at full width from its first metre, preferring the side where the own line meets the island.
+ *   When no path reaches a lane in time, the bands alone decide, as above.
  */
 export function assistPassage(state: RaceState, kart: KartState, steer: number, lookAhead: number, throttle = 0): Passage {
   const track = getTrack(state.trackId);
@@ -110,6 +110,9 @@ export function assistPassage(state: RaceState, kart: KartState, steer: number, 
   // stays at the current speed, as the M1-03 band rules were accepted with.
   const plan = { track, kart, steer, lookAhead, horizon, alongRow, own, dx, dz, turn, accelerating: splits.length > 0 };
   if (!splits.length) return choosePassage(plan, [], false);
+  // A held turn can clear the tapered nose before reaching a full-width lane. Forcing that lane
+  // early can pull a safe own line toward the island, then abandon it when it becomes unreachable.
+  if (steer !== 0) return choosePassage(plan, [], true);
   const inLanes = choosePassage(plan, splits, true);
   return inLanes.aim !== null ? inLanes : choosePassage(plan, [], true);
 }

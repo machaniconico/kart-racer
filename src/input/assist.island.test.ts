@@ -21,6 +21,11 @@ describe('M2-03 one island on a straight', () => {
       onWallPer1000Ticks: +(1000 * totals.onWall / totals.onTicks).toFixed(3),
       offWallPer1000Ticks: +(1000 * totals.offWall / totals.offTicks).toFixed(3),
       onWallContactTicks: spread(wallContact.on), offWallContactTicks: spread(wallContact.off) })}`);
+    // M4.5-05 baseline after M4.5-04 (004fe5a), 500 runs: worse 0;
+    // ON/OFF bands 30/160, walls 427/472 (combined hits 457/632).
+    expect(totals.onBand, JSON.stringify(totals)).toBeLessThanOrEqual(30);
+    expect(totals.onWall, JSON.stringify(totals)).toBeLessThanOrEqual(427);
+    expect(totals).toMatchObject({ offBand: 160, offWall: 472 });
     expect(worse, JSON.stringify(totals)).toEqual([]);
     expect(totals.onBand, JSON.stringify(totals)).toBeLessThan(totals.offBand);
   });
