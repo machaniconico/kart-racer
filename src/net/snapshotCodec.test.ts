@@ -538,6 +538,7 @@ describe('protocol layout fingerprint', () => {
       10: 'f7b2a1f2',
       11: 'f7b2a1f2',
       12: 'f7b2a1f2',
+      13: 'f7b2a1f2',
     };
     expect(SNAPSHOT_LAYOUT.slice(0, 2)).toEqual([KART_EFFECT_LAYOUT, ENTITY_KINDS]);
     expect(fingerprint(SNAPSHOT_LAYOUT)).toBe(LAYOUT_FINGERPRINT);
@@ -567,6 +568,7 @@ describe('protocol layout fingerprint', () => {
     pinned[10] = 574910572;
     pinned[11] = 1042567012;
     pinned[12] = 313875369;
+    pinned[13] = 313875369;
     const definitions = TRACK_IDS.map(id => TRACKS[id]);
     expect(COURSE_FINGERPRINT).toBe(Number.parseInt(fingerprint(definitions), 16));
     expect(COURSE_FINGERPRINT).toBe(pinned[PROTOCOL_VERSION]);
