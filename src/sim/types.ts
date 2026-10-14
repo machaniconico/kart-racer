@@ -89,7 +89,7 @@ export interface TrackProjection {
   distance: number; offset: number; height: number; heading: number;
 }
 
-export type TrackId = 'meadow' | 'canyon' | 'snowpeak' | 'neon';
+export type TrackId = 'meadow' | 'canyon' | 'snowpeak' | 'neon' | 'harbor' | 'forest' | 'volcano' | 'skyline';
 
 export interface WidthKey {
   readonly distance: number;

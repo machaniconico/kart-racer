@@ -198,7 +198,7 @@ describe('elevation fixtures', () => {
   it('are not registered as courses', () => {
     const names = [slopeCourse(0.3), bankCourse(0.3), figureEightCourse()].map(def => def.name);
     for (const id of tracks.TRACK_IDS) expect(names).not.toContain(tracks.TRACKS[id].name);
-    expect(tracks.TRACK_IDS).toEqual(['meadow', 'canyon', 'snowpeak', 'neon']);
+    expect(tracks.TRACK_IDS).toEqual(['meadow', 'canyon', 'snowpeak', 'neon', 'harbor', 'forest', 'volcano', 'skyline']);
   });
 
   it('pass corridor validation with four gates, 24 boxes and no zones', () => {

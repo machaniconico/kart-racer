@@ -109,8 +109,9 @@ describe('control protocol', () => {
   });
 
   it('isolates protocol v14 rooms from earlier versions', () => {
-    expect(PROTOCOL_VERSION).toBe(15);
-    expect(ROOM_PREFIX).toBe('pcircuit-v15-');
+    expect(PROTOCOL_VERSION).toBe(16);
+    expect(ROOM_PREFIX).toBe('pcircuit-v16-');
+    expect(fromPeerId('pcircuit-v15-AB2X')).toBeNull();
     expect(fromPeerId('pcircuit-v13-AB2X')).toBeNull();
     expect(fromPeerId('pcircuit-v12-AB2X')).toBeNull();
     expect(fromPeerId('pcircuit-v9-AB2X')).toBeNull();

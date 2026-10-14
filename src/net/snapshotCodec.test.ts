@@ -563,6 +563,7 @@ describe('protocol layout fingerprint', () => {
       13: 'f7b2a1f2',
       14: 'aa03c454',
       15: 'aa03c454',
+      16: 'aa03c454',
     };
     expect(SNAPSHOT_LAYOUT.slice(0, 2)).toEqual([KART_EFFECT_LAYOUT, ENTITY_KINDS]);
     expect(fingerprint(SNAPSHOT_LAYOUT)).toBe(LAYOUT_FINGERPRINT);
@@ -587,7 +588,7 @@ describe('protocol layout fingerprint', () => {
   });
 
   it('pins the complete course registry to the protocol version', () => {
-    const pinned: Record<number, number | undefined> = { 6: 1575332991, 7: 1575332991, 8: 1575332991 };
+    const pinned: Record<number, number | null | undefined> = { 6: 1575332991, 7: 1575332991, 8: 1575332991 };
     pinned[9] = 1138653990;
     pinned[10] = 574910572;
     pinned[11] = 1042567012;
@@ -596,8 +597,9 @@ describe('protocol layout fingerprint', () => {
     pinned[14] = 4027931737;
     const definitions = TRACK_IDS.map(id => TRACKS[id]);
     pinned[15] = 642527371; // M5-05: measured after M5-01–04 and the shared followups
+    pinned[16] = null; // M6-00: pending until M6-05 pins the eight-course registry
     expect(COURSE_FINGERPRINT).toBe(Number.parseInt(fingerprint(definitions), 16));
-    if (pinned[PROTOCOL_VERSION] === undefined) {
+    if (pinned[PROTOCOL_VERSION] == null) {
       console.info(`COURSE_FINGERPRINT (v${PROTOCOL_VERSION} pending): ${COURSE_FINGERPRINT}`);
     } else {
       expect(COURSE_FINGERPRINT).toBe(pinned[PROTOCOL_VERSION]);

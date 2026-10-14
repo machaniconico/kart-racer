@@ -5,7 +5,7 @@ import { DEFAULT_LAPS } from '../laps';
 import { createRace, stepRace } from '../race';
 import { buildTrack, projectToTrack, sampleTrack, slopeAt, wrapDistance } from '../track';
 import type { RaceState, TrackDef, TrackId } from '../types';
-import { COURSE_FINGERPRINT, getTrack, TRACK_IDS, TRACKS } from './index';
+import { COURSE_FINGERPRINT, getTrack, scaffoldIds, TRACK_IDS, TRACKS } from './index';
 import { BASE_ROAD_HALF_WIDTH, BASE_WALL_HALF_WIDTH } from './widths';
 
 function fnv1a32(value: unknown): number {
@@ -24,9 +24,10 @@ function expectFrozen(value: unknown): void {
 
 describe('course registry and MEADOW golden baseline', () => {
   it('fixes registry order and course identities', () => {
-    expect(TRACK_IDS).toEqual(['meadow', 'canyon', 'snowpeak', 'neon']);
+    expect(TRACK_IDS).toEqual(['meadow', 'canyon', 'snowpeak', 'neon', 'harbor', 'forest', 'volcano', 'skyline']);
     expect(TRACK_IDS.map(id => TRACKS[id].name)).toEqual([
       'MEADOW LOOP', 'SUNSCAR CANYON', 'FROSTBITE PEAK', 'NEON NIGHTLINE',
+      'TIDEWATER HARBOR', 'MOSSWOOD TRAIL', 'EMBER CALDERA', 'STRATOS CITY',
     ]);
     for (const id of TRACK_IDS) {
       expect(getTrack(id).def.id).toBe(id);
@@ -34,10 +35,16 @@ describe('course registry and MEADOW golden baseline', () => {
       expect(getTrack(id).def).toBe(TRACKS[id]);
       expect(getTrack(id)).toBe(getTrack(id));
     }
-    expect(new Set(TRACK_IDS.map(getTrack)).size).toBe(4);
+    expect(new Set(TRACK_IDS.map(getTrack)).size).toBe(8);
     expect(COURSE_FINGERPRINT).toBe(fnv1a32(TRACK_IDS.map(id => TRACKS[id])));
     expectFrozen(TRACK_IDS);
     expectFrozen(TRACKS);
+  });
+
+  // Pending marker: M6-01–04 each replace one scaffold; M6-05 changes this to an empty list.
+  it('still registers the four new courses as MEADOW-layout scaffolds', () => {
+    expect(scaffoldIds()).toEqual(['harbor', 'forest', 'volcano', 'skyline']);
+    for (const id of scaffoldIds()) expect(TRACKS[id].layoutVersion).toBe(1);
   });
 
   it.each(['', 'MEADOW', 'unknown', '__proto__', 'constructor'])('rejects unknown ID %j', id => {

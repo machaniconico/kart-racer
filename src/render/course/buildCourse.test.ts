@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { WebGLGeometries } from 'three/src/renderers/webgl/WebGLGeometries.js';
 import { WebGLInfo } from 'three/src/renderers/webgl/WebGLInfo.js';
 import { buildTrack, getTrack, projectToTrack, rollAt, sampleTrack, surfaceHeightAt } from '../../sim';
-import type { Barrier, RaceState, SurfaceZone, Track } from '../../sim';
+import type { Barrier, RaceState, SurfaceZone, Track, TrackId } from '../../sim';
 import * as trackRegistry from '../../sim/tracks';
 import { islandSplit } from '../../sim/tracks/features';
 import { LEGACY_MEADOW } from '../../sim/tracks/legacyMeadow.fixture';
@@ -18,6 +18,10 @@ import { meadow } from './themes/meadow';
 import { canyon } from './themes/canyon';
 import { snowpeak } from './themes/snowpeak';
 import { neon } from './themes/neon';
+import { harbor } from './themes/harbor';
+import { forest } from './themes/forest';
+import { volcano } from './themes/volcano';
+import { skyline } from './themes/skyline';
 
 // M2.5 re-measured by e2e/courses.spec.ts, 2026-10-11: Chromium, 1280x720, DPR 1,
 // desktop shadows, createRace(127, { trackId }), 8 stationary grid karts.
@@ -35,11 +39,16 @@ import { neon } from './themes/neon';
 // Grid budgets include shadows; meshes include moving bands and spin discs.
 // Approach draw budgets are exercised alongside the grid in e2e/courses.spec.ts.
 type RenderBaseline = { drawCalls: number; triangles: number; meshes: number };
-const RENDER_BASELINE: Record<'meadow' | 'canyon' | 'snowpeak' | 'neon', RenderBaseline> = {
+// M6-00 / v16: the four new courses are pending (null) until M6-05 measures them.
+const RENDER_BASELINE: Record<TrackId, RenderBaseline | null> = {
   meadow: { drawCalls: 125, triangles: 107_048, meshes: 34 },
   canyon: { drawCalls: 138, triangles: 124_808, meshes: 42 },
   snowpeak: { drawCalls: 129, triangles: 112_768, meshes: 36 },
   neon: { drawCalls: 134, triangles: 115_360, meshes: 38 },
+  harbor: null,
+  forest: null,
+  volcano: null,
+  skyline: null,
 };
 
 // Only the browser's text drawing context is supplied. All three objects and
@@ -806,12 +815,14 @@ describe('variable widths and batched barriers', () => {
 
   it.each([
     ['meadow', meadow], ['canyon', canyon], ['snowpeak', snowpeak], ['neon', neon],
+    ['harbor', harbor], ['forest', forest], ['volcano', volcano], ['skyline', skyline],
   ] as const)('%s stays within its measured mesh budget', (id, theme) => {
     const track = getTrack(id);
     const motionMeshes = (track.def.barriers ?? []).filter(barrier => barrier.motion).length
       + track.def.surfaces.filter(zone => zone.kind === 'spin').length;
     const course = build(track, theme);
-    expect(meshCount(course.group)).toBe(RENDER_BASELINE[id].meshes);
+    const baseline = RENDER_BASELINE[id];
+    if (baseline) expect(meshCount(course.group)).toBe(baseline.meshes);
     expect(course.group.getObjectByName('motion')!.children).toHaveLength(motionMeshes);
   });
 });

@@ -11,9 +11,15 @@ import { meadow } from './course/themes/meadow';
 import { canyon } from './course/themes/canyon';
 import { snowpeak } from './course/themes/snowpeak';
 import { neon } from './course/themes/neon';
+import { harbor } from './course/themes/harbor';
+import { forest } from './course/themes/forest';
+import { volcano } from './course/themes/volcano';
+import { skyline } from './course/themes/skyline';
 import { attachKartEffects, createEntityMesh, entityPose, updateKartEffects, type KartEffectVisuals } from './itemVisuals';
 
-const themes: Readonly<Record<TrackId, CourseTheme>> = { meadow, canyon, snowpeak, neon };
+const themes: Readonly<Record<TrackId, CourseTheme>> = {
+  meadow, canyon, snowpeak, neon, harbor, forest, volcano, skyline,
+};
 
 const mix = (a: number, b: number, t: number) => a + (b - a) * t;
 const angleMix = (a: number, b: number, t: number) =>

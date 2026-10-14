@@ -54,6 +54,15 @@ describe('storage best times', () => {
     expect(JSON.parse(store.get(V4)!)).toEqual({ meadow: { '3': { time: 41.5, layout: 1 } }, canyon: { '3': { time: 50, layout: 1 } } });
   });
 
+  it('round-trips the four M6 course ids and ignores unknown ids', () => {
+    for (const [index, id] of ['harbor', 'forest', 'volcano', 'skyline'].entries()) saveBest(id, 60 + index);
+    expect(['harbor', 'forest', 'volcano', 'skyline'].map(id => loadBest(id))).toEqual([60, 61, 62, 63]);
+    expect(JSON.parse(store.get(V4)!).volcano).toEqual({ '3': { time: 62, layout: 1 } });
+    saveBest('lagoon', 40);
+    expect(loadBest('lagoon')).toBeNull();
+    expect(JSON.parse(store.get(V4)!)).not.toHaveProperty('lagoon');
+  });
+
   it('migrates v1 into meadow on first load and keeps v1', () => {
     store.set(V1, '37.25');
     expect(loadBest('canyon')).toBeNull();

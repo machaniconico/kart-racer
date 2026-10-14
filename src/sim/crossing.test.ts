@@ -161,7 +161,7 @@ describe('figure eight crossover', () => {
 describe('yHint determinism', () => {
   it('reprojects every sample and 2000 seeded points identically with the surface height as yHint', () => {
     const courses = [...tracks.TRACK_IDS.map(id => tracks.getTrack(id))];
-    expect(courses).toHaveLength(4);
+    expect(courses).toHaveLength(8);
     const rng = { seed: 20261014 };
     for (const track of courses) {
       let minX = Infinity; let maxX = -Infinity; let minZ = Infinity; let maxZ = -Infinity;

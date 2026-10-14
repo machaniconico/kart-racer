@@ -4,7 +4,7 @@ import type { RosterPlayer } from './session';
 export type { InputFrame, RaceEvent, RaceState } from '../sim/types';
 export type { RosterPlayer } from './session';
 
-export const PROTOCOL_VERSION = 15;
+export const PROTOCOL_VERSION = 16;
 export const ROOM_PREFIX = `pcircuit-v${PROTOCOL_VERSION}-`;
 /** FNV-1a32 of JSON.stringify(SNAPSHOT_LAYOUT), including enum order and flight fields.
  * Pinned to protocol v14; snapshot codec tests compare the actual wire descriptors.
@@ -84,7 +84,9 @@ export function isRaceEvent(value: unknown): value is RaceEvent {
 const itemTypes = ['dash', 'trap', 'bolt', 'seeker', 'skycomet', 'tripleDash', 'rapidDash',
   'aura', 'storm', 'ink', 'decoy', 'bomb', 'autopilot', 'barrier'];
 // Must equal sim TRACK_IDS (net-core.test.ts checks); the net core may only import sim types.
-export const PROTOCOL_TRACK_IDS: readonly TrackId[] = ['meadow', 'canyon', 'snowpeak', 'neon'];
+export const PROTOCOL_TRACK_IDS: readonly TrackId[] = [
+  'meadow', 'canyon', 'snowpeak', 'neon', 'harbor', 'forest', 'volcano', 'skyline',
+];
 const poseFields = ['x', 'y', 'z', 'heading'];
 const kartNumbers = [...poseFields, 'speed', 'steer', 'trackDistance', 'lateralOffset',
   'lapStartTime', 'driftTime', 'driftDirection', 'boostTime', 'spinTime', 'hopTime',

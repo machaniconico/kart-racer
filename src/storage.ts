@@ -12,7 +12,9 @@ export const SENSITIVITY_DEFAULT = 3;
 
 const LEGACY_TRACK_ID = 'meadow';
 // Mirrors the sim course registry; kept local so storage stays independent of sim/.
-const KNOWN_TRACK_IDS: ReadonlySet<string> = new Set(['meadow', 'canyon', 'snowpeak', 'neon']);
+const KNOWN_TRACK_IDS: ReadonlySet<string> = new Set([
+  'meadow', 'canyon', 'snowpeak', 'neon', 'harbor', 'forest', 'volcano', 'skyline',
+]);
 
 function validTime(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;

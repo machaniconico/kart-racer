@@ -9,6 +9,9 @@ declare const window: Window & { __kartDebug: KartDebug };
 
 // C-010 timing (2026-10-05): npm test, 738 passed, Vitest 4.57 s / wall 4.84 s.
 // .omc/baseline-v3.txt records 3 s before C-001; the 6 s budget needs no seed reduction.
+// M6-00 E2E estimate (v16, 8 courses): M5-05 recorded 18.9 min in total, of which courses.spec took
+// 10.7 min (.omc/logs/m5-05-e2e-full2.log:43). Only courses.spec scales by 8/4; other specs stay:
+// 10.7 x 2 + (18.9 - 10.7) = 29.6 min. M6-05 measures the real total and compares it with this figure.
 const courses = [
   // M2.5 re-measured 2026-10-11: Chromium 1280x720, DPR 1, seed 127, 10 stationary frames.
   // M1-04 -> M2.5 (drawCalls / triangles), including shadows:
@@ -23,8 +26,13 @@ const courses = [
   { id: 'canyon', name: 'SUNSCAR CANYON', drawCalls: 138, triangles: 124_808 },
   { id: 'snowpeak', name: 'FROSTBITE PEAK', drawCalls: 129, triangles: 112_768 },
   { id: 'neon', name: 'NEON NIGHTLINE', drawCalls: 134, triangles: 115_360 },
+  // M6-00 / v16: the four new courses are pending (null) until M6-05 measures them.
+  { id: 'harbor', name: 'TIDEWATER HARBOR', drawCalls: null, triangles: null },
+  { id: 'forest', name: 'MOSSWOOD TRAIL', drawCalls: null, triangles: null },
+  { id: 'volcano', name: 'EMBER CALDERA', drawCalls: null, triangles: null },
+  { id: 'skyline', name: 'STRATOS CITY', drawCalls: null, triangles: null },
 ] as const satisfies readonly {
-  id: string; name: string; drawCalls: number; triangles: number;
+  id: string; name: string; drawCalls: number | null; triangles: number | null;
 }[];
 
 // Triangle cap by course length: 60 triangles per metre (ribbon, walls, decks) + 30k for scenery.
@@ -117,8 +125,9 @@ for (const { id, name, drawCalls: baselineDrawCalls, triangles: baselineTriangle
         expect(drawCalls).toBeLessThanOrEqual(200);
         expect(triangles).toBeGreaterThan(0);
         expect(triangles).toBeLessThanOrEqual(trianglesCap(track.length));
-        expect(drawCalls).toBeLessThanOrEqual(baselineDrawCalls + 20);
-        expect(triangles).toBeLessThanOrEqual(baselineTriangles + 15_000);
+        // Pending (null) rows check only the absolute budgets above.
+        if (baselineDrawCalls !== null) expect(drawCalls).toBeLessThanOrEqual(baselineDrawCalls + 20);
+        if (baselineTriangles !== null) expect(triangles).toBeLessThanOrEqual(baselineTriangles + 15_000);
       }
     }
     await testInfo.attach('draw-calls', {
@@ -521,11 +530,12 @@ for (const missedBoost of [false, true]) {
   });
 }
 
-test('C-010: eight course switches keep renderer geometry memory bounded', async ({ page }, testInfo) => {
+test('C-010: sixteen course switches keep renderer geometry memory bounded', async ({ page }, testInfo) => {
   await page.goto('./');
   await page.waitForFunction(() => !!window.__kartDebug?.rendererInfo);
-  // Canyon has the largest geometry count; visit every course twice.
-  const sequence = ['canyon', 'snowpeak', 'neon', 'meadow', 'canyon', 'snowpeak', 'neon', 'meadow'] as const;
+  // Canyon has the largest geometry count; visit every course twice (8 courses x 2 = 16 switches).
+  const lap = ['canyon', 'snowpeak', 'neon', 'meadow', 'harbor', 'forest', 'volcano', 'skyline'] as const;
+  const sequence = [...lap, ...lap];
   const samples = [];
   for (const id of sequence) {
     const sample = await page.evaluate(async trackId => {
@@ -548,7 +558,7 @@ test('C-010: eight course switches keep renderer geometry memory bounded', async
   });
   for (const [index, sample] of samples.entries()) {
     expect(sample.geometries).toBeLessThanOrEqual(samples[0].geometries);
-    if (index >= 4) expect(sample.geometries).toBe(samples[index - 4].geometries);
+    if (index >= lap.length) expect(sample.geometries).toBe(samples[index - lap.length].geometries);
   }
   const neonLoads = samples.filter(sample => sample.trackId === 'neon');
   expect(neonLoads).toHaveLength(2);

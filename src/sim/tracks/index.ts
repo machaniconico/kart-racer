@@ -4,13 +4,19 @@ import { meadow } from './meadow';
 import { canyon } from './canyon';
 import { snowpeak } from './snowpeak';
 import { neon } from './neon';
+import { harbor } from './harbor';
+import { forest } from './forest';
+import { volcano } from './volcano';
+import { skyline } from './skyline';
 
-export const TRACK_IDS: readonly TrackId[] = Object.freeze(['meadow', 'canyon', 'snowpeak', 'neon']);
+export const TRACK_IDS: readonly TrackId[] = Object.freeze([
+  'meadow', 'canyon', 'snowpeak', 'neon', 'harbor', 'forest', 'volcano', 'skyline',
+]);
 const cache = new Map<TrackId, Track>();
 
 // Own frozen copies, so editing a source definition cannot invalidate the fingerprint.
 export const TRACKS: Readonly<Record<TrackId, TrackDef>> = Object.freeze(Object.fromEntries(
-  [meadow, canyon, snowpeak, neon].map(def => {
+  [meadow, canyon, snowpeak, neon, harbor, forest, volcano, skyline].map(def => {
     const track = buildTrack(def);
     cache.set(def.id, track);
     return [def.id, track.def];
@@ -21,6 +27,12 @@ export function getTrack(id: string): Track {
   const track = cache.get(id as TrackId);
   if (!track) throw new RangeError(`Unknown course: ${id}`);
   return track;
+}
+
+/** Courses still registered as a copy of MEADOW's layout; a course story drops out by replacing its def. */
+export function scaffoldIds(): TrackId[] {
+  const reference = JSON.stringify(TRACKS.meadow.controlPoints);
+  return TRACK_IDS.filter(id => id !== 'meadow' && JSON.stringify(TRACKS[id].controlPoints) === reference);
 }
 
 function fingerprint(text: string): number {
