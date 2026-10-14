@@ -3,7 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getAIInput } from './ai';
 import { getSteeringError } from './itemAi';
 import { createRace, FIXED_DT, KART_RADIUS, NEUTRAL_INPUT, stepRace } from './race';
-import { crossedZone, JUMP_DURATION, JUMP_HEIGHT, racingLineOffset, surfaceAt } from './surfaces';
+import { decodeSnapshot, encodeSnapshot } from '../net/snapshotCodec';
+import { crossedZone, JUMP_DURATION, JUMP_HEIGHT, racingLineOffset, spinRateAt, surfaceAt } from './surfaces';
 import { buildTrack, projectToTrack, sampleTrack } from './track';
 import * as tracks from './tracks';
 import type { InputFrame, RaceState, Track, TrackDef } from './types';
@@ -539,5 +540,83 @@ describe('M2-02 pits', () => {
     expect(state.phase).toBe('finished');
     expect(state.karts[0]!.lap).toBe(3);
     expect(fired).toBe(3);
+  });
+});
+
+describe('spin floors', () => {
+  // snapshotCodec keeps HEADING_SCALE private; this mirrors its int16 heading lattice.
+  const HEADING_SCALE = 8192;
+  const spinTrack = (rate: number, extra: TrackDef['surfaces'] = []): Track =>
+    syntheticTrack({ surfaces: [...extra, { kind: 'spin', from: 1500, to: 1512, offsetMin: -6, offsetMax: 6, rate }] });
+  const insideDisc = (distance: number, offset: number): boolean => (distance - 1506) ** 2 + offset ** 2 <= 36;
+  const turn = (before: number, after: number): number => {
+    const delta = after - before;
+    return delta > Math.PI ? delta - 2 * Math.PI : delta < -Math.PI ? delta + 2 * Math.PI : delta;
+  };
+
+  it('returns the rate inside the disc (boundary included) and 0 outside or without spin zones', () => {
+    const track = spinTrack(1.5);
+    expect(spinRateAt(track, 1506, 0)).toBe(1.5);
+    expect(spinRateAt(track, 1500, 0)).toBe(1.5);
+    expect(spinRateAt(track, 1506, 6)).toBe(1.5);
+    expect(spinRateAt(track, 1506 + 3, 3)).toBe(1.5);
+    expect(spinRateAt(track, 1506 + 4.5, 4.5)).toBe(0);
+    expect(spinRateAt(track, 1499.99, 0)).toBe(0);
+    expect(spinRateAt(track, 1506, -6.01)).toBe(0);
+    expect(spinRateAt(spinTrack(-2), 1506, 0)).toBe(-2);
+    expect(spinRateAt(syntheticTrack({ surfaces: [{ kind: 'ice', from: 1500, to: 1512 }] }), 1506, 0)).toBe(0);
+  });
+
+  it.each([1, -1])('turns heading by rate x dt per grounded tick inside the disc only (rate %s)', rate => {
+    const track = spinTrack(rate);
+    const state = soloRace(track, 1490, 20);
+    const kart = state.karts[0]!;
+    let inside = 0;
+    for (let tick = 0; tick < 90; tick++) {
+      kart.speed = 20;
+      const { heading, trackDistance, lateralOffset } = kart;
+      stepRace(state, [NEUTRAL_INPUT]);
+      const delta = turn(heading, kart.heading);
+      if (insideDisc(trackDistance, lateralOffset)) {
+        inside++;
+        expect(delta).toBeCloseTo(rate * FIXED_DT, 12);
+      } else expect(delta).toBeCloseTo(0, 12);
+    }
+    expect(inside).toBeGreaterThan(20);
+  });
+
+  it.each([1, -1])('does not turn airborne karts over the disc (rate %s)', rate => {
+    const track = spinTrack(rate, [{ kind: 'jump', from: 1496, to: 1498 }]);
+    const state = soloRace(track, 1490, 20);
+    const kart = state.karts[0]!;
+    let airborneInside = 0;
+    for (let tick = 0; tick < 90; tick++) {
+      kart.speed = 20;
+      const { heading, trackDistance, lateralOffset, airTime } = kart;
+      stepRace(state, [NEUTRAL_INPUT]);
+      if (airTime > 0) {
+        expect(kart.heading).toBe(heading);
+        if (insideDisc(trackDistance, lateralOffset)) airborneInside++;
+      } else if (insideDisc(trackDistance, lateralOffset)) {
+        expect(turn(heading, kart.heading)).toBeCloseTo(rate * FIXED_DT, 12);
+      } else expect(turn(heading, kart.heading)).toBeCloseTo(0, 12);
+    }
+    expect(airborneInside).toBeGreaterThan(20);
+  });
+
+  it.each([1, -1])('keeps |heading| <= pi across the seam while spinning out and survives the snapshot (rate %s)', rate => {
+    const wire = createRace(1);
+    const state = soloRace(spinTrack(rate), 1506, 0);
+    const kart = state.karts[0]!;
+    kart.heading = rate * (Math.PI - 0.01);
+    kart.spinTime = 1;
+    for (let tick = 0; tick < 120; tick++) {
+      stepRace(state, [NEUTRAL_INPUT]);
+      expect(Math.abs(kart.heading)).toBeLessThanOrEqual(Math.PI);
+      wire.karts[0]!.heading = kart.heading;
+      const decoded = decodeSnapshot(encodeSnapshot(wire, 1, 0), wire);
+      expect(Math.abs(decoded!.state.karts[0]!.heading - kart.heading)).toBeLessThanOrEqual(1 / HEADING_SCALE);
+    }
+    expect(Math.sign(kart.heading)).toBe(-rate);
   });
 });

@@ -7,7 +7,7 @@ import { corridorAt, exclusionAt, freeIntervalFor, widthAt } from './corridor';
 import type { CorridorNormal } from './corridor';
 import { barrierEscape, insideBarrier, projectToTrack, sampleTrack } from './track';
 import { getTrack } from './tracks';
-import { crossedZone, insideZone, JUMP_DURATION, JUMP_HEIGHT, surfaceAt } from './surfaces';
+import { crossedZone, insideZone, JUMP_DURATION, JUMP_HEIGHT, spinRateAt, surfaceAt } from './surfaces';
 import type { InputFrame, KartState, RaceOptions, RaceState, Track } from './types';
 
 export const FIXED_DT = 1 / 60;
@@ -320,6 +320,13 @@ function advanceKart(track: Track, state: RaceState, kart: KartState, input: Inp
     // Countersteering opens the arc without reversing an established drift.
     const steering = kart.driftDirection === 0 ? kart.steer : kart.driftDirection * 0.75 + kart.steer * 0.6;
     kart.heading += steering * turnRate * FIXED_DT;
+    kart.heading = Math.atan2(Math.sin(kart.heading), Math.cos(kart.heading));
+  }
+  // The floor turns the kart even while it spins out; renormalise here because the
+  // block above skips it during spinTime and the snapshot's int16 heading would overflow.
+  const spinRate = kart.airTime === 0 ? spinRateAt(track, kart.trackDistance, kart.lateralOffset) : 0;
+  if (spinRate !== 0) {
+    kart.heading += spinRate * FIXED_DT;
     kart.heading = Math.atan2(Math.sin(kart.heading), Math.cos(kart.heading));
   }
   const slip = kart.driftDirection * Math.min(0.23, kart.driftTime * 0.35);

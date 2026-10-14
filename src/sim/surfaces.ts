@@ -27,6 +27,18 @@ export function surfaceAt(track: Track, distance: number, offset: number): 'road
   return on('ice') ? 'ice' : on('dirt') ? 'dirt' : 'road';
 }
 
+/** Spin floors are discs centred in their zone with diameter (to - from); validateTrackDef keeps them on straights. */
+export function spinRateAt(track: Track, distance: number, offset: number): number {
+  for (const zone of track.def.surfaces) {
+    if (zone.kind !== 'spin') continue;
+    const radius = (zone.to - zone.from) / 2;
+    const along = wrap(track, distance) - (zone.from + zone.to) / 2;
+    const across = offset - ((zone.offsetMin ?? 0) + (zone.offsetMax ?? 0)) / 2;
+    if (along * along + across * across <= radius * radius) return zone.rate ?? 0;
+  }
+  return 0;
+}
+
 /** Each tick travels less than half a lap. Count only a forward (previous, current] entry. */
 export function crossedZone(track: Track, kind: SurfaceZone['kind'], previousDistance: number,
   distance: number, offset: number): boolean {
