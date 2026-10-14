@@ -49,7 +49,7 @@ export const canyon: TrackDef = {
   ],
   splits: island.splits,
   checkpointCount: 12,
-  boxRows: [0.19, 0.4, 0.69, 0.9],
+  boxRows: [0.04, 0.19, 0.29, 0.4, 0.52, 0.69, 0.84, 0.9],
   boxLanes: [-5.33, 0, 5.33],
   // Hold the left line through the first landing and pillar; move left early for pillar two.
   racingLine: [

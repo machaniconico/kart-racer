@@ -10,7 +10,7 @@ const options = { from: 140, to: 200, islandHalf: 6, laneWidth: 9,
 describe('islandSplit', () => {
   it('builds a valid JSON course with two full-width lanes, 20 m ramps and a clear approach', () => {
     const feature = islandSplit(options);
-    const def = { ...meadow, checkpointCount: 1, boxRows: [0.4, 0.55, 0.7, 0.85], ...feature };
+    const def = { ...meadow, checkpointCount: 1, boxRows: [0.4, 0.475, 0.55, 0.625, 0.7, 0.775, 0.85, 0.925], ...feature };
     const json = JSON.stringify(def);
     expect(() => validateTrackDef(def)).not.toThrow();
     expect(JSON.stringify(def)).toBe(json);
@@ -60,7 +60,7 @@ describe('islandSplit', () => {
     expect(feature.widthKeys[1]!.wallHalfWidth - feature.widthKeys[0]!.wallHalfWidth).toBeLessThanOrEqual(7);
     expect(feature.splits[0]!.lanes[1]!.offsetMin).toBe(10 + KART_RADIUS);
     expect(() => validateTrackDef({ ...meadow, checkpointCount: 1,
-      boxRows: [0.4, 0.55, 0.7, 0.85], ...feature })).not.toThrow();
+      boxRows: [0.4, 0.475, 0.55, 0.625, 0.7, 0.775, 0.85, 0.925], ...feature })).not.toThrow();
   });
 
   it('rejects dimensions that cannot produce the requested island', () => {

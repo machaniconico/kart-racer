@@ -280,7 +280,7 @@ describe('M1-03 assist passages', () => {
     });
 
   // Road 3.6 with pillars at -3, 0 and 3: the only passages, [-9.05, -5.15] and [5.15, 9.05], lie off the road.
-  const offRoadDef: TrackDef = { ...straightDef, roadHalfWidth: 3.6, boxRows: [0.3, 0.5, 0.7, 0.9],
+  const offRoadDef: TrackDef = { ...straightDef, roadHalfWidth: 3.6, boxRows: [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.85, 0.9],
     barriers: [-3, 0, 3].map(center => ({ from: 130, to: 150, center, halfWidth: 1.2, taper: 4, scenery: 'pillar' as const })) };
   const offRoadTrack = buildTrack(offRoadDef);
   const offRoad = KART_RADIUS + 4.2;
@@ -396,7 +396,7 @@ describe('M1-03 assist passages', () => {
 
   // A gentle curve: a 100 m circle (16 control points).
   const circleDef: TrackDef = { ...straightDef, roadHalfWidth: 5, wallHalfWidth: 6, checkpointCount: 1,
-    boxRows: [0.3, 0.5, 0.7, 0.9],
+    boxRows: [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.85, 0.9],
     controlPoints: Array.from({ length: 16 }, (_, i) => [100 * Math.cos(i * Math.PI / 8), 0, 100 * Math.sin(i * Math.PI / 8)] as [number, number, number]) };
 
   // A band contact: a band hit (value 1), or the kart centre within 0.05 m of a band's exclusion edge
@@ -422,7 +422,7 @@ describe('M1-03 assist passages', () => {
 
   it('does not intervene when no path clears the band (reversed loop, angled start at a nose)', () => {
     const def: TrackDef = { ...straightDef, controlPoints: [...straightDef.controlPoints].reverse(),
-      roadHalfWidth: 5, wallHalfWidth: 8.06, checkpointCount: 1, boxRows: [0.3, 0.5, 0.7, 0.9],
+      roadHalfWidth: 5, wallHalfWidth: 8.06, checkpointCount: 1, boxRows: [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.85, 0.9],
       barriers: [{ from: 519.41, to: 560.2, center: -6.17, halfWidth: 2.17, taper: 4.58 }] };
     expect(() => validateTrackDef(def)).not.toThrow();
     const track = buildTrack(def);
@@ -458,7 +458,7 @@ describe('M1-03 assist passages', () => {
   });
 
   it('does not cross the current safe passage toward the centre beside a short wall-side band', () => {
-    const def: TrackDef = { ...straightDef, roadHalfWidth: 3.6, boxRows: [0.3, 0.5, 0.7, 0.9],
+    const def: TrackDef = { ...straightDef, roadHalfWidth: 3.6, boxRows: [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.85, 0.9],
       barriers: [{ from: 130, to: 134, center: -3, halfWidth: 1.2, taper: 4 }] };
     expect(() => validateTrackDef(def)).not.toThrow();
     const track = buildTrack(def);
@@ -506,7 +506,7 @@ describe('M1-03 assist passages', () => {
         const center = wallSide ? Math.sign(random() - 0.5) * (wallHalfWidth - between(0, 1.5)) : between(-wallHalfWidth, wallHalfWidth);
         return { from, to: (from + span) % length, center, halfWidth, taper };
       });
-      const def: TrackDef = { ...base, roadHalfWidth, wallHalfWidth, boxRows: [0.3, 0.5, 0.7, 0.9], barriers };
+      const def: TrackDef = { ...base, roadHalfWidth, wallHalfWidth, boxRows: [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.85, 0.9], barriers };
       try { validateTrackDef(def); } catch { continue; }
       cases++;
       kinds.add(`${count} bands`);

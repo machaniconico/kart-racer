@@ -167,11 +167,20 @@ describe('H1 handling', () => {
 // | Layout / protocol | Mean lap (s)       | Wall hits | Band hits | New/old |
 // | 2 / v13 (M4-01)   | 17.86990740740741  | 0         | 0         |         |
 // | 3 / v13 (M4-05)   | 17.727314814814815 | 0         | 0         | 0.992   |
+// M4.5-03 / v14: 24 boxes change CPU pickups and item use; course layout versions stay unchanged.
+// Measured on darwin-arm64, 8 CPUs × seeds [1, 42, 98765] × 3 laps (72 laps per course):
+// | Course   | Old version / mean lap (s) | New mean lap (s)   | New/old | Wall old/new | Band old/new |
+// | meadow   | v13 / 18.854398148148153   | 19.105555555555558 | 1.0133  | 0 / 0        | 0 / 0        |
+// | canyon   | v13 / 19.76342592592593    | 20.39398148148148  | 1.0319  | 0 / 0        | 4 / 1        |
+// | snowpeak | v13 / 17.727314814814815   | 18.92245370370371  | 1.0674  | 0 / 0        | 0 / 0        |
+// | neon     | v12 / 18.308796296296297   | 19.16759259259259  | 1.0469  | 0 / 0        | 3 / 2        |
+// NEON's added rows at ~158 / 309 m caused 5 band hits; moving them to ~132 / 283 m
+// clears the bands and their 40 m approaches. Band hits by seed are now [1, 0, 1].
 const BASELINE = {
-  meadow: { version: 'v13', meanLap: 18.854398148148153, wallHits: 0, bandHits: 0 },
-  canyon: { version: 'v13', meanLap: 19.76342592592593, wallHits: 0, bandHits: 4 },
-  snowpeak: { version: 'v13', meanLap: 17.727314814814815, wallHits: 0, bandHits: 0 },
-  neon: { version: 'v12', meanLap: 18.308796296296297, wallHits: 0, bandHits: 3 },
+  meadow: { version: 'v14', meanLap: 19.105555555555558, wallHits: 0, bandHits: 0 },
+  canyon: { version: 'v14', meanLap: 20.39398148148148, wallHits: 0, bandHits: 1 },
+  snowpeak: { version: 'v14', meanLap: 18.92245370370371, wallHits: 0, bandHits: 0 },
+  neon: { version: 'v14', meanLap: 19.16759259259259, wallHits: 0, bandHits: 2 },
 };
 const SEEDS = [1, 42, 98765];
 
@@ -246,7 +255,7 @@ describe('H1 CPU balance: absolute range and recorded baseline', () => {
     const meanLap = totalLapTime / 72;
     if (trackId === 'snowpeak') {
       const m401MeanLap = 17.86990740740741;
-      expect(BASELINE.snowpeak.version).toBe('v13');
+      expect(BASELINE.snowpeak.version).toBe('v14');
       expect(BASELINE.snowpeak.meanLap / m401MeanLap).toBeGreaterThanOrEqual(0.95);
       expect(BASELINE.snowpeak.meanLap / m401MeanLap).toBeLessThanOrEqual(1.10);
       expect(meanLap / m401MeanLap).toBeGreaterThanOrEqual(0.95);
@@ -285,6 +294,8 @@ const pillarTrack = buildTrack({
   ...tracks.TRACKS.meadow, scale: 1, roadHalfWidth: 8, wallHalfWidth: 10,
   controlPoints: [[-200, 0, 0], [-100, 0, 0], [0, 0, 0], [100, 0, 0], [200, 0, 0], [260, 0, 60],
     [200, 0, 120], [100, 0, 120], [0, 0, 120], [-100, 0, 120], [-200, 0, 120], [-260, 0, 60]],
+  // The added 0.24 row would sit inside the third pillar; put it beyond the passage.
+  boxRows: [0.02, 0.12, 0.30, 0.36, 0.47, 0.58, 0.695, 0.81],
   surfaces: [], racingLine: [], barriers: [pillar(130), pillar(200), pillar(270)],
 });
 

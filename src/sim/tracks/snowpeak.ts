@@ -18,7 +18,7 @@ export const snowpeak: TrackDef = {
   roadHalfWidth: BASE_ROAD_HALF_WIDTH,
   wallHalfWidth: BASE_WALL_HALF_WIDTH,
   checkpointCount: 12,
-  boxRows: [0.16, 0.42, 0.61, 0.87],
+  boxRows: [0.03, 0.16, 0.29, 0.42, 0.515, 0.61, 0.74, 0.87],
   boxLanes: [-5.33, 0, 5.33],
   racingLine: [],
   // Full road width only; keep the tighter S-bends and starting grid on snow.

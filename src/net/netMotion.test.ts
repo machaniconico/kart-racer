@@ -36,8 +36,8 @@ function motionDef(): TrackDef {
       [-1500, 3, 0], [-1000, 3, 0], [-500, 3, 0], [0, 3, 0],
       [500, 3, 0], [1000, 3, 0], [1500, 3, 0], [1500, 3, 1000], [-1500, 3, 1000],
     ],
-    // The wire layout needs 12 boxes; put every row past the first straight so no item reaches the band.
-    boxRows: [0.6, 0.7, 0.8, 0.9],
+    // The wire layout needs 24 boxes; put every row past the first straight so no item reaches the band.
+    boxRows: [0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95],
     surfaces: [], barriers: [SWEEP],
     // CPUs pass the band on the + side (sweep exclusion reaches ±6.15 m); the guest uses the - side in run A.
     racingLine: [{ distance: 1350, offset: 8 }, { distance: 1490, offset: 8 }],

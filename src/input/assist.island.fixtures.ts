@@ -49,8 +49,8 @@ export const seeded = (initial: number) => {
 // The straight (arc ~100 to ~330 m) and a radius-40 circle (all curve). Coarser samples keep the
 // fuzz within its time budget; item boxes and the start grid are kept clear of the bands.
 export const courses = [
-  { def: { ...straightDef, samplesPerSegment: 8, boxRows: [0.5, 0.6, 0.7, 0.8] }, from: 170 },
-  { def: { ...straightDef, samplesPerSegment: 4, checkpointCount: 1, boxRows: [0.1, 0.2, 0.3, 0.34],
+  { def: { ...straightDef, samplesPerSegment: 8, boxRows: [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85] }, from: 170 },
+  { def: { ...straightDef, samplesPerSegment: 4, checkpointCount: 1, boxRows: [0.1, 0.14, 0.18, 0.2, 0.24, 0.28, 0.3, 0.34],
     controlPoints: Array.from({ length: 16 }, (_, i) =>
       [40 * Math.cos(i * Math.PI / 8), 0, 40 * Math.sin(i * Math.PI / 8)] as [number, number, number]) }, from: 145 },
 ];

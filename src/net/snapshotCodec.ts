@@ -6,11 +6,11 @@ import { NEUTRAL_INPUT, quantizeInput } from './inputBuffer';
 import { isRaceState, MAX_PLAYERS, PacketKind } from './protocol';
 
 // All multibyte fields are little endian. The design's field lists total
-// 29/59/25 bytes, giving 1,188 bytes at capacity and 563 with two entities.
+// 29/59/25 bytes plus 24 boxes: 525 base bytes, 1,200 at capacity, 575 with two entities.
 export const SNAPSHOT_HEADER_BYTES = 29;
 export const SNAPSHOT_KART_BYTES = 59;
 export const SNAPSHOT_ENTITY_BYTES = 25;
-export const SNAPSHOT_BOX_COUNT = 12;
+export const SNAPSHOT_BOX_COUNT = 24;
 // With 59-byte karts, a 28th entity would exceed the 1,200-byte packet budget.
 export const MAX_SNAPSHOT_ENTITIES = 27;
 const BOX_OFFSET = SNAPSHOT_HEADER_BYTES + MAX_PLAYERS * SNAPSHOT_KART_BYTES;

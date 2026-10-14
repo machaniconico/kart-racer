@@ -45,8 +45,8 @@ function freezeDeep<T>(value: T): T {
 
 /** Build an immutable, arc-length indexed course using only its JSON definition. */
 export function buildTrack(definition: TrackDef): Track {
-  if (definition.boxRows.length !== 4 || definition.boxLanes.length !== 3) {
-    throw new RangeError('A course requires twelve boxes in four rows and three lanes');
+  if (definition.boxRows.length !== 8 || definition.boxLanes.length !== 3) {
+    throw new RangeError('A course requires 24 boxes in eight rows and three lanes');
   }
   if (definition.controlPoints.length < 4 || !Number.isInteger(definition.samplesPerSegment) ||
     definition.samplesPerSegment < 1 || !Number.isInteger(definition.checkpointCount) || definition.checkpointCount < 1) {

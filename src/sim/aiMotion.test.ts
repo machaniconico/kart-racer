@@ -21,6 +21,8 @@ function motionDef(): TrackDef {
       [-150, 3, 0], [-100, 3, 0], [-50, 3, 0], [0, 3, 0],
       [50, 3, 0], [100, 3, 0], [150, 3, 0], [150, 3, 100], [-150, 3, 100],
     ],
+    // Keep the extra rows clear of the sweep and gate; runRace removes all items.
+    boxRows: [0.02, 0.12, 0.30, 0.36, 0.47, 0.58, 0.695, 0.81],
     surfaces: [], barriers: [SWEEP, GATE],
     // The line passes outside every exclusion at all motion phases (sweep reaches ±6.15, gate ±4.55).
     racingLine: [
@@ -35,7 +37,7 @@ interface RunResult { readonly state: RaceState; readonly bandHits: number; read
 function runRace(track: Track, seed: number): RunResult {
   vi.spyOn(tracks, 'getTrack').mockReturnValue(track);
   const state = createRace(seed, { racers: [] });
-  // buildTrack requires four box rows, so the story's `boxRows: []` is realised by removing the boxes:
+  // buildTrack requires eight box rows, so the story's `boxRows: []` is realised by removing the boxes:
   // without items no spin can stand in for a band hit.
   state.boxes = [];
   let bandHits = 0;

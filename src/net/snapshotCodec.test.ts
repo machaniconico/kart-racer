@@ -22,7 +22,7 @@ const inputs: InputFrame[] = Array.from({ length: 8 }, (_, id) => ({
   steer: (id - 3.5) / 3.5, throttle: id / 7,
   brake: (id & 1) !== 0, drift: (id & 2) !== 0, useItem: (id & 4) !== 0,
 }));
-const ENTITY_OFFSET = 513;
+const ENTITY_OFFSET = 525;
 
 function projectile(id: number, x = id): Projectile {
   return { kind: 'bolt', id, ownerId: id % 8, x, y: 3.123456, z: -12.765432,
@@ -47,7 +47,7 @@ function fixture(entityCount = MAX_SNAPSHOT_ENTITIES): RaceState {
         autoTime: 3.467, charges: id % 4, holding: id % 2, aiHoldTicks: id * 8, orbitKind: id % 3, orbitCount: id % 4 },
     });
   });
-  state.boxes.forEach((box, id) => { box.respawnTime = id * 0.417; });
+  state.boxes.forEach((box, id) => { box.respawnTime = (id * 0.417) % 5; });
   for (let index = 0; index < entityCount; index++) {
     const bolt = projectile(200 + index, index * 8.123456);
     if (index % 3 === 0) {
@@ -74,18 +74,18 @@ function expectPose(actual: Pose, original: Pose) {
 }
 
 describe('snapshot codec', () => {
-  it('fits eight karts, twelve boxes and 27 entities below 1,200 bytes; two bolts below 600', () => {
+  it('fits eight karts, 24 boxes and 27 entities at 1,200 bytes; two bolts below 600', () => {
     const state = fixture();
     expect(state.karts).toHaveLength(8);
-    expect(state.boxes).toHaveLength(12);
-    expect(encodeSnapshot(state, 0, 0).byteLength).toBe(1188);
+    expect(state.boxes).toHaveLength(24);
+    expect(encodeSnapshot(state, 0, 0).byteLength).toBe(1200);
     expect(encodeSnapshot(state, 0, 0).byteLength).toBeLessThanOrEqual(1200);
     state.projectiles = [projectile(200), projectile(201)];
     state.traps = [];
-    expect(encodeSnapshot(state, 0, 0).byteLength).toBe(563);
+    expect(encodeSnapshot(state, 0, 0).byteLength).toBe(575);
     expect(encodeSnapshot(state, 0, 0).byteLength).toBeLessThanOrEqual(600);
     expect(MAX_SNAPSHOT_ENTITIES).toBe(27);
-    expect(SNAPSHOT_BOX_COUNT).toBe(12);
+    expect(SNAPSHOT_BOX_COUNT).toBe(24);
     expect([SNAPSHOT_HEADER_BYTES, SNAPSHOT_KART_BYTES, SNAPSHOT_ENTITY_BYTES]).toEqual([29, 59, 25]);
   });
 
@@ -167,7 +167,7 @@ describe('snapshot codec', () => {
       for (let orbitCount = 0; orbitCount <= 3; orbitCount++) {
         Object.assign(kart.effects, { rouletteTime: bucket / 20, orbitCount });
         const packet = encodeSnapshot(state, 0, 0);
-        expect(packet.byteLength).toBe(513);
+        expect(packet.byteLength).toBe(525);
         expect(new DataView(packet).getUint8(SNAPSHOT_HEADER_BYTES + 49 + 7)).toBe((bucket << 2) | orbitCount);
         expect(roundTrip(state).state.karts[0].effects).toEqual(kart.effects);
       }
@@ -561,7 +561,7 @@ describe('protocol layout fingerprint', () => {
       11: 'f7b2a1f2',
       12: 'f7b2a1f2',
       13: 'f7b2a1f2',
-      14: 'f84bde47',
+      14: 'aa03c454',
     };
     expect(SNAPSHOT_LAYOUT.slice(0, 2)).toEqual([KART_EFFECT_LAYOUT, ENTITY_KINDS]);
     expect(fingerprint(SNAPSHOT_LAYOUT)).toBe(LAYOUT_FINGERPRINT);
@@ -592,7 +592,7 @@ describe('protocol layout fingerprint', () => {
     pinned[11] = 1042567012;
     pinned[12] = 313875369;
     pinned[13] = 2812341565;
-    pinned[14] = 2812341565;
+    pinned[14] = 4027931737;
     const definitions = TRACK_IDS.map(id => TRACKS[id]);
     expect(COURSE_FINGERPRINT).toBe(Number.parseInt(fingerprint(definitions), 16));
     expect(COURSE_FINGERPRINT).toBe(pinned[PROTOCOL_VERSION]);
@@ -609,7 +609,7 @@ describe('I5 orbit snapshots', () => {
       Object.assign(kart.effects, { orbitKind: kart.id % 2 + 1, orbitCount: 3 });
     }
     const buffer = encodeSnapshot(state, 0, 0);
-    expect(buffer.byteLength).toBe(1188);
+    expect(buffer.byteLength).toBe(1200);
     expect(new DataView(buffer).getUint8(27)).toBe(27);
     const orbitFields = KART_EFFECT_LAYOUT.filter(field => field.field.startsWith('orbit'));
     expect(new Set(orbitFields.map(field => field.byteOffset)).size).toBe(2);
@@ -619,7 +619,7 @@ describe('I5 orbit snapshots', () => {
       .toEqual(state.karts.map(kart => [kart.effects.orbitKind, kart.effects.orbitCount]));
     state.projectiles = []; state.traps = [];
     const empty = encodeSnapshot(state, 0, 0);
-    expect(empty.byteLength).toBe(513);
+    expect(empty.byteLength).toBe(525);
     expect(new DataView(empty).getUint8(27)).toBe(0);
     for (const kind of [1, 2]) {
       for (const count of [0, 1, 2, 3]) {

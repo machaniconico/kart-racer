@@ -5,7 +5,7 @@ import type { TrackDef } from './types';
 /**
  * Synthetic elevation courses for the M4 tests. They are deliberately not registered
  * (TRACK_IDS / TRACKS / COURSE_FINGERPRINT stay unchanged); tests mock getTrack.
- * None has bands, islands or surface zones; each has four gates and twelve boxes.
+ * None has bands, islands or surface zones; each has four gates and 24 boxes.
  */
 
 type Point = readonly [x: number, y: number, z: number];
@@ -16,7 +16,7 @@ function course(name: string, controlPoints: readonly Point[], extra: Partial<Tr
   return {
     id: 'meadow', name, controlPoints, scale: 1, samplesPerSegment: SAMPLES_PER_SEGMENT,
     roadHalfWidth: BASE_ROAD_HALF_WIDTH, wallHalfWidth: BASE_WALL_HALF_WIDTH, checkpointCount: 4,
-    boxRows: [0.12, 0.36, 0.58, 0.81], boxLanes: [-5.33, 0, 5.33],
+    boxRows: [0.02, 0.12, 0.24, 0.36, 0.47, 0.58, 0.695, 0.81], boxLanes: [-5.33, 0, 5.33],
     racingLine: [], surfaces: [], themeId: 'meadow', ...extra,
   };
 }

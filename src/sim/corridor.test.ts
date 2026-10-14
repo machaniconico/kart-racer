@@ -21,7 +21,7 @@ const syntheticDef = (overrides: Partial<TrackDef> = {}): TrackDef => ({
     [-150, 3, 0], [-100, 3, 0], [-50, 3, 0], [0, 3, 0],
     [50, 3, 0], [100, 3, 0], [150, 3, 0], [150, 3, 100], [-150, 3, 100],
   ],
-  boxRows: [0.45, 0.55, 0.7, 0.85], surfaces: [], racingLine: [], ...overrides,
+  boxRows: [0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.8, 0.85], surfaces: [], racingLine: [], ...overrides,
 });
 
 describe('widthAt', () => {
@@ -303,7 +303,7 @@ describe('moving barrier validation', () => {
     const length = buildTrack(syntheticDef()).length;
     const moving = { ...band, center: -4, halfWidth: 0.1,
       motion: { ...sweep, amplitude: 8, period: 16 } };
-    const def = syntheticDef({ boxRows: [135 / length, 0.55, 0.7, 0.85], boxLanes: [0, 8, 9], barriers: [moving] });
+    const def = syntheticDef({ boxRows: [135 / length, ...syntheticDef().boxRows.slice(1)], boxLanes: [0, 8, 9], barriers: [moving] });
     const track = buildTrack(def);
     for (const time of [0, 4, 8, 12, 16]) {
       const exclusion = exclusionAt(track, moving, 135, time)!;
@@ -430,7 +430,7 @@ describe('corridorAt and freeIntervalFor', () => {
 describe('validateTrackDef', () => {
   const band: Barrier = { from: 125, to: 140, center: 0, halfWidth: 2, taper: 4 };
   const fixture = (overrides: Partial<TrackDef> = {}): TrackDef => ({
-    ...base, checkpointCount: 1, boxRows: [0.35, 0.5, 0.7, 0.85], ...overrides,
+    ...base, checkpointCount: 1, boxRows: [0.35, 0.45, 0.5, 0.6, 0.65, 0.7, 0.8, 0.85], ...overrides,
   });
   it.each(TRACK_IDS)('accepts the existing %s definition without changing its JSON', id => {
     const def = TRACKS[id];
@@ -513,7 +513,7 @@ describe('validateTrackDef', () => {
     expect(() => validateTrackDef(fixture({ barriers: [barrier] }))).toThrow(new RegExp(`start grid slot ${slot}`));
   });
 
-  it.each(Array.from({ length: 12 }, (_, box) => box))('rejects occupied item box %i', box => {
+  it.each(Array.from({ length: 24 }, (_, box) => box))('rejects occupied item box %i', box => {
     const d = base.boxRows[Math.floor(box / 3)]! * length;
     const barrier: Barrier = { from: d - 2, to: d + 2, center: base.boxLanes[box % 3]!, halfWidth: 0.5, taper: 2 };
     expect(() => validateTrackDef(fixture({ barriers: [barrier], boxRows: base.boxRows }))).toThrow(/item box/);
@@ -925,7 +925,7 @@ describe('validateTrackDef elevation', () => {
 describe('validateCoursePlayability', () => {
   const band: Barrier = { from: 125, to: 140, center: 0, halfWidth: 2, taper: 4 };
   const fixture = (overrides: Partial<TrackDef> = {}): TrackDef => ({
-    ...base, checkpointCount: 1, boxRows: [0.35, 0.5, 0.7, 0.85], ...overrides,
+    ...base, checkpointCount: 1, boxRows: [0.35, 0.45, 0.5, 0.6, 0.65, 0.7, 0.8, 0.85], ...overrides,
   });
   const validateAll = (def: TrackDef): void => {
     validateTrackDef(def);
@@ -936,7 +936,7 @@ describe('validateCoursePlayability', () => {
     const jump = { kind: 'jump' as const, from: 160, to: 164, offsetMin: -1, offsetMax: 1 };
     const cases = [
       fixture({ barriers: [{ ...band, from: length - 25, to: 25, center: 7 }] }),
-      fixture({ barriers: [band], boxRows: [(band.from - KART_RADIUS - 7.49) / length, 0.5, 0.7, 0.85] }),
+      fixture({ barriers: [band], boxRows: [(band.from - KART_RADIUS - 7.49) / length, ...fixture().boxRows.slice(1)] }),
       fixture({ barriers: [{ ...band, from: 150, to: 160 }], surfaces: [jump] }),
     ];
     for (const def of cases) {
@@ -973,14 +973,14 @@ describe('validateCoursePlayability', () => {
 
   it('requires 8 m from item rows to the expanded band, even when boxes miss it laterally', () => {
     const row = (band.from - KART_RADIUS - 8) / length;
-    expect(() => validateAll(fixture({ barriers: [band], boxRows: [row, 0.5, 0.7, 0.85] })))
+    expect(() => validateAll(fixture({ barriers: [band], boxRows: [row, ...fixture().boxRows.slice(1)] })))
       .not.toThrow();
     for (const gap of [7.49, 7.99]) {
-      const def = fixture({ barriers: [band], boxRows: [(band.from - KART_RADIUS - gap) / length, 0.5, 0.7, 0.85] });
+      const def = fixture({ barriers: [band], boxRows: [(band.from - KART_RADIUS - gap) / length, ...fixture().boxRows.slice(1)] });
       expect(() => validateAll(def)).toThrow(/item box row.*8 m/);
     }
     expect(() => validateAll(fixture({ barriers: [{ ...band, center: 9 }],
-      boxRows: [132 / length, 0.5, 0.7, 0.85] }))).toThrow(/item box row.*8 m/);
+      boxRows: [132 / length, ...fixture().boxRows.slice(1)] }))).toThrow(/item box row.*8 m/);
   });
 
   it.each([-10, 40])('rejects an overlapping nose at jump.from %+i and permits a separate lane', delta => {

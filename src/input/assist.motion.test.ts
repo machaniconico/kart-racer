@@ -10,7 +10,7 @@ import { applySteerAssist } from './assist';
 
 // M3-07: the assist on moving bands. The synthetic course of M3-03 (src/sim/aiMotion.test.ts):
 // a small oval in the manner of surfaces.test.ts's syntheticTrack. Item
-// boxes are removed from the race state (a course needs twelve), so no item spins the kart. Three
+// boxes are removed from the race state (a course needs 24), so no item spins the kart. Three
 // checkpoints keep every gate 10 m clear of the band tips. Measured per lap (offsets -3 / 0 / 3):
 // bands 0,0,0 and walls 2,1,2 / 2,1,2 / 1,1,2 (assist OFF: bands 1,1,0, walls 2,1,2, in 156 s
 // against 85 s); assist.ts needed no change.
@@ -25,6 +25,8 @@ const def: TrackDef = {
     [-150, 3, 0], [-100, 3, 0], [-50, 3, 0], [0, 3, 0],
     [50, 3, 0], [100, 3, 0], [150, 3, 0], [150, 3, 100], [-150, 3, 100],
   ],
+  // Keep the extra rows clear of the sweep and gate before drive removes all items.
+  boxRows: [0.02, 0.12, 0.30, 0.36, 0.47, 0.58, 0.695, 0.81],
   surfaces: [], racingLine: [],
   barriers: [
     { from: 60, to: 100, center: 0, halfWidth: 1.2, taper: 4, motion: { kind: 'sweep', amplitude: 4, period: 6, phase: 0 } },

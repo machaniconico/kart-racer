@@ -15,7 +15,7 @@ export const meadow: TrackDef = {
   roadHalfWidth: BASE_ROAD_HALF_WIDTH,
   wallHalfWidth: BASE_WALL_HALF_WIDTH,
   checkpointCount: 12,
-  boxRows: [0.12, 0.36, 0.58, 0.81],
+  boxRows: [0.02, 0.12, 0.24, 0.36, 0.47, 0.58, 0.695, 0.81],
   boxLanes: [-5.33, 0, 5.33],
   racingLine: [],
   surfaces: [],

@@ -309,7 +309,7 @@ describe('collideCorridor: barrier bands and width profiles', () => {
     // rail. The stop must still emit value 1, and the near-perpendicular residual must not turn the kart
     // sideways, where the next rail contact would flip it backwards.
     const ring = buildTrack({ ...track.def, scale: 1, checkpointCount: 1, roadHalfWidth: 5, wallHalfWidth: 6,
-      boxRows: [0.3, 0.5, 0.7, 0.9], surfaces: [], racingLine: [],
+      boxRows: [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.85, 0.9], surfaces: [], racingLine: [],
       controlPoints: Array.from({ length: 16 }, (_, i) =>
         [100 * Math.cos(i * Math.PI / 8), 0, 100 * Math.sin(i * Math.PI / 8)] as const),
       barriers: [{ from: 160, to: 180, center: 5, halfWidth: 1.2, taper: 4 }] });

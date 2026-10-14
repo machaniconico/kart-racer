@@ -1706,7 +1706,7 @@ describe('I2 held-item defense', () => {
     advanceItems(track, state, FIXED_DT);
     expect(state.projectiles).toHaveLength(40);
     const buffer = encodeSnapshot(state, 0, 0);
-    expect(buffer.byteLength).toBe(1188);
+    expect(buffer.byteLength).toBe(1200);
     const decoded = decodeSnapshot(buffer, createRace(42))!;
     expect(decoded.state.projectiles).toHaveLength(27);
     for (let tick = 0; tick < 360; tick++) advanceItems(track, state, FIXED_DT);

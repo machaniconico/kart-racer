@@ -9,7 +9,7 @@ export const ROOM_PREFIX = `pcircuit-v${PROTOCOL_VERSION}-`;
 /** FNV-1a32 of JSON.stringify(SNAPSHOT_LAYOUT), including enum order and flight fields.
  * Pinned to protocol v14; snapshot codec tests compare the actual wire descriptors.
  */
-export const LAYOUT_FINGERPRINT = 'f84bde47';
+export const LAYOUT_FINGERPRINT = 'aa03c454';
 export const MAX_PLAYERS = 8;
 export const MAX_NAME_LENGTH = 10;
 export const MAX_CONTROL_LENGTH = 65_536;

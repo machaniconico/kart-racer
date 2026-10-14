@@ -26,7 +26,8 @@ export const neon: TrackDef = {
   roadHalfWidth: BASE_ROAD_HALF_WIDTH,
   wallHalfWidth: BASE_WALL_HALF_WIDTH,
   checkpointCount: 12,
-  boxRows: [0.12, 0.36, 0.58, 0.81],
+  // Added rows stay outside each moving band's 40 m approach and occupied arc.
+  boxRows: [0.02, 0.12, 0.20, 0.36, 0.43, 0.58, 0.695, 0.81],
   boxLanes: [-5.33, 0, 5.33],
   racingLine: [
     { distance: 0, offset: 0 },

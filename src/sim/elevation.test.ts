@@ -10,11 +10,11 @@ import type { InputFrame, RaceState, Track } from './types';
 
 afterEach(() => vi.restoreAllMocks());
 
-// sha256 of the final JSON after 2000 AI ticks on slopeCourse(0); aa3c203's race.ts (before M4-01)
-// and HEAD's race.ts (5800fc4) both give this value with this same fixture and procedure.
-// M4.5-00 adds RaceState.laps and KartState.lastBand to the JSON; with those keys stripped the old pin
-// 4e48385419ddf18007f71f58761bb09b5cb935a10a1abc029fbf102adce00dba is reproduced, so the physics is unchanged.
-const FLAT_COURSE_PIN = 'ef1b943f61224fb1a8f954dee4448729c48b8425856379c203864489eeaf491f';
+// sha256 after 2000 AI ticks on slopeCourse(0), measured on darwin-arm64 after M4.5-03.
+// Allocating 24 boxes changes nextEntityId from 112 to 124, even after soloRace clears the boxes.
+// Before M4.5-03: ef1b943f61224fb1a8f954dee4448729c48b8425856379c203864489eeaf491f.
+// Before M4.5-00 (laps / lastBand): 4e48385419ddf18007f71f58761bb09b5cb935a10a1abc029fbf102adce00dba.
+const FLAT_COURSE_PIN = '57d81719ab07d03cb68cf820057334f55c91c57085fd727a6e5f163ed52a388e';
 
 function soloRace(track: Track, distance: number, speed = 0, offset = 0): RaceState {
   vi.spyOn(tracks, 'getTrack').mockReturnValue(track);
@@ -44,7 +44,7 @@ function speedAt(track: Track, from: number, to: number): number {
 }
 
 describe('slope physics', () => {
-  it('pins slopeCourse(0) bit-for-bit to the pre-M4-01 sim', () => {
+  it('pins slopeCourse(0) JSON after 24-box allocation', () => {
     const state = soloRace(buildTrack(slopeCourse(0)), 10);
     for (let tick = 0; tick < 2000; tick++) stepRace(state, [getAIInput(state, 0)]);
     expect(state.karts[0]!.nextCheckpoint).toBeGreaterThan(0);
@@ -202,11 +202,11 @@ describe('elevation fixtures', () => {
     expect(tracks.TRACK_IDS).toEqual(['meadow', 'canyon', 'snowpeak', 'neon']);
   });
 
-  it('pass corridor validation with four gates, twelve boxes and no zones', () => {
+  it('pass corridor validation with four gates, 24 boxes and no zones', () => {
     for (const def of [slopeCourse(0), slopeCourse(0.3), bankCourse(0.3), figureEightCourse()]) {
       expect(() => validateTrackDef(def)).not.toThrow();
       expect(def.checkpointCount).toBe(4);
-      expect(buildTrack(def).boxPoses).toHaveLength(12);
+      expect(buildTrack(def).boxPoses).toHaveLength(24);
       expect(def.surfaces).toEqual([]);
       expect(def.barriers ?? []).toEqual([]);
       expect(def.splits ?? []).toEqual([]);
