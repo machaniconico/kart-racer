@@ -1014,8 +1014,8 @@ describe('island splits', () => {
     const { group } = build(track, canyon);
     const signs = group.children.filter((o): o is THREE.Mesh => o instanceof THREE.Mesh && o.name.startsWith('lane-sign:'));
     expect(signs).toHaveLength(2);
-    expect(drawText.mock.calls.map(call => call[0]).filter(text => ['SHORT', 'SAFE', name].includes(text)))
-      .toEqual(name ? [name, name] : ['SAFE', 'SHORT']);
+    expect(drawText.mock.calls.map(call => call[0]).filter(text => /SHORT|SAFE/.test(String(text))))
+      .toEqual(name ? [`${name} SAFE`, `${name} SHORT`] : ['SAFE', 'SHORT']);
     signs.forEach((sign, side) => {
       expect(sign.position.x).toBeCloseTo(split.from - 30, 4);
       expect(Math.abs(sign.position.x - (track.def.barriers![0].from - 30))).toBeLessThanOrEqual(1);
@@ -1045,11 +1045,70 @@ describe('island splits', () => {
     }
   });
 
-  it.each(['rock', 'building'] as const)('adds at most five meshes for a %s island', scenery => {
+  // Island mesh budget, measured against the same course without islands and splits (CANYON and NEON each
+  // measured +4 with one island): one merged island ribbon + one batch per scenery kind + two lane signs per
+  // split. For one island +N = 4 (ribbon 1 + scenery 1 + signs 2); mixing rock and building adds one more
+  // batch, +M = 5. Ribbon and scenery batches are per course (see the two-split test), so a second island adds
+  // only its two signs. Pit decals are counted separately (+1 in the fixture below).
+  const isIsland = (b: Barrier) => !b.motion && (b.scenery === 'rock' || b.scenery === 'building');
+  const withoutIslands = (track: Track): Track => buildTrack({ ...track.def, splits: [],
+    barriers: (track.def.barriers ?? []).filter(b => !isIsland(b)) });
+  const islandBudget = (track: Track): number => {
+    const kinds = new Set((track.def.barriers ?? []).filter(isIsland).map(b => b.scenery));
+    return (kinds.size ? 1 + kinds.size : 0) + 2 * (track.def.splits ?? []).length;
+  };
+
+  it.each(['canyon', 'neon'] as const)('%s islands cost exactly the per-island budget', id => {
+    const track = getTrack(id);
+    const theme = id === 'canyon' ? canyon : neon;
+    expect(islandBudget(track)).toBe(4);
+    expect(meshCount(build(track, theme).group)).toBe(meshCount(build(withoutIslands(track), theme).group) + 4);
+  });
+
+  it.each(['rock', 'building'] as const)('adds four meshes plus the pit decal for a %s island', scenery => {
     const track = islandTrack(scenery);
     const plain = buildTrack({ ...track.def, barriers: [], splits: [], surfaces: track.def.surfaces.filter(z => z.kind !== 'pit') });
-    // Island ribbon 1 + scenery 1 + lane signs 2 + merged pit decal 1.
-    expect(meshCount(build(track, canyon).group)).toBeLessThanOrEqual(meshCount(build(plain, canyon).group) + 5);
+    expect(meshCount(build(track, canyon).group)).toBe(meshCount(build(plain, canyon).group) + islandBudget(track) + 1);
+  });
+
+  it('adds one more batch when rock and building islands are mixed', () => {
+    const track = islandTrack('rock');
+    const mixed = buildTrack({ ...track.def, barriers: [...track.def.barriers!,
+      { ...track.def.barriers![0]!, scenery: 'building' as const }] });
+    expect(islandBudget(mixed)).toBe(5);
+    expect(meshCount(build(mixed, canyon).group)).toBe(meshCount(build(track, canyon).group) + 1);
+  });
+
+  // Batching is per course, not per island: all islands share one ribbon mesh, and scenery is one InstancedMesh
+  // per kind (rock, building) over every island. So mixing kinds adds exactly one batch for the whole course,
+  // whether one island mixes them or each of two islands does; only the two lane signs scale with splits.
+  it.each([
+    ['both splits mixed', ['rock', 'building'], ['rock', 'building']],
+    ['one kind per island', ['rock'], ['building']],
+  ] as const)('counts a two-split course once per batch (%s)', (_label, first, second) => {
+    const track = islandTrack('rock');
+    const [barrier] = track.def.barriers!;
+    const [split] = track.def.splits!;
+    const shift = 250;
+    const barriers = [
+      ...first.map(scenery => ({ ...barrier!, scenery })),
+      ...second.map(scenery => ({ ...barrier!, from: barrier!.from + shift, to: barrier!.to + shift, scenery })),
+    ];
+    const two = buildTrack({ ...track.def, barriers,
+      splits: [split!, { ...split!, from: split!.from + shift, to: split!.to + shift }] });
+    expect(islandBudget(two)).toBe(7);
+    expect(meshCount(build(two, canyon).group)).toBe(meshCount(build(withoutIslands(two), canyon).group) + 7);
+  });
+
+  it('builds lane signs for splits alone, without rock or building scenery', () => {
+    const track = islandTrack();
+    const signsOnly = buildTrack({ ...track.def, barriers: [] });
+    drawText.mockClear();
+    const { group } = build(signsOnly, canyon);
+    expect(group.children.filter(o => o.name.startsWith('lane-sign:'))).toHaveLength(2);
+    expect(group.getObjectByName('islands')).toBeUndefined();
+    expect(drawText.mock.calls.map(call => call[0]).filter(text => ['SHORT', 'SAFE'].includes(text)).sort())
+      .toEqual(['SAFE', 'SHORT']);
   });
 });
 

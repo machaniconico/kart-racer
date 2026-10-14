@@ -509,6 +509,22 @@ function buildBarriers(track: Track, theme: CourseTheme, group: THREE.Group): vo
 }
 
 function buildIslands(track: Track, theme: CourseTheme, group: THREE.Group): void {
+  for (const [index, split] of (track.def.splits ?? []).entries()) {
+    const point = sampleTrack(track, split.from - 30);
+    const wall = widthAt(track, split.from - 30).wallHalfWidth;
+    const lanes = [...split.lanes].sort((a, b) => a.offsetMin - b.offsetMin);
+    for (const [side, lane] of lanes.entries()) {
+      const tag = lane.risk ? 'SHORT' : 'SAFE';
+      const sign = textPlane(split.name ? `${split.name} ${tag}` : tag, 512, 128,
+        theme.colors.signBackground, theme.colors.signText);
+      const offset = (side === 0 ? -1 : 1) * (wall + 0.25);
+      sign.name = `lane-sign:${index}:${side}`;
+      sign.position.set(point.x + point.nx * offset, pointHeight(track, point, offset) + 3, point.z + point.nz * offset);
+      sign.rotation.y = Math.atan2(-point.tx, -point.tz);
+      sign.scale.set(4.8, 1.2, 1);
+      group.add(sign);
+    }
+  }
   const islands = (track.def.barriers ?? []).filter(b => !b.motion && (b.scenery === 'rock' || b.scenery === 'building'));
   if (!islands.length) return;
   const spanOf = (b: Barrier) => (b.to - b.from + track.length) % track.length;
@@ -562,21 +578,6 @@ function buildIslands(track: Track, theme: CourseTheme, group: THREE.Group): voi
     // InstancedMesh has one shadow flag: the building batch includes heights > 4 m.
     props.castShadow = scenery === 'rock';
     group.add(props);
-  }
-  for (const [index, split] of (track.def.splits ?? []).entries()) {
-    const point = sampleTrack(track, split.from - 30);
-    const wall = widthAt(track, split.from - 30).wallHalfWidth;
-    const lanes = [...split.lanes].sort((a, b) => a.offsetMin - b.offsetMin);
-    for (const [side, lane] of lanes.entries()) {
-      const sign = textPlane(split.name ?? (lane.risk ? 'SHORT' : 'SAFE'), 512, 128,
-        theme.colors.signBackground, theme.colors.signText);
-      const offset = (side === 0 ? -1 : 1) * (wall + 0.25);
-      sign.name = `lane-sign:${index}:${side}`;
-      sign.position.set(point.x + point.nx * offset, pointHeight(track, point, offset) + 3, point.z + point.nz * offset);
-      sign.rotation.y = Math.atan2(-point.tx, -point.tz);
-      sign.scale.set(4.8, 1.2, 1);
-      group.add(sign);
-    }
   }
 }
 

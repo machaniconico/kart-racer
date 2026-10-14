@@ -676,6 +676,9 @@ export function validateCoursePlayability(def: TrackDef): void {
   const { samples } = track;
   for (const split of def.splits ?? []) {
     const span = wrap(split.to - split.from, length);
+    for (const lane of split.lanes) {
+      if (lane.offsetMax - lane.offsetMin < 6 - EPSILON) throw new RangeError('island lane width must be at least 6 m');
+    }
     // Lap changes at distance 0; a split across it could swap the chosen lane mid-passage.
     const toStart = wrap(-split.from, length);
     if (toStart > EPSILON && toStart < span - EPSILON) throw new RangeError('split must not cross the start line');

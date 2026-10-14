@@ -958,12 +958,39 @@ describe('validateCoursePlayability', () => {
   });
 
   it('rejects a split that crosses the start line and accepts one that ends on it', () => {
-    const lanes = [{ offsetMin: -7, offsetMax: -3, risk: 0 }, { offsetMin: 3, offsetMax: 7, risk: 0 }] as const;
+    const lanes = [{ offsetMin: -9, offsetMax: -3, risk: 0 }, { offsetMin: 3, offsetMax: 9, risk: 0 }] as const;
     const across = fixture({ splits: [{ from: length - 30, to: 30, lanes }] });
     expect(() => validateCoursePlayability(across)).toThrow(RangeError);
     expect(() => validateCoursePlayability(across)).toThrow('split must not cross the start line');
     expect(() => validateCoursePlayability(fixture({ splits: [{ from: length - 60, to: 0, lanes }] }))).not.toThrow();
     expect(() => validateCoursePlayability(fixture({ splits: [{ from: 0, to: 60, lanes }] }))).not.toThrow();
+  });
+
+  it('rejects an island lane narrower than 6 m and accepts exactly 6 m', () => {
+    const lanes = (width: number) => [{ offsetMin: -3 - width, offsetMax: -3, risk: 0 as const },
+      { offsetMin: 3, offsetMax: 3 + width, risk: 0 as const }];
+    expect(() => validateCoursePlayability(fixture({ splits: [{ from: 0, to: 60, lanes: lanes(6) }] }))).not.toThrow();
+    expect(() => validateCoursePlayability(fixture({ splits: [{ from: 0, to: 60, lanes: lanes(5.99) }] })))
+      .toThrow('island lane width must be at least 6 m');
+  });
+
+  it('checks the outer lane half-width against the curvature radius of the split section', () => {
+    const lanes = (outer: number) => [{ offsetMin: -outer, offsetMax: -3, risk: 0 as const },
+      { offsetMin: 3, offsetMax: outer, risk: 0 as const }];
+    const radius = (() => {
+      const { samples } = buildTrack(fixture());
+      let min = Infinity;
+      for (let i = 0; i < samples.length; i++) {
+        const a = samples[(i + samples.length - 1) % samples.length]!, b = samples[i]!, c = samples[(i + 1) % samples.length]!;
+        const cross = Math.abs((b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x));
+        const product = Math.hypot(b.x - a.x, b.z - a.z) * Math.hypot(c.x - b.x, c.z - b.z) * Math.hypot(c.x - a.x, c.z - a.z);
+        if (cross > 0) min = Math.min(min, product / (2 * cross));
+      }
+      return min;
+    })();
+    const whole = (outer: number) => fixture({ splits: [{ from: 0, to: length - 1, lanes: lanes(outer) }] });
+    expect(() => validateCoursePlayability(whole(radius * 0.99))).not.toThrow();
+    expect(() => validateCoursePlayability(whole(radius * 1.01))).toThrow(/curvature radius/);
   });
 
   it('rejects a wrapped band across the protected start even when both noses clear the gates', () => {
