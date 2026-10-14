@@ -60,3 +60,44 @@ describe('MockTransport host parity', () => {
     expect(joined).toHaveBeenCalledOnce();
   });
 });
+
+describe('MockTransport latency (RTT 80 ± 20 ms)', () => {
+  async function arrivals(seed: number) {
+    const network = new MockTransport({ seed, latencyMs: 40, jitterMs: 10 });
+    const host = await network.host('AB2X');
+    const received: { index: number; delay: number }[] = [];
+    const sentAt: number[] = [];
+    host.onJoin(link => link.onMessage((_kind, data) => {
+      const index = Number(data);
+      received.push({ index, delay: network.now - sentAt[index] });
+    }));
+    const guest = await network.join('AB2X');
+    for (let index = 0; index < 400; index++) {
+      sentAt[index] = network.now;
+      guest.send('unreliable', String(index));
+      network.advance(index % 3 === 0 ? 7 : 0);
+    }
+    network.flush();
+    host.close();
+    return received;
+  }
+
+  it('delivers every one-way packet 30-50 ms after sending, spread across the jitter window', async () => {
+    const received = await arrivals(7);
+    expect(received).toHaveLength(400);
+    const delays = received.map(entry => entry.delay);
+    expect(Math.min(...delays)).toBeGreaterThanOrEqual(30);
+    expect(Math.max(...delays)).toBeLessThanOrEqual(50);
+    expect(Math.min(...delays)).toBeLessThan(32);
+    expect(Math.max(...delays)).toBeGreaterThan(48);
+    expect(Math.abs(delays.reduce((sum, delay) => sum + delay, 0) / delays.length - 40)).toBeLessThan(1.5);
+  });
+
+  it('is deterministic per seed: the same seed reproduces arrival order and delays', async () => {
+    const first = await arrivals(42);
+    expect(await arrivals(42)).toEqual(first);
+    const order = first.map(entry => entry.index);
+    expect(order).not.toEqual([...order].sort((a, b) => a - b)); // jitter reorders packets
+    expect((await arrivals(43)).map(entry => entry.index)).not.toEqual(order);
+  });
+});

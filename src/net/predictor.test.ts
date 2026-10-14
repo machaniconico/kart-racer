@@ -221,6 +221,21 @@ describe('Predictor', () => {
     expect(predictor.visualOffset.x).toBeCloseTo(-1.5);
   });
 
+  it('exposes the local-kart displacement of the latest reconcile as lastCorrectionMetres', () => {
+    const predictor = new Predictor(snapshot(), 1);
+    expect(predictor.lastCorrectionMetres).toBe(0);
+    const moved = snapshot(181);
+    moved.state.karts[1].x += 0.6;
+    moved.state.karts[1].z -= 0.8;
+    expect(predictor.reconcile(moved)).toBe(false);
+    expect(predictor.lastCorrectionMetres).toBeCloseTo(1, 12);
+    // A stale tick is not a reconcile and keeps the previous value.
+    expect(predictor.reconcile(snapshot(181))).toBe(false);
+    expect(predictor.lastCorrectionMetres).toBeCloseTo(1, 12);
+    expect(predictor.reconcile(structuredClone({ ...moved, state: { ...moved.state, tick: 182 } }))).toBe(false);
+    expect(predictor.lastCorrectionMetres).toBe(0);
+  });
+
   it('discards events from item use and countdown replay, including snapshot events', () => {
     const initial = snapshot();
     initial.state.karts[1].item = 'dash';

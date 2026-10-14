@@ -25,6 +25,7 @@ export class Predictor {
   private offset = { x: 0, y: 0, z: 0 };
   private previousPose: Pose;
   private replayCount = 0;
+  private correctionMetres = 0;
   private readonly timerHistory = new Map<number, Timers[]>();
 
   constructor(snapshot: Snapshot, readonly localSlot: number) {
@@ -45,6 +46,8 @@ export class Predictor {
   get state(): RaceState { return structuredClone(this.predicted); }
   get pendingCount(): number { return this.pending.size; }
   get replayTicks(): number { return this.replayCount; }
+  /** Local-kart displacement applied by the latest accepted reconcile; 0 before any. */
+  get lastCorrectionMetres(): number { return this.correctionMetres; }
   get visualOffset(): Readonly<{ x: number; y: number; z: number }> { return { ...this.offset }; }
   get previous(): Pose { return { ...this.previousPose }; }
   get kart(): KartState { return structuredClone(this.localKart); }
@@ -116,6 +119,7 @@ export class Predictor {
     if (!snap) this.advanceTo(target);
     this.replayCount = this.tick - this.authoritativeTick;
     const corrected = this.localKart;
+    this.correctionMetres = Math.hypot(old.x - corrected.x, old.y - corrected.y, old.z - corrected.z);
     this.offset.x += old.x - corrected.x;
     this.offset.y += old.y - corrected.y;
     this.offset.z += old.z - corrected.z;
