@@ -27,6 +27,10 @@ export function updateLapTracking(track: Track, state: RaceState, kart: KartStat
 
   const crosses = (checkpoint: number): boolean => {
     const distance = track.checkpointDistances[checkpoint]!;
+    // On a crossover another deck can pass through a gate's XZ line; it counts only within
+    // ±40 m of arc of the gate.
+    const along = Math.abs(kart.trackDistance - distance);
+    if (Math.min(along, track.length - along) > 40) return false;
     const gate = sampleTrack(track, distance);
     const oldSide = (previous.x - gate.x) * gate.tx + (previous.z - gate.z) * gate.tz;
     const newSide = (kart.x - gate.x) * gate.tx + (kart.z - gate.z) * gate.tz;

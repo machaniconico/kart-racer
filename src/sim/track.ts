@@ -137,40 +137,62 @@ export function sampleTrack(track: Track, distance: number): TrackSample {
   };
 }
 
-export function projectToTrack(track: Track, x: number, z: number, previousDistance?: number): TrackProjection {
+/** Largest |Δy| still treated as the same deck; separated decks cross at least 12 m apart. */
+export const LEVEL_GAP = 6.0;
+
+/** Whether two heights are on the same deck, for interactions that are otherwise XZ-only. */
+export function sameLevel(ay: number, by: number): boolean {
+  return Math.abs(ay - by) <= LEVEL_GAP;
+}
+
+/**
+ * Nearest point on the centre line. The ±20 m window around previousDistance is used when the
+ * position is still near it; otherwise the whole course is searched. yHint (a road surface
+ * height, never a jump arc) only applies to that global search: segments whose ends are both
+ * more than LEVEL_GAP from it are skipped, so an overpass does not capture a kart below it.
+ * If that leaves no segment, the search reruns without the filter.
+ */
+export function projectToTrack(track: Track, x: number, z: number, previousDistance?: number,
+  yHint?: number): TrackProjection {
   const count = track.samples.length;
   let startIndex = 0;
   let segmentCount = count;
+  let windowed = false;
   if (previousDistance !== undefined && Number.isFinite(previousDistance)) {
     const previous = sampleTrack(track, previousDistance);
     // Normal driving remains in the previous section, including the start seam.
     // Positions beyond the road corridor (respawns/teleports) reacquire globally.
     if (Math.hypot(x - previous.x, z - previous.z) <= widthAt(track, previousDistance).wallHalfWidth + 6) {
+      windowed = true;
       startIndex = segmentIndex(track, previousDistance - 20);
       const endIndex = segmentIndex(track, previousDistance + 20);
       segmentCount = (endIndex - startIndex + count) % count + 1;
     }
   }
+  const levelHint = !windowed && yHint !== undefined && Number.isFinite(yHint) ? yHint : undefined;
   let nearestSquared = Infinity;
   let nearestDistance = 0;
   let nearestX = 0;
   let nearestZ = 0;
-  for (let step = 0; step < segmentCount; step++) {
-    const i = (startIndex + step) % count;
-    const a = track.samples[i]!;
-    const b = track.samples[(i + 1) % track.samples.length]!;
-    const dx = b.x - a.x;
-    const dz = b.z - a.z;
-    const lengthSquared = dx * dx + dz * dz;
-    const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (z - a.z) * dz) / lengthSquared));
-    const px = a.x + dx * t;
-    const pz = a.z + dz * t;
-    const squared = (x - px) ** 2 + (z - pz) ** 2;
-    if (squared < nearestSquared) {
-      nearestSquared = squared;
-      nearestDistance = a.distance + Math.sqrt(lengthSquared) * t;
-      nearestX = px;
-      nearestZ = pz;
+  for (let pass = 0; pass < 2 && nearestSquared === Infinity; pass++) {
+    for (let step = 0; step < segmentCount; step++) {
+      const i = (startIndex + step) % count;
+      const a = track.samples[i]!;
+      const b = track.samples[(i + 1) % track.samples.length]!;
+      if (pass === 0 && levelHint !== undefined && !sameLevel(a.y, levelHint) && !sameLevel(b.y, levelHint)) continue;
+      const dx = b.x - a.x;
+      const dz = b.z - a.z;
+      const lengthSquared = dx * dx + dz * dz;
+      const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (z - a.z) * dz) / lengthSquared));
+      const px = a.x + dx * t;
+      const pz = a.z + dz * t;
+      const squared = (x - px) ** 2 + (z - pz) ** 2;
+      if (squared < nearestSquared) {
+        nearestSquared = squared;
+        nearestDistance = a.distance + Math.sqrt(lengthSquared) * t;
+        nearestX = px;
+        nearestZ = pz;
+      }
     }
   }
   const sample = sampleTrack(track, nearestDistance);

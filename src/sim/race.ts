@@ -5,7 +5,7 @@ import { advanceItems, getKartModifiers, giveBoost, onKartContact, useItem } fro
 import { createKartEffects } from './itemTypes';
 import { corridorAt, exclusionAt, freeIntervalFor, widthAt } from './corridor';
 import type { CorridorNormal } from './corridor';
-import { barrierEscape, insideBarrier, projectToTrack, rollAt, sampleTrack, slopeAt } from './track';
+import { barrierEscape, insideBarrier, projectToTrack, rollAt, sameLevel, sampleTrack, slopeAt, surfaceHeightAt } from './track';
 import { getTrack } from './tracks';
 import { crossedZone, insideZone, JUMP_DURATION, JUMP_HEIGHT, spinRateAt, surfaceAt } from './surfaces';
 import type { InputFrame, KartState, RaceOptions, RaceState, Track } from './types';
@@ -81,7 +81,9 @@ function normalizeInput(input: InputFrame | undefined): InputFrame {
 }
 
 function updateProjection(track: Track, kart: KartState): void {
-  const projection = projectToTrack(track, kart.x, kart.z, kart.trackDistance);
+  // The level hint is the road height under the previous projection, without the jump arc.
+  const projection = projectToTrack(track, kart.x, kart.z, kart.trackDistance,
+    surfaceHeightAt(track, kart.trackDistance, kart.lateralOffset));
   kart.trackDistance = projection.distance;
   kart.lateralOffset = projection.offset;
   kart.y = projection.height;
@@ -361,6 +363,8 @@ function collideKarts(track: Track, state: RaceState): void {
     const first = state.karts[a]!;
     for (let b = a + 1; b < state.karts.length; b++) {
       const second = state.karts[b]!;
+      // Karts on different decks of a crossover overlap in XZ without touching.
+      if (!sameLevel(first.y, second.y)) continue;
       const dx = second.x - first.x;
       const dz = second.z - first.z;
       const distance = Math.hypot(dx, dz);

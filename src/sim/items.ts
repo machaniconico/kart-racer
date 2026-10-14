@@ -5,7 +5,7 @@ import { chooseItem } from './itemTable';
 import { random } from './random';
 import type { ProjectileState } from './itemTypes';
 import { corridorAt, exclusionAt, freeIntervalFor, widthAt } from './corridor';
-import { barrierEscape, insideBarrier, projectToTrack, sampleTrack, wrapDistance } from './track';
+import { barrierEscape, insideBarrier, projectToTrack, sameLevel, sampleTrack, surfaceHeightAt, wrapDistance } from './track';
 import { getTrack } from './tracks';
 import type { Barrier, InputFrame, ItemType, KartState, Projectile, RaceState, Track, TrackProjection } from './types';
 
@@ -43,7 +43,7 @@ function seekerTarget(track: Track, state: RaceState, owner: KartState): KartSta
   return state.karts.filter(kart => kart.id !== owner.id && kart.finishTime === null &&
     raceProgress(track, kart) > raceProgress(track, owner) &&
     (kart.x - owner.x) * tangent.tx + (kart.z - owner.z) * tangent.tz > 0 &&
-    Math.hypot(kart.x - owner.x, kart.z - owner.z) <= 45)
+    sameLevel(kart.y, owner.y) && Math.hypot(kart.x - owner.x, kart.z - owner.z) <= 45)
     .sort((a, b) => Math.hypot(a.x - owner.x, a.z - owner.z) -
       Math.hypot(b.x - owner.x, b.z - owner.z) || a.id - b.id)[0];
 }
@@ -185,13 +185,15 @@ export function useItem(state: RaceState, kart: KartState, input: InputFrame): v
     const x = kart.x - Math.sin(kart.heading) * 2.6;
     const z = kart.z - Math.cos(kart.heading) * 2.6;
     state.traps.push({ kind: item, id: state.nextEntityId++, ownerId: kart.id, x, z,
-      y: projectToTrack(track, x, z).height, heading: kart.heading, life: 20, age: 0 });
+      y: projectToTrack(track, x, z, undefined, surfaceHeightAt(track, kart.trackDistance, kart.lateralOffset)).height, heading: kart.heading, life: 20, age: 0 });
   } else if (item === 'bolt' || item === 'seeker' || item === 'skycomet' || item === 'bomb') {
     const direction = kart.heading + (backwards ? Math.PI : 0);
     const heading = Math.atan2(Math.sin(direction), Math.cos(direction));
     const launchOffset = item === 'bomb' && !backwards ? 4 : 2.3;
+    // y is always a road height (here the owner's, without the jump arc; later the last
+    // projection), so it can serve as projectToTrack's level hint.
     const projectile: ItemProjectile = { kind: item, id: state.nextEntityId++, ownerId: kart.id,
-      x: kart.x + Math.sin(heading) * launchOffset, y: kart.y,
+      x: kart.x + Math.sin(heading) * launchOffset, y: surfaceHeightAt(track, kart.trackDistance, kart.lateralOffset),
       z: kart.z + Math.cos(heading) * launchOffset, heading,
       life: PROJECTILE_LIFETIMES[item], bounces: 0 };
     if (item === 'seeker') {
@@ -230,7 +232,10 @@ export function hitKart(state: RaceState, kart: KartState): void {
   state.events.push({ type: 'hit', kartId: kart.id });
 }
 
-/** Distance to the swept path also catches projectiles crossing a shield in one tick. */
+/**
+ * Distance to the swept path also catches projectiles crossing a shield in one tick.
+ * XZ only: every caller checks sameLevel itself, since the helper has no heights.
+ */
 function pathDistance(x: number, z: number, startX: number, startZ: number, endX: number, endZ: number): number {
   const dx = endX - startX;
   const dz = endZ - startZ;
@@ -241,7 +246,8 @@ function pathDistance(x: number, z: number, startX: number, startZ: number, endX
 
 function blockProjectile(state: RaceState, projectile: ItemProjectile, previousX: number, previousZ: number): boolean {
   for (const kart of state.karts) {
-    if (!kart.effects.holding || !canHold(kart.item) || kart.spinTime > 0 || kart.finishTime !== null) continue;
+    if (!kart.effects.holding || !canHold(kart.item) || kart.spinTime > 0 || kart.finishTime !== null ||
+      !sameLevel(kart.y, projectile.y)) continue;
     const sx = Math.sin(kart.heading);
     const sz = Math.cos(kart.heading);
     // A projectile crossing the kart from the front must hit before reaching its rear shield.
@@ -264,7 +270,7 @@ function explode(state: RaceState, projectile: ItemProjectile): void {
   const event = { type: 'explode' as const, kartId: projectile.ownerId, x: projectile.x, z: projectile.z, value: 0 };
   state.events.push(event);
   for (const kart of state.karts) {
-    if (kart.finishTime !== null || kart.spinTime > 0 ||
+    if (kart.finishTime !== null || kart.spinTime > 0 || !sameLevel(kart.y, projectile.y) ||
       Math.hypot(kart.x - projectile.x, kart.z - projectile.z) > 4.5) continue;
     hitKart(state, kart);
     if (kart.spinTime > 0) event.value |= 1 << kart.id;
@@ -274,7 +280,7 @@ function explode(state: RaceState, projectile: ItemProjectile): void {
 function advanceSkycomet(track: Track, state: RaceState, projectile: ItemProjectile, dt: number): void {
   const target = leadingOpponent(track, state, projectile.ownerId);
   projectile.target = target?.id ?? null;
-  const distance = projectile.aux ?? projectToTrack(track, projectile.x, projectile.z).distance;
+  const distance = projectile.aux ?? projectToTrack(track, projectile.x, projectile.z, undefined, projectile.y).distance;
   // Follow the shorter arc, including backwards to second place when the owner leads.
   // Re-evaluate after retargeting and across the start seam to avoid a whole-lap chase.
   const delta = target ? wrapDistance(track, target.trackDistance - distance + track.length / 2) - track.length / 2 : Infinity;
@@ -311,7 +317,7 @@ export function advanceItems(track: Track, state: RaceState, dt: number): void {
     if (box.respawnTime > 0) continue;
     for (const kart of state.karts) {
       if (kart.finishTime !== null || kart.item || kart.spinTime > 0) continue;
-      if (Math.hypot(kart.x - box.x, kart.z - box.z) < 1.9) {
+      if (sameLevel(kart.y, box.y) && Math.hypot(kart.x - box.x, kart.z - box.z) < 1.9) {
         kart.item = chooseItem(state, getRank(state, kart.id));
         kart.effects.rouletteTime = ROULETTE_TIME;
         kart.effects.charges = kart.item === 'tripleDash' ? 3 : 0;
@@ -333,7 +339,7 @@ export function advanceItems(track: Track, state: RaceState, dt: number): void {
       const target = state.karts.find(kart => kart.id !== owner.id &&
         kart.finishTime === null && kart.spinTime === 0 &&
         // Invulnerable karts pass through the guard without using it up.
-        !getKartModifiers(state, kart, NEUTRAL_ORBIT_INPUT).invulnerable &&
+        !getKartModifiers(state, kart, NEUTRAL_ORBIT_INPUT).invulnerable && sameLevel(kart.y, owner.y) &&
         Math.hypot(kart.x - owner.x - offset.x, kart.z - owner.z - offset.z) < 1.4);
       if (!target) continue;
       hitKart(state, target);
@@ -346,7 +352,7 @@ export function advanceItems(track: Track, state: RaceState, dt: number): void {
     if (trap.life <= 1e-9) continue;
     for (const kart of state.karts) {
       if (kart.finishTime !== null || kart.spinTime > 0 || (kart.id === trap.ownerId && trap.age < 1.2)) continue;
-      if (Math.hypot(kart.x - trap.x, kart.z - trap.z) < 1.55) {
+      if (sameLevel(kart.y, trap.y) && Math.hypot(kart.x - trap.x, kart.z - trap.z) < 1.55) {
         hitKart(state, kart);
         trap.life = 0;
         break;
@@ -365,6 +371,8 @@ export function advanceItems(track: Track, state: RaceState, dt: number): void {
     }
     const previousX = projectile.x;
     const previousZ = projectile.z;
+    // The previous tick's projection height (the owner's road height right after spawn).
+    const previousHeight = projectile.y;
     const ownerWasCleared = projectile.ownerCleared;
     if (projectile.kind === 'seeker') {
       const target = state.karts.find(kart => kart.id === projectile.target && kart.finishTime === null);
@@ -392,7 +400,7 @@ export function advanceItems(track: Track, state: RaceState, dt: number): void {
     }
     projectile.x += Math.sin(projectile.heading) * travel;
     projectile.z += Math.cos(projectile.heading) * travel;
-    const projection = projectToTrack(track, projectile.x, projectile.z);
+    const projection = projectToTrack(track, projectile.x, projectile.z, undefined, previousHeight);
     projectile.y = projection.height;
     const { wallHalfWidth } = widthAt(track, projection.distance);
     const barriers = track.def.barriers ?? [];
@@ -456,7 +464,7 @@ export function advanceItems(track: Track, state: RaceState, dt: number): void {
           projectile.z += local.nz * shift;
           if (reflect(-local.nx * side, -local.nz * side)) projectile.bounces++;
         }
-        at = projectToTrack(track, projectile.x, projectile.z, at.distance);
+        at = projectToTrack(track, projectile.x, projectile.z, at.distance, previousHeight);
       }
       if (!clear(at)) {
         // Still blocked: settle sideways into the nearest free interval inside the rails, else expire.
@@ -470,7 +478,7 @@ export function advanceItems(track: Track, state: RaceState, dt: number): void {
           const local = sampleTrack(track, at.distance);
           projectile.x += local.nx * shift;
           projectile.z += local.nz * shift;
-          at = projectToTrack(track, projectile.x, projectile.z, at.distance);
+          at = projectToTrack(track, projectile.x, projectile.z, at.distance, previousHeight);
         }
         if (!clear(at)) {
           projectile.life = 0;
@@ -483,6 +491,8 @@ export function advanceItems(track: Track, state: RaceState, dt: number): void {
       }
     }
     const owner = state.karts.find(kart => kart.id === projectile.ownerId);
+    // Owner clearance measures separation, not contact, so it stays XZ-only without sameLevel:
+    // a bolt leaving its owner is cleared whichever deck it ends up beside.
     if (projectile.kind === 'bolt' && !projectile.ownerCleared && owner) {
       if (Math.hypot(previousX - owner.x, previousZ - owner.z) >= 3 ||
         Math.hypot(projectile.x - owner.x, projectile.z - owner.z) >= 3) projectile.ownerCleared = true;
@@ -494,7 +504,7 @@ export function advanceItems(track: Track, state: RaceState, dt: number): void {
       const stopped = elapsed >= (projectile.speed ?? 24) / 24;
       if (projectile.life <= 1e-9 || (elapsed >= 0.3 && state.karts.some(kart =>
         kart.finishTime === null &&
-        (kart.id !== projectile.ownerId || stopped) &&
+        (kart.id !== projectile.ownerId || stopped) && sameLevel(kart.y, projectile.y) &&
         pathDistance(kart.x, kart.z, previousX, previousZ, projectile.x, projectile.z) < 2))) {
         explode(state, projectile);
       }
@@ -503,7 +513,8 @@ export function advanceItems(track: Track, state: RaceState, dt: number): void {
     for (const kart of state.karts) {
       if (kart.finishTime !== null || kart.spinTime > 0 || (kart.id === projectile.ownerId &&
         (projectile.kind === 'seeker' || !ownerWasCleared))) continue;
-      if (pathDistance(kart.x, kart.z, previousX, previousZ, projectile.x, projectile.z) < 1.4) {
+      if (sameLevel(kart.y, projectile.y) &&
+        pathDistance(kart.x, kart.z, previousX, previousZ, projectile.x, projectile.z) < 1.4) {
         hitKart(state, kart);
         projectile.life = 0;
         break;
