@@ -48,7 +48,7 @@ async function setup(options: MockTransportOptions = {}, hostOffset = 0, autoWel
         const message = parseControlMessage(data);
         if (message) controls.push(message);
         if (message?.type === 'hello' && autoWelcome) peer.send('reliable', encodeControlMessage({
-          type: 'welcome', trackId: 'meadow', slot: 1, roster, hostTime: network.now + hostOffset,
+          type: 'welcome', laps: 3, trackId: 'meadow', slot: 1, roster, hostTime: network.now + hostOffset,
         }));
       } else {
         const clock = unpackClock(data);
@@ -67,7 +67,7 @@ async function setup(options: MockTransportOptions = {}, hostOffset = 0, autoWel
   await guest.join('ab2x ');
   const send = (message: ControlMessage) => link.send('reliable', encodeControlMessage(message));
   const start = (raceId = 1, startAtHostTime = network.now + hostOffset, seed = 1) => {
-    send({ type: 'race_start', trackId: 'meadow', raceId, seed, roster, startAtHostTime });
+    send({ type: 'race_start', laps: 3, trackId: 'meadow', raceId, seed, roster, startAtHostTime });
     network.advance(options.latencyMs ?? 0);
   };
   const sendSnapshot = (value: Snapshot) => link.send('unreliable',
@@ -194,32 +194,62 @@ describe('SnapshotBuffer and interpolation', () => {
 });
 
 describe('GuestSession', () => {
+  it.each([1, 2, 3])('uses welcome and lobby course laps %i for race creation and rematches', async laps => {
+    const h = await setup({}, 0, false);
+    try {
+      h.send({ type: 'course', trackId: 'meadow', laps: 1 });
+      h.network.advance(0);
+      expect(h.guest.laps).toBe(3);
+      h.send({ type: 'welcome', trackId: 'meadow', laps, slot: 1, roster, hostTime: 0 });
+      h.network.advance(0);
+      expect(h.guest.laps).toBe(laps);
+      const changed = vi.fn();
+      h.guest.onChange(changed);
+      h.send({ type: 'course', trackId: 'canyon', laps: 2 });
+      h.network.advance(0);
+      expect(h.guest.laps).toBe(2);
+      expect(changed).toHaveBeenCalledOnce();
+      h.send({ type: 'course', trackId: 'canyon', laps });
+      h.network.advance(0);
+      const start = { type: 'race_start', trackId: 'canyon', laps, seed: 42, raceId: 1, roster, startAtHostTime: 0 } as const;
+      h.send(start);
+      h.network.advance(0);
+      expect(h.guest.frame()!.state.laps).toBe(laps);
+      h.send({ type: 'return_lobby' });
+      h.network.advance(0);
+      expect(h.guest.laps).toBe(laps);
+      h.send({ ...start, raceId: 2 });
+      h.network.advance(0);
+      expect(h.guest.frame()!.state.laps).toBe(laps);
+    } finally { h.host.close(); }
+  });
+
   it.each(TRACK_IDS)('uses %s from welcome and course updates for race creation and rematches', async trackId => {
     const h = await setup({}, 0, false);
     try {
-      h.send({ type: 'course', trackId: 'neon' });
+      h.send({ type: 'course', laps: 3, trackId: 'neon' });
       h.network.advance(0);
       expect(h.guest.phase).toBe('connecting');
       expect(h.guest.course).toBe('meadow');
-      h.send({ type: 'welcome', slot: 1, roster, hostTime: 0, trackId });
+      h.send({ type: 'welcome', laps: 3, slot: 1, roster, hostTime: 0, trackId });
       h.network.advance(0);
       expect(h.guest.course).toBe(trackId);
       const changed = vi.fn();
       h.guest.onChange(changed);
-      h.send({ type: 'course', trackId: 'snowpeak' });
+      h.send({ type: 'course', laps: 3, trackId: 'snowpeak' });
       h.network.advance(0);
       expect(h.guest.course).toBe('snowpeak');
       expect(changed).toHaveBeenCalledOnce();
-      h.send({ type: 'course', trackId });
+      h.send({ type: 'course', laps: 3, trackId });
       h.network.advance(0);
-      const start = { type: 'race_start', trackId, seed: 42, raceId: 1, roster, startAtHostTime: 0 } as const;
+      const start = { type: 'race_start', laps: 3, trackId, seed: 42, raceId: 1, roster, startAtHostTime: 0 } as const;
       h.send(start);
       h.network.advance(0);
       expect(h.guest.phase).toBe('countdown');
       expect(h.guest.frame()!.state).toEqual(createRace(42, { trackId, racers: roster.map(player => ({
         name: player.name, color: player.color, human: player.kind !== 'cpu',
       })) }));
-      h.send({ type: 'course', trackId: trackId === 'neon' ? 'canyon' : 'neon' });
+      h.send({ type: 'course', laps: 3, trackId: trackId === 'neon' ? 'canyon' : 'neon' });
       h.network.advance(0);
       expect(h.guest.course).toBe(trackId);
       const airborne = snapshot(3, 50, 1);
@@ -243,12 +273,12 @@ describe('GuestSession', () => {
     const h = await setup();
     try {
       h.network.advance(0);
-      h.send({ type: 'course', trackId: 'canyon' });
+      h.send({ type: 'course', laps: 3, trackId: 'canyon' });
       h.network.advance(0);
-      const start = { type: 'race_start', trackId: 'neon', seed: 42, raceId: 1, roster, startAtHostTime: 0 } as const;
+      const start = { type: 'race_start', laps: 3, trackId: 'neon', seed: 42, raceId: 1, roster, startAtHostTime: 0 } as const;
       h.send(start);
       for (const message of [
-        { type: 'course', trackId: 'unknown' }, { type: 'course', trackId: 'neon', extra: true },
+        { type: 'course', laps: 3, trackId: 'unknown' }, { type: 'course', laps: 3, trackId: 'neon', extra: true },
         { ...start, trackId: 'unknown' }, { ...start, trackId: 'canyon', extra: true },
       ]) h.link.send('reliable', JSON.stringify(message));
       h.network.advance(0);
@@ -596,7 +626,7 @@ describe('GuestSession', () => {
     expect(h.guest.updateProfile('New name', 0xff00ff)).toBe(true);
     h.link.send('reliable', '{not json');
     h.link.send('unreliable', new ArrayBuffer(1));
-    h.link.send('reliable', JSON.stringify({ type: 'race_start', trackId: 'meadow', raceId: -1 }));
+    h.link.send('reliable', JSON.stringify({ type: 'race_start', laps: 3, trackId: 'meadow', raceId: -1 }));
     h.network.advance(0);
     expect(h.guest.phase).toBe('lobby');
     expect(h.controls.at(-1)).toEqual({ type: 'profile', name: 'New name', color: 0xff00ff });

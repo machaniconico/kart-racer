@@ -1,4 +1,4 @@
-import { DEFAULT_LAPS, getRank } from '../sim/laps';
+import { DEFAULT_LAPS, LAP_CHOICES, getRank } from '../sim/laps';
 import { getFinishTimeRemaining, isRaceTimedOut } from '../sim/race';
 import { getTrack, TRACK_IDS } from '../sim/tracks';
 import { sampleTrack } from '../sim/track';
@@ -83,7 +83,7 @@ export class GameUI {
           <div class="eyebrow"><span class="live-dot"></span> SMALL KARTS. BIG ADVENTURES.</div>
           <h1 id="game-title">POCKET<br><span>CIRCUIT.</span></h1>
           <p class="title-tagline">曲がれ。風になれ。</p>
-          <p class="title-description">丘を越えて、カーブを抜けて。<br>7台のライバルと、3周の小さな冒険。</p>
+          <p class="title-description">丘を越えて、カーブを抜けて。<br>7台のライバルと、小さな冒険。</p>
           <button id="start-race" class="primary-button start-button" type="button"><span>レースをはじめる</span>${arrow}</button>
           <label class="sens-setting touch-only"><span class="sens-name">ステア感度</span><input id="sens-title" class="sens-slider" type="range" min="1" max="5" step="1" value="3" aria-label="ステア感度（左: ゆるやか、右: 敏感）"><output class="sens-value">3</output></label>
           <label class="assist-setting"><span>ハンドルアシスト</span><input id="assist-title" type="checkbox" role="switch"><span class="assist-status" aria-hidden="true"></span></label>
@@ -95,13 +95,13 @@ export class GameUI {
           <p class="touch-help">左手で曲がる。右手でドリフト。<br>アクセルは自動でも、手動でも。</p>
           <p class="drift-tip">ドリフトをためて、離すとターボ。</p>
         </aside>
-        <footer class="course-strip"><div><span id="course-index" class="course-index">01</span><span><small>THE CIRCUIT</small><strong id="course-name">${initialCourse}</strong></span></div><div class="course-picker"><small aria-hidden="true">SELECT COURSE</small><div id="course-select" class="course-select" role="radiogroup" aria-label="コースを選ぶ">${courseOptions}</div></div><div><small>ON THE GRID</small><strong>8 RACERS</strong></div><div><small>TO THE FINISH</small><strong>3 LAPS</strong></div><span class="course-footnote">A FRESH LITTLE ESCAPE.</span></footer>
+        <footer class="course-strip"><div><span id="course-index" class="course-index">01</span><span><small>THE CIRCUIT</small><strong id="course-name">${initialCourse}</strong></span></div><div class="course-picker"><small aria-hidden="true">SELECT COURSE</small><div id="course-select" class="course-select" role="radiogroup" aria-label="コースを選ぶ">${courseOptions}</div><fieldset id="laps-select" class="laps-select"><legend>周回数</legend><div class="laps-options">${LAP_CHOICES.map(n => `<label class="laps-option"><input type="radio" name="solo-laps" value="${n}"${n === DEFAULT_LAPS ? ' checked' : ''}><span>${n} 周</span></label>`).join('')}</div></fieldset></div><div><small>ON THE GRID</small><strong>8 RACERS</strong></div><div><small>TO THE FINISH</small><strong id="title-laps">${DEFAULT_LAPS} LAPS</strong></div><span class="course-footnote">A FRESH LITTLE ESCAPE.</span></footer>
       </section>
 
       <section id="lobby-screen" class="screen lobby-screen" aria-label="ロビー" hidden></section>
 
       <section id="race-screen" class="screen race-screen" aria-label="レース" hidden>
-        <div class="race-position" aria-label="順位とラップ"><div class="position-group"><span class="hud-eyebrow">POSITION</span><div><strong id="position-value">8</strong><span id="position-total" class="position-total">/ 8</span></div></div><div class="lap-group"><span class="hud-eyebrow">LAP</span><strong><span id="lap-value">1</span><span class="lap-total"> / 3</span></strong></div></div>
+        <div class="race-position" aria-label="順位とラップ"><div class="position-group"><span class="hud-eyebrow">POSITION</span><div><strong id="position-value">8</strong><span id="position-total" class="position-total">/ 8</span></div></div><div class="lap-group"><span class="hud-eyebrow">LAP</span><strong><span id="lap-value">1</span><span id="lap-total" class="lap-total"> / ${DEFAULT_LAPS}</span></strong></div></div>
         <div class="race-times"><div><span>TOTAL</span><strong id="total-time">00:00.00</strong></div><div><span>LAP</span><strong id="lap-time">00:00.00</strong></div><div class="best-lap-line"><span>BEST LAP</span><strong id="best-lap">—</strong></div></div>
         <div id="item-display" class="item-display"><div id="item-hud-icon" class="item-icon">${emptyItem}</div><div><span class="hud-eyebrow">YOUR ITEM</span><strong id="item-name">ボックスを取ろう</strong><span class="item-key"><kbd>SHIFT</kbd> / <kbd>E</kbd> で使う</span></div></div>
         <div id="countdown-display" class="countdown-display" role="status" aria-live="polite" hidden>3</div>
@@ -242,6 +242,7 @@ export class GameUI {
     this.text('position-value', String(getRank(state, this.localKartId)));
     this.text('position-total', `/ ${state.karts.length}`);
     this.text('lap-value', String(Math.min(state.laps, player.lap + 1)));
+    this.text('lap-total', ` / ${state.laps}`);
     this.text('total-time', formatTime(player.finishTime ?? state.time));
     this.text('lap-time', formatTime(Math.max(0, state.time - player.lapStartTime)));
     this.text('best-lap', player.lapTimes.length > 0 ? formatTime(Math.min(...player.lapTimes)) : '—');
@@ -386,6 +387,14 @@ export class GameUI {
     this.text('result-laps', lapResults.join('   /   '));
     this.setBest(best);
     this.show('results');
+  }
+
+  setLaps(laps: number, best: number | null): void {
+    for (const input of this.get('laps-select').querySelectorAll<HTMLInputElement>('input')) {
+      input.checked = Number(input.value) === laps;
+    }
+    this.text('title-laps', `${laps} LAPS`);
+    this.setBest(best);
   }
 
   /** Title course selection: radio state, course strip and the best time for that course. */

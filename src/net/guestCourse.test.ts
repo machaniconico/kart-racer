@@ -24,7 +24,7 @@ async function joinedGuest() {
     link = peer;
     peer.onMessage((kind, data) => {
       if (kind === 'reliable' && parseControlMessage(data)?.type === 'hello') peer.send('reliable', encodeControlMessage({
-        type: 'welcome', trackId: 'canyon', slot: 1, roster, hostTime: network.now,
+        type: 'welcome', laps: 3, trackId: 'canyon', slot: 1, roster, hostTime: network.now,
       }));
     });
   });
@@ -36,17 +36,43 @@ async function joinedGuest() {
 }
 
 describe('GuestSession course updates outside the lobby (C-006)', () => {
+  it('applies lobby laps, ignores a mismatched start, and locks laps during the countdown', async () => {
+    const h = await joinedGuest();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(h.guest.laps).toBe(3);
+      h.send({ type: 'course', trackId: 'canyon', laps: 1 });
+      expect(h.guest.laps).toBe(1);
+      const start = { type: 'race_start', trackId: 'canyon', laps: 3, seed: 7, raceId: 1, roster,
+        startAtHostTime: h.network.now } as const;
+      h.send(start);
+      expect(h.guest.phase).toBe('lobby');
+      expect(h.guest.frame()).toBeNull();
+      expect(warn).toHaveBeenCalledOnce();
+      expect(warn.mock.calls[0][0]).toMatch(/laps 3.*laps is 1/);
+      h.send({ ...start, laps: 1 });
+      expect(h.guest.phase).toBe('countdown');
+      expect(h.guest.frame()!.state.laps).toBe(1);
+      h.send({ type: 'course', trackId: 'neon', laps: 2 });
+      expect(h.guest.course).toBe('canyon');
+      expect(h.guest.laps).toBe(1);
+      expect(h.guest.frame()!.state.laps).toBe(1);
+    } finally { warn.mockRestore(); h.host.close(); }
+  });
+
   it('ignores course messages during the countdown and the race, keeping the race course', async () => {
     const h = await joinedGuest();
     try {
       expect(h.guest.phase).toBe('lobby');
       expect(h.guest.course).toBe('canyon');
       const startAt = h.network.now + 3000;
-      h.send({ type: 'race_start', trackId: 'canyon', seed: 7, raceId: 1, roster, startAtHostTime: startAt });
+      h.send({ type: 'race_start', laps: 3, trackId: 'canyon', seed: 7, raceId: 1, roster, startAtHostTime: startAt });
       expect(h.guest.phase).toBe('countdown');
-      h.send({ type: 'course', trackId: 'neon' });
+      h.send({ type: 'course', laps: 1, trackId: 'neon' });
       expect(h.guest.course).toBe('canyon');
+      expect(h.guest.laps).toBe(3);
       expect(h.guest.frame()!.state.trackId).toBe('canyon');
+      expect(h.guest.frame()!.state.laps).toBe(3);
 
       // A racing snapshot moves the guest out of the countdown; the course stays locked.
       const racing = createRace(7, { trackId: 'canyon', racers: roster.map(player => ({
@@ -57,9 +83,11 @@ describe('GuestSession course updates outside the lobby (C-006)', () => {
       h.network.advance(150);
       h.guest.frame();
       expect(h.guest.phase).toBe('racing');
-      h.send({ type: 'course', trackId: 'snowpeak' });
+      h.send({ type: 'course', laps: 2, trackId: 'snowpeak' });
       expect(h.guest.course).toBe('canyon');
+      expect(h.guest.laps).toBe(3);
       expect(h.guest.frame()!.state.trackId).toBe('canyon');
+      expect(h.guest.frame()!.state.laps).toBe(3);
     } finally { h.host.close(); }
   });
 
@@ -67,11 +95,11 @@ describe('GuestSession course updates outside the lobby (C-006)', () => {
     const h = await joinedGuest();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
-      h.send({ type: 'race_start', trackId: 'neon', seed: 7, raceId: 1, roster, startAtHostTime: h.network.now });
+      h.send({ type: 'race_start', laps: 3, trackId: 'neon', seed: 7, raceId: 1, roster, startAtHostTime: h.network.now });
       expect(h.guest.phase).toBe('lobby');
       expect(warn).toHaveBeenCalledOnce();
       expect(String(warn.mock.calls[0][0])).toMatch(/neon.*canyon/);
-      h.send({ type: 'race_start', trackId: 'canyon', seed: 7, raceId: 1, roster, startAtHostTime: h.network.now });
+      h.send({ type: 'race_start', laps: 3, trackId: 'canyon', seed: 7, raceId: 1, roster, startAtHostTime: h.network.now });
       expect(h.guest.phase).toBe('countdown');
       expect(warn).toHaveBeenCalledOnce();
     } finally {
@@ -123,7 +151,7 @@ describe('GuestSession course updates outside the lobby (C-006)', () => {
     const h = await joinedGuest();
     try {
       const startAt = h.network.now + 12_000; // The host delays the start for slow peers.
-      h.send({ type: 'race_start', trackId: 'canyon', seed: 7, raceId: 1, roster, startAtHostTime: startAt });
+      h.send({ type: 'race_start', laps: 3, trackId: 'canyon', seed: 7, raceId: 1, roster, startAtHostTime: startAt });
       h.guest.frame();
       h.network.advance(6000);
       h.guest.excuseStall();

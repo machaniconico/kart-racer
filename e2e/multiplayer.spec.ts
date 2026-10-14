@@ -23,6 +23,8 @@ declare global {
 const CONNECTION_TIMEOUT = 40_000;
 const RACE_TIMEOUT = 20_000;
 const viewports = [
+  { width: 390, height: 844 },
+  { width: 360, height: 640 },
   { width: 375, height: 667 },
   { width: 667, height: 375 },
   { width: 844, height: 390 },
@@ -194,6 +196,79 @@ test('C-010: host course selection reaches the guest within one second and start
   await startRace(host, guest, 'neon');
 });
 
+test('C-011: host laps 1 reaches the guest within one second and finishes in one lap', async ({ page: host, guest }, testInfo) => {
+  await connect(host, guest);
+  await expect(host.locator('.lobby-laps')).toBeVisible();
+  await expect(guest.locator('.lobby-laps')).toBeHidden();
+  await expect(guest.locator('#lobby-laps-name')).toHaveText('3 周（ホストが選択）');
+  await host.locator('.lobby-laps').evaluate(fieldset => {
+    fieldset.addEventListener('change', () => {
+      (fieldset as HTMLElement).dataset.selectedAt = String(performance.timeOrigin + performance.now());
+    }, { capture: true, once: true });
+  });
+  await guest.locator('#lobby-laps-name').evaluate(output => {
+    const observer = new MutationObserver(() => {
+      if (output.textContent !== '1 周（ホストが選択）') return;
+      (output as HTMLElement).dataset.displayedAt = String(performance.timeOrigin + performance.now());
+      observer.disconnect();
+    });
+    observer.observe(output, { childList: true, characterData: true, subtree: true });
+  });
+  await host.locator('input[name="lobby-laps"][value="1"]').check();
+  await expect(guest.locator('#lobby-laps-name')).toHaveText('1 周（ホストが選択）');
+  const selectedAt = Number(await host.locator('.lobby-laps').getAttribute('data-selected-at'));
+  const displayedAt = Number(await guest.locator('#lobby-laps-name').getAttribute('data-displayed-at'));
+  expect(selectedAt).toBeGreaterThan(0);
+  const elapsedMs = displayedAt - selectedAt;
+  expect(elapsedMs).toBeGreaterThanOrEqual(0);
+  expect(elapsedMs).toBeLessThanOrEqual(1_000);
+  await testInfo.attach('laps-propagation', { body: JSON.stringify({ elapsedMs }), contentType: 'application/json' });
+  for (const viewport of [{ width: 390, height: 844 }, { width: 844, height: 390 }, { width: 360, height: 640 }, { width: 844, height: 480 }]) {
+    for (const page of [host, guest]) {
+      await page.setViewportSize(viewport);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      expect(await page.locator('.lobby-content').evaluate(el => {
+        const rect = el.getBoundingClientRect();
+        return rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight;
+      })).toBe(true);
+    }
+    for (const label of await host.locator('.lobby-laps label').all()) {
+      const box = await label.boundingBox();
+      expect(box!.width).toBeGreaterThanOrEqual(44);
+      expect(box!.height).toBeGreaterThanOrEqual(44);
+    }
+    await expect(guest.locator('.lobby-laps')).toBeHidden();
+    await testInfo.attach(`laps-lobby-${viewport.width}x${viewport.height}`, {
+      body: await host.screenshot(), contentType: 'image/png',
+    });
+  }
+  await Promise.all([host, guest].map(page => page.setViewportSize({ width: 1280, height: 720 })));
+  await startRace(host, guest, 'meadow');
+  for (const page of [host, guest]) {
+    expect(await page.evaluate(() => window.__kartDebug.state.laps)).toBe(1);
+    await expect(page.locator('#lap-total')).toHaveText('/ 1');
+  }
+  for (let seconds = 0; seconds < 180; seconds++) {
+    const finished = await host.evaluate(() => {
+      window.__kartDebug.advance(60, true);
+      return window.__kartDebug.state.phase === 'finished';
+    });
+    if (finished) break;
+    await host.waitForTimeout(20);
+  }
+  for (const page of [host, guest]) {
+    await expect(page.locator('#results-screen')).toBeVisible();
+    await expect(page.locator('#results-course')).toHaveText('MEADOW LOOP · 1 LAPS');
+    const state = await page.evaluate(() => window.__kartDebug.state);
+    expect(state.laps).toBe(1);
+    expect(state.karts.some(kart => kart.finishTime !== null)).toBe(true);
+    for (const kart of state.karts) {
+      expect(kart.lap).toBeLessThanOrEqual(1);
+      if (kart.finishTime !== null) expect(kart.lapTimes).toHaveLength(1);
+    }
+  }
+});
+
 test('§8.2 5: host context loss returns the guest to the title', async ({ page: host, guest }) => {
   await connect(host, guest);
   await startRace(host, guest);
@@ -215,6 +290,7 @@ async function captureLayouts(page: Page, screen: 'lobby' | 'results', testInfo:
     await expect(page.locator(`#${screen}-screen`)).toBeVisible();
     await expect(page.locator(screen === 'lobby' ? '#lobby-roster li' : '#leaderboard li')).toHaveCount(8);
     await page.evaluate(() => document.fonts.ready);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     const filename = `${screen}-${viewport.width}x${viewport.height}.png`;
     const path = `${screenshotDir}/${filename}`;
     await page.screenshot({ path, animations: 'disabled' });
@@ -222,7 +298,7 @@ async function captureLayouts(page: Page, screen: 'lobby' | 'results', testInfo:
   }
 }
 
-test('§8.2 6: lobby and eight-row results at three mobile sizes', async ({ page: host, guest }, testInfo) => {
+test('§8.2 6: lobby and eight-row results at mobile sizes', async ({ page: host, guest }, testInfo) => {
   await connect(host, guest);
   await captureLayouts(host, 'lobby', testInfo);
   await host.setViewportSize({ width: 1280, height: 720 });

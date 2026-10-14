@@ -17,14 +17,14 @@ export const MAX_EVENTS = 256;
 export const PacketKind = { INPUT: 0x01, SNAPSHOT: 0x02, PING: 0x03, PONG: 0x04 } as const;
 
 export interface Hello { type: 'hello'; protocol: number; course: number; name: string; color: number }
-export interface Welcome { type: 'welcome'; slot: number; roster: RosterPlayer[]; hostTime: number; trackId: TrackId }
+export interface Welcome { type: 'welcome'; slot: number; roster: RosterPlayer[]; hostTime: number; trackId: TrackId; laps: number }
 export type RejectReason = 'version' | 'full' | 'in_race' | 'bad_name';
 export interface Reject { type: 'reject'; reason: RejectReason }
 export interface Roster { type: 'roster'; players: RosterPlayer[] }
 export interface Profile { type: 'profile'; name: string; color: number }
-export interface Course { type: 'course'; trackId: TrackId }
+export interface Course { type: 'course'; trackId: TrackId; laps: number }
 export interface RaceStart {
-  type: 'race_start'; raceId: number; seed: number; roster: RosterPlayer[]; startAtHostTime: number; trackId: TrackId;
+  type: 'race_start'; raceId: number; seed: number; roster: RosterPlayer[]; startAtHostTime: number; trackId: TrackId; laps: number;
 }
 export interface Events { type: 'events'; raceId: number; tick: number; events: RaceEvent[] }
 export interface RaceEnd { type: 'race_end'; raceId: number; finalState: RaceState }
@@ -143,7 +143,7 @@ export function isHello(value: unknown): value is Hello {
     integer(value.protocol, 1, 0xffff) && integer(value.course) && isPlayerName(value.name) && color(value.color);
 }
 export function isWelcome(value: unknown): value is Welcome {
-  return record(value) && keys(value, ['type', 'slot', 'roster', 'hostTime', 'trackId']) && value.type === 'welcome' &&
+  return record(value) && keys(value, ['type', 'slot', 'roster', 'hostTime', 'trackId', 'laps']) && value.type === 'welcome' && integer(value.laps, 1, 3) &&
     slot(value.slot) && oneOf(value.trackId, PROTOCOL_TRACK_IDS) && isRosterPlayers(value.roster) &&
     value.roster.some(player => player.slot === value.slot) && positiveTime(value.hostTime);
 }
@@ -159,12 +159,12 @@ export function isProfile(value: unknown): value is Profile {
     isPlayerName(value.name) && color(value.color);
 }
 export function isRaceStart(value: unknown): value is RaceStart {
-  return record(value) && keys(value, ['type', 'raceId', 'seed', 'roster', 'startAtHostTime', 'trackId']) &&
+  return record(value) && keys(value, ['type', 'raceId', 'seed', 'roster', 'startAtHostTime', 'trackId', 'laps']) && integer(value.laps, 1, 3) &&
     value.type === 'race_start' && integer(value.raceId, 0, 255) && integer(value.seed) && oneOf(value.trackId, PROTOCOL_TRACK_IDS) &&
     isRosterPlayers(value.roster) && positiveTime(value.startAtHostTime);
 }
 export function isCourse(value: unknown): value is Course {
-  return record(value) && keys(value, ['type', 'trackId']) && value.type === 'course' &&
+  return record(value) && keys(value, ['type', 'trackId', 'laps']) && value.type === 'course' && integer(value.laps, 1, 3) &&
     oneOf(value.trackId, PROTOCOL_TRACK_IDS);
 }
 export function isEvents(value: unknown): value is Events {

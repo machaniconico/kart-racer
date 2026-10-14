@@ -72,6 +72,63 @@ function tick(host: HostSession, state: RaceState): InputFrame[] {
 }
 
 describe('HostSession lobby', () => {
+  it.each([1, 2, 3])('broadcasts laps %i and uses it for welcome, race_start and rematches', async laps => {
+    const { host, guest, network } = await setup();
+    try {
+      expect(host.laps).toBe(3);
+      const one = await guest();
+      const changed = vi.fn();
+      host.onChange(changed);
+      expect(host.setLaps(laps)).toBe(true);
+      network.flush();
+      expect(host.laps).toBe(laps);
+      expect(changed).toHaveBeenCalledOnce();
+      expect(one.messages.at(-1)).toEqual({ type: 'course', trackId: 'meadow', laps });
+      host.setCourse('canyon');
+      network.flush();
+      expect(one.messages.at(-1)).toEqual({ type: 'course', trackId: 'canyon', laps });
+      const late = await guest({ name: 'LATE' });
+      expect(late.messages[0]).toMatchObject({ type: 'welcome', trackId: 'canyon', laps });
+      expect(host.startRace(42).laps).toBe(laps);
+      network.flush();
+      for (const peer of [one, late]) expect(peer.messages.at(-1)).toMatchObject({ type: 'race_start', laps });
+      host.returnToLobby();
+      expect(host.laps).toBe(laps);
+      expect(host.startRace(43).laps).toBe(laps);
+    } finally { host.close(); }
+  });
+
+  it('rejects invalid and guest laps changes and locks laps outside the lobby', async () => {
+    const { host, guest, network } = await setup();
+    try {
+      const one = await guest();
+      const changed = vi.fn();
+      host.onChange(changed);
+      const count = one.messages.length;
+      for (const laps of [0, 4, -1, 1.5, NaN, Infinity]) expect(host.setLaps(laps)).toBe(false);
+      one.control({ type: 'course', trackId: 'meadow', laps: 1 });
+      network.flush();
+      expect(host.laps).toBe(3);
+      expect(changed).not.toHaveBeenCalled();
+      expect(one.messages).toHaveLength(count);
+      const state = host.startRace(42);
+      expect(host.setLaps(1)).toBe(false);
+      state.phase = 'racing';
+      tick(host, state);
+      expect(host.phase).toBe('racing');
+      expect(host.setLaps(1)).toBe(false);
+      state.phase = 'finished';
+      state.tick++;
+      host.afterTick(state);
+      expect(host.phase).toBe('results');
+      expect(host.setLaps(1)).toBe(false);
+      host.returnToLobby();
+      expect(host.setLaps(1)).toBe(true);
+      host.close();
+      expect(host.setLaps(2)).toBe(false);
+    } finally { host.close(); }
+  });
+
   it.each(TRACK_IDS)('broadcasts %s to every guest and retains it for late joins and rematches', async trackId => {
     const { host, guest, network } = await setup();
     try {
@@ -84,14 +141,14 @@ describe('HostSession lobby', () => {
       network.flush();
       expect(host.course).toBe(trackId);
       expect(changed).toHaveBeenCalledOnce();
-      for (const peer of [one, two]) expect(peer.messages.at(-1)).toEqual({ type: 'course', trackId });
+      for (const peer of [one, two]) expect(peer.messages.at(-1)).toEqual({ type: 'course', laps: 3, trackId });
       const late = await guest({ name: 'LATE' });
-      expect(late.messages[0]).toMatchObject({ type: 'welcome', trackId });
+      expect(late.messages[0]).toMatchObject({ type: 'welcome', laps: 3, trackId });
       const state = host.startRace(42);
       network.flush();
       expect(state.trackId).toBe(trackId);
       for (const peer of [one, two, late]) expect(peer.messages.at(-1)).toMatchObject({
-        type: 'race_start', trackId, seed: 42, raceId: 1,
+        type: 'race_start', laps: 3, trackId, seed: 42, raceId: 1,
       });
       host.returnToLobby();
       network.flush();
@@ -99,7 +156,7 @@ describe('HostSession lobby', () => {
       expect(one.messages.at(-1)).toEqual({ type: 'return_lobby' });
       expect(host.startRace(43).trackId).toBe(trackId);
       network.flush();
-      expect(one.messages.at(-1)).toMatchObject({ type: 'race_start', trackId, raceId: 2 });
+      expect(one.messages.at(-1)).toMatchObject({ type: 'race_start', laps: 3, trackId, raceId: 2 });
     } finally { host.close(); }
   });
 
@@ -111,7 +168,7 @@ describe('HostSession lobby', () => {
       host.onChange(changed);
       const count = one.messages.length;
       expect(host.setCourse('unknown' as typeof host.course)).toBe(false);
-      one.control({ type: 'course', trackId: 'neon' });
+      one.control({ type: 'course', laps: 3, trackId: 'neon' });
       network.flush();
       expect(host.course).toBe('meadow');
       expect(changed).not.toHaveBeenCalled();
@@ -141,7 +198,7 @@ describe('HostSession lobby', () => {
       expect((await guest({ course: (COURSE_FINGERPRINT ^ 1) >>> 0 })).messages)
         .toEqual([{ type: 'reject', reason: 'version' }]);
       expect(host.roster.players.filter(player => player.kind === 'guest')).toHaveLength(0);
-      expect((await guest()).messages[0]).toMatchObject({ type: 'welcome', slot: 1 });
+      expect((await guest()).messages[0]).toMatchObject({ type: 'welcome', laps: 3, slot: 1 });
     } finally { host.close(); }
   });
 
@@ -158,7 +215,7 @@ describe('HostSession lobby', () => {
     link.onMessage((_, data) => messages.push(data));
     link.send('reliable', encodeControlMessage({ type: 'hello', protocol: PROTOCOL_VERSION, course: COURSE_FINGERPRINT, name: 'ONE', color: 0xff5f80 }));
     network.flush();
-    expect(parseControlMessage(messages[0])).toMatchObject({ type: 'welcome', slot: 1 });
+    expect(parseControlMessage(messages[0])).toMatchObject({ type: 'welcome', laps: 3, slot: 1 });
     host.close();
   });
 
@@ -166,7 +223,7 @@ describe('HostSession lobby', () => {
     const { host, guest } = await setup();
     for (let slot = 1; slot < 8; slot++) {
       const joined = await guest({ name: `G${slot}` });
-      expect(joined.messages[0]).toMatchObject({ type: 'welcome', slot,
+      expect(joined.messages[0]).toMatchObject({ type: 'welcome', laps: 3, slot,
         roster: expect.arrayContaining([expect.objectContaining({ slot, name: `G${slot}`, kind: 'guest' })]) });
     }
     expect((await guest()).messages).toEqual([{ type: 'reject', reason: 'full' }]);
@@ -189,7 +246,7 @@ describe('HostSession lobby', () => {
     host.afterTick(state);
     expect((await guest()).messages).toEqual([{ type: 'reject', reason: 'in_race' }]);
     host.returnToLobby();
-    expect((await guest()).messages[0]).toMatchObject({ type: 'welcome', slot: 1 });
+    expect((await guest()).messages[0]).toMatchObject({ type: 'welcome', laps: 3, slot: 1 });
     host.close();
   });
 
@@ -344,7 +401,7 @@ describe('HostSession input and disconnects', () => {
     expect(two.messages.at(-1)).toEqual({ type: 'roster', players: host.roster.players });
     host.returnToLobby();
     const replacement = await guest({ name: 'NEW' });
-    expect(replacement.messages[0]).toMatchObject({ type: 'welcome', slot: 1 });
+    expect(replacement.messages[0]).toMatchObject({ type: 'welcome', laps: 3, slot: 1 });
     const next = host.startRace(2);
     expect(next.karts[1].human).toBe(true);
     expect(source.sample(next, 1)).toEqual(NEUTRAL_INPUT);
@@ -386,7 +443,7 @@ describe('HostSession timing and broadcasts', () => {
     expect(host.phase).toBe('lobby');
     host.startRace(456);
     network.flush();
-    expect(one.messages.at(-1)).toMatchObject({ type: 'race_start', raceId: 2, seed: 456 });
+    expect(one.messages.at(-1)).toMatchObject({ type: 'race_start', laps: 3, raceId: 2, seed: 456 });
     expect(() => host.startRace()).toThrow();
     host.close();
   });

@@ -8,6 +8,7 @@ export interface LobbyUICallbacks {
   onCreate: () => void;
   onJoin: (code: string) => void;
   onCourse: (id: string) => void;
+  onLaps: (laps: number) => void;
 }
 
 /** Display data for one course; main.ts supplies it so the lobby stays free of sim code. */
@@ -25,6 +26,11 @@ export function courseView(courses: readonly CourseOption[], selectedId: string,
   const index = courses.findIndex(course => course.id === selectedId);
   const label = index < 0 ? '不明なコース' : `${String(index + 1).padStart(2, '0')} ${courses[index].name}`;
   return { editable: role === 'host', index, label };
+}
+
+export function lapsView(selected: number, role: 'host' | 'guest'): CourseView {
+  return { editable: role === 'host', index: [1, 2, 3].indexOf(selected),
+    label: `${selected} 周${role === 'guest' ? '（ホストが選択）' : ''}` };
 }
 
 // Kept presentation-local: the UI must not load transport, protocol, or sim code.
@@ -79,6 +85,7 @@ export class LobbyUI {
   onCreate?: LobbyUICallbacks['onCreate'];
   onJoin?: LobbyUICallbacks['onJoin'];
   onCourse?: LobbyUICallbacks['onCourse'];
+  onLaps?: LobbyUICallbacks['onLaps'];
 
   private readonly entry: HTMLElement;
   private readonly lobby: HTMLElement;
@@ -154,6 +161,11 @@ export class LobbyUI {
             <select id="lobby-course-select"></select>
             <output id="lobby-course-name" aria-label="コース（ホストが選択）"></output>
           </div>
+          <fieldset id="lobby-laps-select" class="lobby-laps">
+            <legend>周回数</legend>
+            <div class="lobby-laps-options">${[1, 2, 3].map(n => `<label><input type="radio" name="lobby-laps" value="${n}"${n === 3 ? ' checked' : ''}><span>${n} 周</span></label>`).join('')}</div>
+          </fieldset>
+          <output id="lobby-laps-name" aria-label="周回数（ホストが選択）" hidden></output>
           <form id="lobby-profile" class="lobby-profile" novalidate>
             <label for="lobby-name">名前（10文字まで）</label>
             <input id="lobby-name" name="name" type="text" maxlength="20" autocomplete="nickname"
@@ -201,6 +213,7 @@ export class LobbyUI {
     this.listen(courseSelect, 'change', () => {
       if (this.phase === 'lobby' && this.localPlayer()?.kind === 'host') this.invoke(() => this.onCourse?.(courseSelect.value));
     });
+    this.listen(this.get('lobby-laps-select'), 'change', event => this.changeLaps(event));
 
     this.listen(this.get('online-create'), 'click', () => this.connect());
     this.listen(this.get('online-join-form'), 'submit', event => {
@@ -364,6 +377,26 @@ export class LobbyUI {
     name.hidden = view.editable;
     if (name.textContent !== view.label) name.textContent = view.label;
     select.value = view.index < 0 ? '' : selectedId;
+  }
+
+  setLaps(selected: number, role: 'host' | 'guest'): void {
+    if (this.destroyed) return;
+    const view = lapsView(selected, role);
+    const fieldset = this.get<HTMLFieldSetElement>('lobby-laps-select');
+    fieldset.hidden = !view.editable;
+    fieldset.disabled = !view.editable || this.phase !== 'lobby';
+    for (const input of fieldset.querySelectorAll<HTMLInputElement>('input')) input.checked = Number(input.value) === selected;
+    const name = this.get('lobby-laps-name');
+    name.hidden = view.editable;
+    if (name.textContent !== view.label) name.textContent = view.label;
+  }
+
+  private changeLaps(event: Event): void {
+    const input = event.target;
+    if (this.phase !== 'lobby' || this.localPlayer()?.kind !== 'host' ||
+      !(input instanceof HTMLInputElement) || input.name !== 'lobby-laps' || !input.checked) return;
+    const laps = Number(input.value);
+    if ([1, 2, 3].includes(laps)) this.invoke(() => this.onLaps?.(laps));
   }
 
   /** Accepts TransportError, a session close/rejection reason, or an unknown failure. */

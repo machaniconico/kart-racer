@@ -92,8 +92,8 @@ for (const { id, name, layout, drawCalls: baselineDrawCalls, triangles: baseline
     // Solo results open when the human finishes; trailing CPUs can still be racing.
     expect(state.karts[0].lapTimes).toHaveLength(3);
     expect(state.karts[0].finishTime).toBeGreaterThan(0);
-    const bests = await page.evaluate(() => JSON.parse(localStorage.getItem('pocket-circuit.best.v3') ?? '{}'));
-    expect(bests).toEqual({ [id]: { time: state.karts[0].finishTime, layout } });
+    const bests = await page.evaluate(() => JSON.parse(localStorage.getItem('pocket-circuit.best.v4') ?? '{}'));
+    expect(bests).toEqual({ [id]: { '3': { time: state.karts[0].finishTime, layout } } });
     for (const other of courses.filter(course => course.id !== id)) {
       expect(bests[other.id] ?? null).toBeNull();
     }
@@ -104,6 +104,99 @@ for (const { id, name, layout, drawCalls: baselineDrawCalls, triangles: baseline
       if (course.id === id) await expect(page.locator('#title-best')).not.toHaveText('まだ記録はありません');
       else await expect(page.locator('#title-best')).toHaveText('まだ記録はありません');
     }
+  });
+}
+
+test.describe('C-011 solo touch selection', () => {
+  test.use({ hasTouch: true });
+  test('keeps course, laps and online entry usable in both phone orientations', async ({ page }, testInfo) => {
+    await page.goto('./');
+    await page.waitForFunction(() => !!window.__kartDebug);
+    for (const viewport of [{ width: 390, height: 844 }, { width: 844, height: 390 }]) {
+      await page.setViewportSize(viewport);
+      await page.locator('#course-select input[value="meadow"]').tap();
+      for (const laps of [1, 2, 3]) {
+        await page.locator(`#laps-select label:has(input[value="${laps}"])`).tap();
+        await expect(page.locator(`#laps-select input[value="${laps}"]`)).toBeChecked();
+        expect(await page.evaluate(() => window.__kartDebug.state.laps)).toBe(laps);
+      }
+      const bounds = await page.evaluate(() => ({
+        titleBottom: document.querySelector('.title-content')!.getBoundingClientRect().bottom,
+        onlineTop: document.querySelector('#online-entry')!.getBoundingClientRect().top,
+        courseTop: document.querySelector('.course-strip')!.getBoundingClientRect().top,
+      }));
+      expect(bounds.titleBottom).toBeLessThanOrEqual(viewport.width < viewport.height ? bounds.onlineTop : bounds.courseTop);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await testInfo.attach(`solo-touch-${viewport.width}x${viewport.height}`, { body: await page.screenshot(), contentType: 'image/png' });
+    }
+  });
+});
+
+for (const laps of [1, 2]) {
+  test(`C-011: solo ${laps} laps selection, HUD, results and isolated best`, async ({ page }, testInfo) => {
+    await page.goto('./');
+    await page.waitForFunction(() => !!window.__kartDebug);
+    await expect(page.locator('#laps-select input[value="3"]')).toBeChecked();
+    for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 844 }, { width: 844, height: 390 }]) {
+      await page.setViewportSize(viewport);
+      await page.locator('#laps-select input[value="3"]').check();
+      await page.locator(`#laps-select input[value="${laps}"]`).check();
+      await page.locator('#course-select input[value="meadow"]').click();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      for (const label of await page.locator('.laps-option').all()) {
+        const box = await label.boundingBox();
+        expect(box!.width).toBeGreaterThanOrEqual(44);
+        expect(box!.height).toBeGreaterThanOrEqual(44);
+      }
+      await testInfo.attach(`solo-laps-${viewport.width}x${viewport.height}`, {
+        body: await page.screenshot(), contentType: 'image/png',
+      });
+    }
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.locator('#course-select input[value="canyon"]').check();
+    await page.locator('#course-select input[value="meadow"]').check();
+    expect(await page.evaluate(() => window.__kartDebug.state.laps)).toBe(laps);
+    await page.locator('#start-race').click();
+    await expect(page.locator('#lap-total')).toHaveText(`/ ${laps}`);
+    expect(await page.evaluate(() => window.__kartDebug.state.laps)).toBe(laps);
+    await page.evaluate(() => {
+      for (let second = 0; second < 200 && window.__kartDebug.state.phase !== 'finished'; second++) {
+        window.__kartDebug.clearItems();
+        window.__kartDebug.advance(60, true);
+      }
+    });
+    await expect(page.locator('#results-course')).toHaveText(`MEADOW LOOP · ${laps} LAPS`);
+    await expect(page.locator('#lap-value')).toHaveText(String(laps));
+    const state = await page.evaluate(() => window.__kartDebug.state);
+    expect(state.karts[0].lapTimes).toHaveLength(laps);
+    const bests = await page.evaluate(() => JSON.parse(localStorage.getItem('pocket-circuit.best.v4') ?? '{}'));
+    expect(bests.meadow).toEqual({ [laps]: { time: state.karts[0].finishTime, layout: getTrack('meadow').def.layoutVersion } });
+    await page.locator('#back-title').click();
+    expect(await page.evaluate(() => window.__kartDebug.state.laps)).toBe(laps);
+    await expect(page.locator('#title-best')).not.toHaveText('まだ記録はありません');
+    await page.locator('#laps-select input[value="3"]').check();
+    await expect(page.locator('#title-best')).toHaveText('まだ記録はありません');
+    await page.locator(`#laps-select input[value="${laps}"]`).check();
+    await expect(page.locator('#title-best')).not.toHaveText('まだ記録はありません');
+    await page.locator('#start-race').click();
+    await expect(page.locator('#lap-total')).toHaveText(`/ ${laps}`);
+    await page.evaluate(() => {
+      window.__kartDebug.state.laps = 3;
+      window.__kartDebug.advance(0);
+    });
+    await expect(page.locator('#lap-total')).toHaveText('/ 3');
+    await page.evaluate(laps => {
+      const state = window.__kartDebug.state;
+      state.laps = laps;
+      state.karts[0].lap = laps - 1;
+      state.karts[0].lapTimes = Array(laps - 1).fill(1);
+      state.karts[1].finishTime = 1;
+      state.time = 60;
+      state.phase = 'finished';
+      window.__kartDebug.advance(0);
+    }, laps);
+    await expect(page.locator('#results-course')).toHaveText(`MEADOW LOOP · ${laps} LAPS`);
+    await expect(page.locator('#result-laps')).toContainText(`未完走 · ${laps - 1} / ${laps} 周完了`);
   });
 }
 

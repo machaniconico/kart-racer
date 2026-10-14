@@ -432,8 +432,8 @@ describe('GuestSession prediction', () => {
       const players = roster(initial.state);
       const send = (data: Parameters<typeof encodeControlMessage>[0]) => peer.send('reliable', encodeControlMessage(data));
       const sendSnapshot = (tick: number) => peer.send('unreliable', encodeSnapshot(snapshot(tick).state, 1, network.now));
-      send({ type: 'welcome', trackId: 'meadow', slot: 1, roster: players, hostTime: 0 });
-      send({ type: 'race_start', trackId: 'meadow', raceId: 1, seed: 431, roster: players, startAtHostTime: 0 });
+      send({ type: 'welcome', trackId: 'meadow', laps: 3, slot: 1, roster: players, hostTime: 0 });
+      send({ type: 'race_start', trackId: 'meadow', laps: 3, raceId: 1, seed: 431, roster: players, startAtHostTime: 0 });
       sendSnapshot(180);
       network.advance(0);
       guest.tick(drive);
@@ -459,7 +459,7 @@ describe('GuestSession prediction', () => {
 
       sendSnapshot(192);
       send({ type: 'return_lobby' });
-      send({ type: 'race_start', trackId: 'meadow', raceId: 2, seed: 432, roster: players, startAtHostTime: 0 });
+      send({ type: 'race_start', trackId: 'meadow', laps: 3, raceId: 2, seed: 432, roster: players, startAtHostTime: 0 });
       network.advance(0);
       guest.frame();
       expect(guest.predictedState!.tick).toBe(0);
@@ -623,7 +623,7 @@ describe('GuestSession prediction', () => {
     try {
       await guest.join('AB2X');
       const initial = snapshot();
-      peer.send('reliable', encodeControlMessage({ type: 'welcome', trackId: 'meadow', slot: 1,
+      peer.send('reliable', encodeControlMessage({ type: 'welcome', trackId: 'meadow', laps: 3, slot: 1,
         roster: roster(initial.state), hostTime: network.now }));
       network.advance(0);
       for (let i = 0; i < 5; i++) { network.advance(100); guest.frame(); network.advance(0); }
@@ -651,8 +651,8 @@ describe('GuestSession prediction', () => {
     const initial = snapshot();
     const players = roster(initial.state);
     const send = (data: Parameters<typeof encodeControlMessage>[0]) => peer.send('reliable', encodeControlMessage(data));
-    send({ type: 'welcome', trackId: 'meadow', slot: 1, roster: players, hostTime: 0 });
-    send({ type: 'race_start', trackId: 'meadow', raceId: 1, seed: 431, roster: players, startAtHostTime: 0 });
+    send({ type: 'welcome', trackId: 'meadow', laps: 3, slot: 1, roster: players, hostTime: 0 });
+    send({ type: 'race_start', trackId: 'meadow', laps: 3, raceId: 1, seed: 431, roster: players, startAtHostTime: 0 });
     initial.state.karts[1].item = 'dash';
     peer.send('unreliable', encodeSnapshot(initial.state, 1, 0));
     network.advance(0);

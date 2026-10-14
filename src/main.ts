@@ -10,6 +10,7 @@ import { kartRotationZ } from './render/kartRoll';
 import { captureRenderSnapshot } from './render/snapshot';
 import { createRace, FIXED_DT, getAIInput, getTrack, projectToTrack, stepRace, surfaceHeightAt, TRACK_IDS } from './sim';
 import { widthAt } from './sim/corridor';
+import { DEFAULT_LAPS, isLapCount } from './sim/laps';
 import type { InputFrame, InputSource, RaceState, TrackId } from './sim';
 import { GameUI } from './ui/GameUI';
 import { LobbyUI } from './ui/LobbyUI';
@@ -65,6 +66,7 @@ let audio = new AudioEngine(0);
 ui.onRoulette = (kind) => audio.playRoulette(kind);
 /** Title selection; solo races and new rooms start on this course. */
 let course: TrackId = 'meadow';
+let soloLaps = DEFAULT_LAPS;
 let muted = loadMuted();
 audio.setMuted(muted);
 ui.setMuted(muted);
@@ -75,14 +77,14 @@ const savedAssist = loadSteerAssist();
 if (savedAssist !== null) controls.setSteerAssist(savedAssist);
 ui.setSteerAssist(controls.steerAssist);
 root.addEventListener('input-device-change', () => ui.setSteerAssist(controls.steerAssist));
-ui.setCourse(course, loadBest(course, getTrack(course).def.layoutVersion ?? 1));
 
 function seed(): number {
   try { return crypto.getRandomValues(new Uint32Array(1))[0]; }
   catch { return Date.now() >>> 0; }
 }
 
-let state = createRace(seed());
+let state = createRace(seed(), { trackId: course, laps: soloLaps });
+ui.setCourse(course, loadBest(course, getTrack(course).def.layoutVersion ?? 1, state.laps));
 const cpuSource: InputSource = { sample: getAIInput };
 const soloSources: InputSource[] = state.karts.map((kart) => kart.id === 0 ? controls : cpuSource);
 // The host swaps in HostSession.inputSource(slot); solo keeps controls + CPU.
@@ -126,7 +128,7 @@ try {
 function start(): void {
   if (fatal) return;
   cancelOnline(); // A room being created or joined must not take over the solo race.
-  launch(createRace(seed(), { trackId: course }));
+  launch(createRace(seed(), { trackId: course, laps: soloLaps }));
 }
 
 function launch(next: RaceState): void {
@@ -196,14 +198,14 @@ function title(): void {
   screen = 'title';
   paused = false;
   accumulator = 0;
-  state = createRace(seed(), { trackId: course });
+  state = createRace(seed(), { trackId: course, laps: soloLaps });
   previous = captureRenderSnapshot(state);
   if (renderer && !fatal && renderer.getTrackId() !== state.trackId) recreateRenderer(localId);
   else if (wasOnline) renderer?.setRoster(state.karts);
   controls.setEnabled(false);
   audio.suspend();
   ui.setPaused(false);
-  ui.setCourse(course, loadBest(course, getTrack(course).def.layoutVersion ?? 1));
+  ui.setCourse(course, loadBest(course, getTrack(course).def.layoutVersion ?? 1, state.laps));
   ui.show('title');
 }
 
@@ -211,10 +213,10 @@ function selectCourse(id: TrackId): void {
   if (screen !== 'title' || fatal || id === course || !TRACK_IDS.includes(id)) return;
   course = id;
   // The title background shows the selected course.
-  state = createRace(seed(), { trackId: course });
+  state = createRace(seed(), { trackId: course, laps: soloLaps });
   previous = captureRenderSnapshot(state);
   if (renderer && renderer.getTrackId() !== state.trackId) recreateRenderer(localId);
-  ui.setCourse(course, loadBest(course, getTrack(course).def.layoutVersion ?? 1));
+  ui.setCourse(course, loadBest(course, getTrack(course).def.layoutVersion ?? 1, state.laps));
 }
 
 function finish(): void {
@@ -222,10 +224,10 @@ function finish(): void {
   controls.setEnabled(false);
   audio.finishRace();
   const time = state.karts.find((kart) => kart.id === localId)?.finishTime ?? null;
-  const previousBest = loadBest(state.trackId, getTrack(state.trackId).def.layoutVersion ?? 1);
+  const previousBest = loadBest(state.trackId, getTrack(state.trackId).def.layoutVersion ?? 1, state.laps);
   // Online races never update the personal best.
   const isRecord = mode === 'solo' && time !== null && (previousBest === null || time < previousBest);
-  if (isRecord) saveBest(state.trackId, time, getTrack(state.trackId).def.layoutVersion ?? 1);
+  if (isRecord) saveBest(state.trackId, time, getTrack(state.trackId).def.layoutVersion ?? 1, state.laps);
   if (mode !== 'solo') lobby.render((host ?? guest)?.roster ?? null, 'results');
   ui.showResults(state, isRecord ? time : previousBest, isRecord);
   ui.show('results');
@@ -383,6 +385,7 @@ function renderLobby(): void {
   if (screen === 'lobby') prepareCourse(session.course);
   lobby.render(session.roster, 'lobby');
   lobby.setCourse(session.course, host ? 'host' : 'guest');
+  lobby.setLaps(session.laps, host ? 'host' : 'guest');
 }
 
 function startOnline(): void {
@@ -428,6 +431,10 @@ const lobby = new LobbyUI(root, {
       renderLobby(); // A refused color produces no roster broadcast.
     } else guest?.updateProfile(name, color);
   },
+  onLaps: (laps) => {
+    host?.setLaps(laps);
+    renderLobby();
+  },
   onCourse: (id) => {
     if (host && TRACK_IDS.includes(id as TrackId)) host.setCourse(id as TrackId);
     renderLobby(); // A refused change restores the host's actual course.
@@ -436,6 +443,16 @@ const lobby = new LobbyUI(root, {
 
 root.querySelector('#course-select')?.addEventListener('change', (event) => {
   if (event.target instanceof HTMLInputElement) selectCourse(event.target.value as TrackId);
+});
+
+root.querySelector('#laps-select')?.addEventListener('change', (event) => {
+  if (!(event.target instanceof HTMLInputElement) || screen !== 'title' || fatal) return;
+  const laps = Number(event.target.value);
+  if (!isLapCount(laps)) return;
+  soloLaps = laps;
+  state = createRace(seed(), { trackId: course, laps: soloLaps });
+  previous = captureRenderSnapshot(state);
+  ui.setLaps(laps, loadBest(course, getTrack(course).def.layoutVersion ?? 1, state.laps));
 });
 
 bind('start-race', start);

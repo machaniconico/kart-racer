@@ -1,6 +1,7 @@
 import { captureRenderSnapshot } from '../render/snapshot';
 import type { RenderSnapshot } from '../render/snapshot';
 import { createRace } from '../sim/race';
+import { DEFAULT_LAPS } from '../sim/laps';
 import { COURSE_FINGERPRINT } from '../sim/tracks';
 import type { InputFrame, RaceEvent, RaceState, TrackId } from '../sim/types';
 import { ClockSync, packPing, packPong, TICK_MS, TickMap, unpackClock } from './clock';
@@ -46,6 +47,7 @@ export class GuestSession {
   private generation = 0;
   private currentPhase: NetPhase = 'idle';
   private selectedTrackId: TrackId = 'meadow';
+  private selectedLaps = DEFAULT_LAPS;
   private closeReason: GuestCloseReason | null = null;
   private isStalled = false;
   private code = '';
@@ -82,6 +84,7 @@ export class GuestSession {
 
   get phase(): NetPhase { return this.currentPhase; }
   get course(): TrackId { return this.selectedTrackId; }
+  get laps(): number { return this.selectedLaps; }
   get reason(): GuestCloseReason | null { return this.closeReason; }
   get stalled(): boolean { return this.isStalled; }
   get localSlot(): number { return this.slot; }
@@ -118,6 +121,7 @@ export class GuestSession {
     this.slot = -1;
     this.players = [];
     this.selectedTrackId = 'meadow';
+    this.selectedLaps = DEFAULT_LAPS;
     this.closeReason = null;
     this.raceId = null;
     this.clearRace();
@@ -199,7 +203,7 @@ export class GuestSession {
     this.clearRace();
     this.raceId = message.raceId;
     this.players = message.roster;
-    this.template = createRace(message.seed, { trackId: message.trackId });
+    this.template = createRace(message.seed, { trackId: message.trackId, laps: message.laps });
     for (const kart of this.template.karts) {
       const player = this.players.find(entry => entry.slot === kart.id);
       kart.human = !!player && player.kind !== 'cpu';
@@ -274,6 +278,7 @@ export class GuestSession {
         this.slot = message.slot;
         this.players = message.roster;
         this.selectedTrackId = message.trackId;
+        this.selectedLaps = message.laps;
         this.fallbackOffset = message.hostTime - now;
         this.lastPongAt = now;
         this.setPhase('lobby');
@@ -284,6 +289,7 @@ export class GuestSession {
       case 'course':
         if (this.phase !== 'lobby') return;
         this.selectedTrackId = message.trackId;
+        this.selectedLaps = message.laps;
         this.notify();
         break;
       case 'roster':
@@ -297,7 +303,10 @@ export class GuestSession {
           // The guest stays in the lobby; make the otherwise silent mismatch visible.
           console.warn(`Ignored race_start for course ${message.trackId}; the lobby course is ${this.selectedTrackId}.`);
         }
-        if (this.phase === 'lobby' && message.trackId === this.selectedTrackId &&
+        if (this.phase === 'lobby' && message.laps !== this.selectedLaps) {
+          console.warn(`Ignored race_start for laps ${message.laps}; the lobby laps is ${this.selectedLaps}.`);
+        }
+        if (this.phase === 'lobby' && message.trackId === this.selectedTrackId && message.laps === this.selectedLaps &&
           (this.raceId === null || message.raceId > this.raceId) &&
           message.roster.some(player => player.slot === this.slot)) this.start(message, now);
         break;

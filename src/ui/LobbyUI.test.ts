@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { COLORS, courseView, isPlayerName, LobbyUI, normalizeCode, pastedCode, ROOM_CODE } from './LobbyUI';
+import { COLORS, courseView, lapsView, isPlayerName, LobbyUI, normalizeCode, pastedCode, ROOM_CODE } from './LobbyUI';
 import { getTrack, TRACK_IDS } from '../sim/tracks';
 import type { RosterView } from '../net/session';
 import { createRace } from '../sim/race';
@@ -95,11 +95,11 @@ function harness() {
     swatches: COLORS.map(() => element()), rows: [], humanSlots: new Set<number>(),
     roster: null, phase: 'idle', error: '', notice: '', profileDirty: false, pendingProfile: null,
     composingName: false, destroyed: false, selectedColor: COLORS[0], actionVersion: 0,
-    onProfile: vi.fn(),
+    onProfile: vi.fn(), onLaps: vi.fn(),
   };
   const ui = Object.assign(Object.create(LobbyUI.prototype), state) as LobbyUI;
   return {
-    ui, get, name: state.nameInput, swatches: state.swatches, onProfile: state.onProfile,
+    ui, get, name: state.nameInput, swatches: state.swatches, onProfile: state.onProfile, onLaps: state.onLaps,
     edit(value: string) {
       state.nameInput.value = value;
       (ui as unknown as { editName(): void }).editName();
@@ -113,6 +113,50 @@ const roster: RosterView = {
   roomCode: 'AB2X', localSlot: 0,
   players: [{ slot: 0, name: 'HOST', color: COLORS[0], kind: 'host', connected: true }],
 };
+
+describe('LobbyUI laps selection', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it.each([1, 2, 3])('gives the host editable laps %i and the guest a read-only label', selected => {
+    expect(lapsView(selected, 'host')).toEqual({ editable: true, index: selected - 1, label: `${selected} 周` });
+    expect(lapsView(selected, 'guest')).toEqual({ editable: false, index: selected - 1, label: `${selected} 周（ホストが選択）` });
+    const { ui, get } = harness();
+    const inputs = [1, 2, 3].map(n => ({ value: String(n), checked: false }));
+    Object.assign(get('lobby-laps-select'), { querySelectorAll: () => inputs });
+    ui.render(roster, 'lobby');
+    ui.setLaps(selected, 'host');
+    expect(get('lobby-laps-select').hidden).toBe(false);
+    expect(get('lobby-laps-select').disabled).toBe(false);
+    expect(get('lobby-laps-name').hidden).toBe(true);
+    expect(inputs.map(input => input.checked)).toEqual([1, 2, 3].map(n => n === selected));
+    ui.setLaps(selected, 'guest');
+    expect(get('lobby-laps-select').hidden).toBe(true);
+    expect(get('lobby-laps-select').disabled).toBe(true);
+    expect(get('lobby-laps-name').hidden).toBe(false);
+    expect(get('lobby-laps-name').textContent).toBe(`${selected} 周（ホストが選択）`);
+  });
+
+  it.each(['host', 'guest'] as const)('only calls onLaps for a host change in the lobby (%s)', role => {
+    class Input { name = 'lobby-laps'; value = '1'; checked = true; }
+    vi.stubGlobal('HTMLInputElement', Input);
+    const { ui, onLaps } = harness();
+    const view: RosterView = { ...roster, players: [{ ...roster.players[0], kind: role }] };
+    const change = (input = new Input()) => (ui as unknown as { changeLaps(event: Event): void })
+      .changeLaps({ target: input } as unknown as Event);
+    for (const phase of ['idle', 'connecting', 'lobby', 'countdown', 'racing', 'results', 'closed'] as const) {
+      ui.render(view, phase);
+      onLaps.mockClear();
+      change();
+      if (role === 'host' && phase === 'lobby') expect(onLaps).toHaveBeenCalledExactlyOnceWith(1);
+      else expect(onLaps).not.toHaveBeenCalled();
+    }
+    ui.render(view, 'lobby');
+    onLaps.mockClear();
+    for (const value of ['0', '4', '1.5', 'NaN']) change(Object.assign(new Input(), { value }));
+    change(Object.assign(new Input(), { checked: false }));
+    expect(onLaps).not.toHaveBeenCalled();
+  });
+});
 
 describe('LobbyUI render state', () => {
   afterEach(() => vi.unstubAllGlobals());

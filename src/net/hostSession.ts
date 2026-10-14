@@ -1,4 +1,5 @@
 import { getAIInput } from '../sim/ai';
+import { DEFAULT_LAPS, isLapCount } from '../sim/laps';
 import { createRace } from '../sim/race';
 import { COURSE_FINGERPRINT, TRACK_IDS } from '../sim/tracks';
 import type { InputFrame, InputSource, RaceEvent, RaceState, TrackId } from '../sim/types';
@@ -52,6 +53,7 @@ export class HostSession {
   private pendingEvents: RaceEvent[] = [];
   private currentPhase: NetPhase = 'lobby';
   private selectedTrackId: TrackId = 'meadow';
+  private selectedLaps = DEFAULT_LAPS;
   private currentRaceId = 0;
   private currentState: RaceState | null = null;
   private completedTick = 0;
@@ -95,6 +97,7 @@ export class HostSession {
 
   get phase(): NetPhase { return this.currentPhase; }
   get course(): TrackId { return this.selectedTrackId; }
+  get laps(): number { return this.selectedLaps; }
   get raceId(): number { return this.currentRaceId; }
   get state(): RaceState | null { return this.currentState; }
   get startAtHostTime(): number { return this.startAt; }
@@ -146,11 +149,11 @@ export class HostSession {
     this.sampledTicks.fill(0);
     this.buffers.forEach(buffer => buffer.reset(this.currentRaceId));
     this.lastInputs.forEach((_, slot) => { this.lastInputs[slot] = { ...NEUTRAL_INPUT }; });
-    this.currentState = createRace(seed, { trackId: this.selectedTrackId, racers: this.players.map(player => ({
+    this.currentState = createRace(seed, { trackId: this.selectedTrackId, laps: this.selectedLaps, racers: this.players.map(player => ({
       name: player.name, color: player.color, human: player.kind !== 'cpu',
     })) });
     this.currentPhase = 'countdown';
-    this.broadcast({ type: 'race_start', raceId: this.currentRaceId, seed, trackId: this.selectedTrackId,
+    this.broadcast({ type: 'race_start', raceId: this.currentRaceId, seed, trackId: this.selectedTrackId, laps: this.selectedLaps,
       roster: this.copyPlayers(), startAtHostTime: this.startAt });
     this.notify();
     return this.currentState;
@@ -176,7 +179,15 @@ export class HostSession {
   setCourse(id: TrackId): boolean {
     if (this.currentPhase !== 'lobby' || !TRACK_IDS.includes(id)) return false;
     this.selectedTrackId = id;
-    this.broadcast({ type: 'course', trackId: id });
+    this.broadcast({ type: 'course', trackId: id, laps: this.selectedLaps });
+    this.notify();
+    return true;
+  }
+
+  setLaps(n: number): boolean {
+    if (this.currentPhase !== 'lobby' || !isLapCount(n)) return false;
+    this.selectedLaps = n;
+    this.broadcast({ type: 'course', trackId: this.selectedTrackId, laps: n });
     this.notify();
     return true;
   }
@@ -288,7 +299,7 @@ export class HostSession {
     this.assignProfile(player.slot, { ...message, type: 'profile',
       color: this.colorAvailable(player.slot, message.color) ? message.color : player.color });
     this.send(guest, 'reliable', encodeControlMessage({ type: 'welcome', slot: player.slot,
-      roster: this.copyPlayers(), hostTime: this.now(), trackId: this.selectedTrackId }));
+      roster: this.copyPlayers(), hostTime: this.now(), trackId: this.selectedTrackId, laps: this.selectedLaps }));
     this.broadcastRoster();
     this.frame();
   }

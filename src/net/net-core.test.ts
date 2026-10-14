@@ -44,15 +44,15 @@ function finalState() {
 
 const messages: ControlMessage[] = [
   { type: 'hello', protocol: PROTOCOL_VERSION, course: COURSE_FINGERPRINT, name: 'ゲスト', color: 0xff0000 },
-  { type: 'welcome', trackId: 'meadow', slot: 1, roster: players, hostTime: 100 },
+  { type: 'welcome', laps: 3, trackId: 'meadow', slot: 1, roster: players, hostTime: 100 },
   { type: 'reject', reason: 'full' },
   { type: 'roster', players },
   { type: 'profile', name: 'PIP', color: 0xabcdef },
-  { type: 'race_start', trackId: 'meadow', raceId: 1, seed: 0xffffffff, roster: players, startAtHostTime: 1500 },
+  { type: 'race_start', laps: 3, trackId: 'meadow', raceId: 1, seed: 0xffffffff, roster: players, startAtHostTime: 1500 },
   { type: 'events', raceId: 1, tick: 600, events: [{ type: 'lap', kartId: 1, value: 3 }] },
   { type: 'race_end', raceId: 1, finalState: finalState() },
   { type: 'return_lobby' }, { type: 'leave' }, { type: 'host_closed' },
-  { type: 'course', trackId: 'neon' },
+  { type: 'course', laps: 3, trackId: 'neon' },
 ];
 
 async function pair(network: MockTransport, room = 'AB2X') {
@@ -90,6 +90,24 @@ describe('room codes', () => {
 });
 
 describe('control protocol', () => {
+  it.each(['welcome', 'course', 'race_start'] as const)('requires integer laps 1–3 in %s', type => {
+    const message = messages.find(message => message.type === type)!;
+    const guard = controlGuards[type];
+    const missing: Record<string, unknown> = { ...message };
+    delete missing.laps;
+    expect(guard(missing)).toBe(false);
+    expect(parseControlMessage(JSON.stringify(missing))).toBeNull();
+    for (const laps of [0, 4, -1, 1.5, NaN, Infinity, '1', null, undefined]) {
+      expect(guard({ ...message, laps })).toBe(false);
+      expect(parseControlMessage(JSON.stringify({ ...message, laps }))).toBeNull();
+    }
+    for (const laps of [1, 2, 3]) {
+      const valid = { ...message, laps };
+      expect(guard(valid)).toBe(true);
+      expect(parseControlMessage(JSON.stringify(valid))).toEqual(valid);
+    }
+  });
+
   it('isolates protocol v14 rooms from earlier versions', () => {
     expect(PROTOCOL_VERSION).toBe(14);
     expect(ROOM_PREFIX).toBe('pcircuit-v14-');
@@ -103,9 +121,9 @@ describe('control protocol', () => {
 
   it.each(TRACK_IDS)('guards %s in welcome, course, race_start and race_end', trackId => {
     const controls: ControlMessage[] = [
-      { type: 'welcome', slot: 1, roster: players, hostTime: 0, trackId },
-      { type: 'course', trackId },
-      { type: 'race_start', raceId: 1, seed: 42, roster: players, startAtHostTime: 1500, trackId },
+      { type: 'welcome', laps: 3, slot: 1, roster: players, hostTime: 0, trackId },
+      { type: 'course', laps: 3, trackId },
+      { type: 'race_start', laps: 3, raceId: 1, seed: 42, roster: players, startAtHostTime: 1500, trackId },
     ];
     for (const message of controls) {
       expect(parseControlMessage(encodeControlMessage(message))).toEqual(message);
