@@ -49,11 +49,69 @@ export function terrainHeight(track: Track, projection: TrackProjection): number
     ? height + (-1.35 - height) * ((offset - wallHalfWidth) / 22) : -1.35;
 }
 
+type GroundPoint = readonly [x: number, y: number, z: number];
+const DECK_GROUND_MARGIN = 0.6;
+
+/** Project the slab, with a small lateral clearance, onto the ground. */
+function deckFootprints(track: Track): GroundPoint[][] {
+  const footprints: GroundPoint[][] = [];
+  for (const span of track.def.decks ?? []) {
+    const to = span.to < span.from ? span.to + track.length : span.to;
+    const distances = sectionDistances(track, Math.max(1, Math.ceil(384 * (to - span.from) / track.length)),
+      span.from, to, track.samples.map(point => point.distance));
+    const edges = distances.map(d => {
+      const p = sampleTrack(track, d), half = widthAt(track, d).wallHalfWidth + DECK_GROUND_MARGIN;
+      return [-half, half].map((offset): GroundPoint => [p.x + p.nx * offset, 0, p.z + p.nz * offset]);
+    });
+    for (let i = 1; i < edges.length; i++) {
+      footprints.push([edges[i - 1][0], edges[i][0], edges[i][1], edges[i - 1][1]]);
+    }
+  }
+  return footprints;
+}
+
+/** Subtract a convex XZ footprint, interpolating Y to retain the original bank slope. */
+function subtractFootprint(polygon: GroundPoint[], footprint: GroundPoint[]): GroundPoint[][] {
+  const area = footprint.reduce((sum, a, i) => {
+    const b = footprint[(i + 1) % footprint.length];
+    return sum + a[0] * b[2] - b[0] * a[2];
+  }, 0);
+  const sides = footprint.map((a, i) => {
+    const b = footprint[(i + 1) % footprint.length];
+    return (p: GroundPoint): number => Math.sign(area)
+      * ((b[0] - a[0]) * (p[2] - a[2]) - (b[2] - a[2]) * (p[0] - a[0]));
+  });
+  if (Math.abs(area) < 1e-10 || sides.some(side => polygon.every(p => side(p) <= 1e-9))) return [polygon];
+  const kept: GroundPoint[][] = [];
+  let remaining = polygon;
+  for (const side of sides) {
+    const inside: GroundPoint[] = [], outside: GroundPoint[] = [];
+    for (let i = 0; i < remaining.length; i++) {
+      const a = remaining[i], b = remaining[(i + 1) % remaining.length];
+      const da = side(a), db = side(b);
+      if (da >= 0) inside.push(a);
+      if (da <= 0) outside.push(a);
+      if ((da > 0 && db < 0) || (da < 0 && db > 0)) {
+        const t = da / (da - db);
+        const point: GroundPoint = [a[0] + (b[0] - a[0]) * t,
+          a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+        inside.push(point);
+        outside.push(point);
+      }
+    }
+    if (outside.length >= 3) kept.push(outside);
+    remaining = inside;
+    if (remaining.length < 3) break;
+  }
+  return kept;
+}
+
 function ribbonGeometry(track: Track, offsets: RibbonOffsets, lift = 0, slope = false,
   from = 0, to = track.length, boundaries: readonly number[] = [],
   cutouts: readonly SurfaceZone[] = [], omitted: readonly Span[] = []): THREE.BufferGeometry {
   let positions: number[] = [];
   let indices: number[] = [];
+  const footprints = slope && omitted.length ? deckFootprints(track) : [];
   const count = Math.max(1, Math.ceil(384 * (to - from) / track.length));
   // A variable-width edge must also follow the sampled centerline's corners;
   // otherwise a straight chord between width keys cuts inside curved sections.
@@ -72,9 +130,37 @@ function ribbonGeometry(track: Track, offsets: RibbonOffsets, lift = 0, slope = 
   for (let i = 0; i < distances.length - 1; i++) {
     const a = distances[i], b = distances[i + 1];
     const middle = (a + b) / 2 % track.length;
-    if (omitted.some(span => withinSpan(track, middle, span))) continue;
-    if (slope && omitted.length && [i * 2 + 1, i * 2 + 3].some(index =>
-      roadHeightAtXZ(track, positions[index * 3], positions[index * 3 + 2], true, 22) !== undefined)) continue;
+    const onDeck = omitted.some(span => withinSpan(track, middle, span));
+    if (onDeck && !slope) continue;
+    if (footprints.length) {
+      const n = i * 2;
+      let groundHeight = -1.35;
+      if (onDeck) {
+        const ceiling = sampleTrack(track, middle).y - 0.6;
+        // The 22 m halo sets terrain height only; it does not widen the cutout.
+        groundHeight = Math.min(groundHeight, ...[n, n + 1, n + 2, n + 3].map(index =>
+          roadHeightAtXZ(track, positions[index * 3], positions[index * 3 + 2], false, 22, ceiling) ?? -1.35));
+      }
+      for (const triangle of [[n, n + 2, n + 1], [n + 1, n + 2, n + 3]]) {
+        // A suspended slab has flat terrain beside it, not a bank hanging over
+        // the lower lane. Lower that terrain with any sunken crossing as well.
+        let polygons = [triangle.map((index): GroundPoint => [positions[index * 3],
+          onDeck ? groundHeight : positions[index * 3 + 1], positions[index * 3 + 2]])];
+        for (const footprint of footprints) polygons = polygons.flatMap(polygon => subtractFootprint(polygon, footprint));
+        for (const polygon of polygons) {
+          const start = positions.length / 3;
+          polygon.forEach(point => positions.push(...point));
+          for (let j = 1; j < polygon.length - 1; j++) {
+            const [a, b, c] = [polygon[0], polygon[j], polygon[j + 1]];
+            // Adjacent footprints can leave a shared edge with zero area.
+            if (Math.abs((b[0] - a[0]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[0] - a[0])) > 1e-8) {
+              indices.push(start, start + j, start + j + 1);
+            }
+          }
+        }
+      }
+      continue;
+    }
     const holes = cutouts.filter(zone => zone.from <= zone.to
       ? middle >= zone.from && middle < zone.to : middle >= zone.from || middle < zone.to);
     if (!holes.length) {
@@ -106,7 +192,7 @@ function ribbonGeometry(track: Track, offsets: RibbonOffsets, lift = 0, slope = 
     }
   }
   if (omitted.length) {
-    // Deck cutouts must not leave even unreferenced embankment vertices behind.
+    // Compact away the original vertices replaced by clipped bank polygons.
     const compact: number[] = [];
     const remap = new Map<number, number>();
     indices = indices.map(index => {
@@ -323,7 +409,10 @@ function buildDecks(track: Track, theme: CourseTheme, scene: THREE.Group): void 
         const offset = side * (widthAt(track, d).wallHalfWidth - 0.6);
         const x = point.x + point.nx * offset, z = point.z + point.nz * offset;
         const top = pointHeight(track, point, offset) + 0.06 - 0.6;
-        const bottom = Math.min(-1.35, roadHeightAtXZ(track, x, z, false, 0, top) ?? -1.35);
+        // Decorative supports must not pass through a drivable lower branch.
+        // Include the cylinder radius so even its outer face clears the lane.
+        if (roadHeightAtXZ(track, x, z, false, 0.45, top) !== undefined) continue;
+        const bottom = -1.35;
         if (top > bottom) supports.push({ x, z, bottom, top });
       }
     }

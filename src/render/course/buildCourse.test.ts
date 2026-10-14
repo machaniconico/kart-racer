@@ -92,6 +92,27 @@ function hash(array: Float32Array): number {
 }
 
 describe('banked roads and elevated decks', () => {
+  it('preserves the no-deck synthetic fixture geometry and scenery buffers', () => {
+    const track = buildTrack({ ...LEGACY_MEADOW, ...figureEightCourse(), decks: undefined });
+    const buffers: number[] = [];
+    build(track, meadow).group.traverse(object => {
+      if (!(object instanceof THREE.Mesh)) return;
+      for (const name of ['position', 'normal', 'uv']) {
+        const attribute = object.geometry.getAttribute(name);
+        if (attribute) buffers.push(attribute.count, hash(Float32Array.from(attribute.array)));
+      }
+      const index = object.geometry.getIndex();
+      if (index) buffers.push(index.count, hash(Float32Array.from(index.array)));
+      if (object instanceof THREE.InstancedMesh) {
+        buffers.push(object.count, hash(object.instanceMatrix.array as Float32Array));
+        if (object.instanceColor) buffers.push(hash(object.instanceColor.array as Float32Array));
+      }
+    });
+    const signature = buffers.reduce((value, entry) => Math.imul(value ^ entry, 0x01000193) >>> 0, 0x811c9dc5);
+    // Measured before M5-09: includes ribbon indices/normals and all scenery instances.
+    expect(signature).toBe(3519052737);
+  });
+
   it('returns a camera position copy without constructing a WebGL renderer', () => {
     const camera = new THREE.PerspectiveCamera();
     camera.position.set(1, 2, 3);
@@ -190,34 +211,13 @@ describe('banked roads and elevated decks', () => {
     expect(kartRotationZ(track, from - 10)).toBeCloseTo(rollAt(track, from - 10), 12);
   });
 
-  it('cuts all embankment vertices out of the deck span and adds exactly a slab and one pillar batch', () => {
-    const def = figureEightCourse(), track = buildTrack(def);
+  it('adds exactly a slab and one pillar batch with their existing shadow flags', () => {
+    const def = { ...LEGACY_MEADOW, ...figureEightCourse() }, track = buildTrack(def);
     const { upper } = figureEightCrossings(def);
-    const center = sampleTrack(track, upper), span = def.decks![0];
+    const span = def.decks![0];
     const { group } = build(track, meadow);
     const plain = build(buildTrack({ ...def, decks: undefined }), meadow);
     expect(meshCount(group)).toBe(meshCount(plain.group) + 2);
-    for (const side of [-1, 1]) {
-      const inside = (vertices: THREE.BufferAttribute | THREE.InterleavedBufferAttribute): number[][] => {
-        const hits: number[][] = [];
-        for (let i = 0; i < vertices.count; i++) {
-          const x = vertices.getX(i) - center.x, z = vertices.getZ(i) - center.z;
-          const along = x * center.tx + z * center.tz;
-          const offset = x * center.nx + z * center.nz;
-          if (Math.abs(vertices.getY(i) + 1.35) < 1e-6 && along > span.from - upper + 1e-4
-            && along < span.to - upper - 1e-4 && Math.abs(offset) <= track.def.wallHalfWidth + 22 + 1e-5) {
-            hits.push([vertices.getX(i), vertices.getY(i), vertices.getZ(i), along, offset]);
-          }
-        }
-        return hits;
-      };
-      const ground = group.getObjectByName(`ground:${side}`) as THREE.Mesh;
-      expect(inside(ground.geometry.getAttribute('position'))).toEqual([]);
-      const continuous = plain.group.getObjectByName(`ground:${side}`) as THREE.Mesh;
-      expect(continuous.geometry.getAttribute('position').count).toBe(770);
-      expect(continuous.geometry.getIndex()!.count).toBe(384 * 6);
-      expect(inside(continuous.geometry.getAttribute('position')).length).toBeGreaterThan(0);
-    }
     const deck = group.getObjectByName('decks') as THREE.Mesh<THREE.BufferGeometry, THREE.MeshLambertMaterial>;
     expect(deck.castShadow).toBe(true);
     expect(deck.receiveShadow).toBe(true);
@@ -239,13 +239,13 @@ describe('banked roads and elevated decks', () => {
     const pillars = cylinders[0], matrix = new THREE.Matrix4();
     expect(pillars.name).toBe('deck-pillars');
     expect((pillars.material as THREE.MeshLambertMaterial).color.getHex()).toBe(meadow.colors.post);
-    expect(pillars.count).toBeGreaterThanOrEqual((Math.ceil((span.to - span.from) / 20) + 1) * 2);
-    let previous: THREE.Vector3 | undefined;
-    for (let i = 0; i < pillars.count; i += 2) {
+    expect(pillars.castShadow).toBe(true);
+    expect(pillars.receiveShadow).toBe(true);
+    expect(pillars.count).toBeGreaterThan(0);
+    expect(pillars.count).toBeLessThan((Math.ceil((span.to - span.from) / 20) + 1) * 2);
+    for (let i = 0; i < pillars.count; i++) {
       pillars.getMatrixAt(i, matrix);
       const point = new THREE.Vector3().setFromMatrixPosition(matrix);
-      if (previous) expect(Math.hypot(point.x - previous.x, point.z - previous.z)).toBeLessThanOrEqual(20 + 1e-5);
-      previous = point;
       expect(point.y - matrix.elements[5] / 2).toBeCloseTo(-1.35, 5);
       expect(point.y + matrix.elements[5] / 2).toBeCloseTo(surfaceHeightAt(track, upper, 0) + 0.06 - 0.6, 5);
     }
@@ -289,17 +289,102 @@ describe('banked roads and elevated decks', () => {
     expect(color.getHex()).toBe(0x123456);
   });
 
-  it('extends pillars to a lower roadway below the terrain and accepts optional deck colors', () => {
-    const def = figureEightCourse();
-    const track = buildTrack({ ...def, controlPoints: def.controlPoints.map(([x, y, z]) => [x, y - 4, z]) });
+  it.each([0, -4])('keeps every pillar outside the variable-width lower road at height %s', lowerY => {
+    const def = { ...LEGACY_MEADOW, ...figureEightCourse() };
+    const { lower } = figureEightCrossings(def);
+    const track = buildTrack({ ...def, controlPoints: def.controlPoints.map(([x, y, z]) => [x, y + lowerY, z]),
+      widthKeys: [
+        { distance: 0, roadHalfWidth: 9.36, wallHalfWidth: def.wallHalfWidth },
+        { distance: lower - 40, roadHalfWidth: 11, wallHalfWidth: 16 },
+        { distance: lower + 40, roadHalfWidth: 13, wallHalfWidth: 18 },
+        { distance: lower + 80, roadHalfWidth: 9.36, wallHalfWidth: def.wallHalfWidth },
+      ],
+    });
     const { group } = build(track, { ...meadow, colors: { ...meadow.colors, deck: 0x123456, pillar: 0x654321 } });
     const pillars = group.getObjectByName('deck-pillars') as THREE.InstancedMesh;
     const matrix = new THREE.Matrix4();
-    // The middle support row lies over the lower road (y = -4).
-    pillars.getMatrixAt(Math.floor(pillars.count / 4) * 2, matrix);
-    expect(matrix.elements[13] - matrix.elements[5] / 2).toBeCloseTo(-4, 5);
+    const center = sampleTrack(track, lower);
+    expect(pillars.count).toBeGreaterThan(0);
+    for (let i = 0; i < pillars.count; i++) {
+      pillars.getMatrixAt(i, matrix);
+      const x = matrix.elements[12] - center.x, z = matrix.elements[14] - center.z;
+      const along = x * center.tx + z * center.tz;
+      const offset = x * center.nx + z * center.nz;
+      // The crossing branches are straight for ±40 m; this projection is
+      // independent of the renderer's all-samples roadHeightAtXZ lookup.
+      expect(Math.abs(along)).toBeLessThan(40);
+      expect(Math.abs(offset)).toBeGreaterThan(widthAt(track, lower + along).wallHalfWidth + 0.45 - 1e-5);
+      expect(matrix.elements[13] - matrix.elements[5] / 2).toBeCloseTo(-1.35, 5);
+    }
     expect((pillars.material as THREE.MeshLambertMaterial).color.getHex()).toBe(0x654321);
     expect(((group.getObjectByName('decks') as THREE.Mesh).material as THREE.MeshLambertMaterial).color.getHex()).toBe(0x123456);
+    const ground = [-1, 1].map(side => group.getObjectByName(`ground:${side}`) as THREE.Mesh);
+    const ray = new THREE.Raycaster(new THREE.Vector3(), new THREE.Vector3(0, -1, 0));
+    // Outside the deck cutout, retained terrain must also stay below a sunken
+    // crossing. Inspect the ground ribbons, independent of the base plane.
+    for (const along of [-30, -20, 20, 30]) for (const offset of [-10, 0, 10]) {
+      const point = sampleTrack(track, lower + along);
+      ray.ray.origin.set(point.x + point.nx * offset, 100, point.z + point.nz * offset);
+      const hits = ray.intersectObjects(ground, false);
+      expect(hits.length).toBeGreaterThan(0);
+      expect(Math.max(...hits.map(hit => hit.point.y))).toBeLessThanOrEqual(lowerY + 1e-5);
+    }
+  });
+
+  it.each([false, true])('limits ground cutouts to the deck projection plus 0.6 m and retains banks (taper: %s)', taper => {
+    const def = { ...LEGACY_MEADOW, ...figureEightCourse() };
+    const { lower, upper } = figureEightCrossings(def);
+    const track = buildTrack({ ...def, widthKeys: taper ? [
+      { distance: 0, roadHalfWidth: 9.36, wallHalfWidth: def.wallHalfWidth },
+      { distance: upper - 20, roadHalfWidth: 9.36, wallHalfWidth: 12 },
+      { distance: upper + 20, roadHalfWidth: 9.36, wallHalfWidth: 16 },
+      { distance: upper + 40, roadHalfWidth: 9.36, wallHalfWidth: def.wallHalfWidth },
+    ] : undefined });
+    const deckMargin = 0.6; // metres per side beyond the deck's wallHalfWidth.
+    const built = build(track, meadow), plain = build(buildTrack({ ...track.def, decks: undefined }), meadow);
+    const grounds = (course: Course): THREE.Mesh[] => [-1, 1].map(side => course.group.getObjectByName(`ground:${side}`) as THREE.Mesh);
+    const clipped = grounds(built), original = grounds(plain);
+    const ray = new THREE.Raycaster(new THREE.Vector3(), new THREE.Vector3(0, -1, 0));
+    const hits = (meshes: THREE.Mesh[], x: number, z: number): THREE.Intersection[] => {
+      ray.ray.origin.set(x, 100, z);
+      return ray.intersectObjects(meshes, false);
+    };
+    const high = sampleTrack(track, upper);
+    let removed = 0, retained = 0;
+    // Probe the lower bank across the deck boundary and all the way to the
+    // outer edge, so dropping a whole 22 m quad cannot satisfy this test.
+    for (let along = -38.7; along < 39; along += 1.3) {
+      const p = sampleTrack(track, lower + along), wall = widthAt(track, lower + along).wallHalfWidth;
+      for (const side of [-1, 1]) for (let extra = 0.2; extra < 22; extra += 1.7) {
+        const x = p.x + p.nx * side * (wall + extra), z = p.z + p.nz * side * (wall + extra);
+        const deckAlong = (x - high.x) * high.tx + (z - high.z) * high.tz;
+        const deckOffset = (x - high.x) * high.nx + (z - high.z) * high.nz;
+        const cut = Math.abs(deckAlong) < 20 && Math.abs(deckOffset) < widthAt(track, upper + deckAlong).wallHalfWidth + deckMargin;
+        const before = hits(original, x, z), after = hits(clipped, x, z);
+        expect(before.length).toBeGreaterThan(0);
+        if (cut) {
+          expect(after, `inside projection at ${deckAlong}, ${deckOffset}`).toHaveLength(0);
+          removed++;
+        } else {
+          const lowerBankY = -extra / 22 * 1.35;
+          expect(after.some(hit => Math.abs(hit.point.y - lowerBankY) < 1e-4),
+            `retained bank at ${deckAlong}, ${deckOffset}`).toBe(true);
+          retained++;
+        }
+      }
+    }
+    expect(removed).toBeGreaterThan(50);
+    expect(retained).toBeGreaterThan(500);
+    // Immediately outside the cut, retain ground beside the upper slab at
+    // terrain height; a suspended embankment must not block the lower lane.
+    for (const along of [-19, -10, 0, 10, 19]) for (const side of [-1, 1]) {
+      const p = sampleTrack(track, upper + along), wall = widthAt(track, upper + along).wallHalfWidth;
+      for (const extra of [deckMargin - 0.01, deckMargin + 0.01, 21.5]) {
+        const after = hits(clipped, p.x + p.nx * side * (wall + extra), p.z + p.nz * side * (wall + extra));
+        if (extra < deckMargin) expect(after).toHaveLength(0);
+        else expect(after.some(hit => Math.abs(hit.point.y + 1.35) < 1e-5)).toBe(true);
+      }
+    }
   });
 
   it('cuts wrapped and multiple deck spans without adding more batches', () => {
@@ -314,7 +399,8 @@ describe('banked roads and elevated decks', () => {
         // Inner edges project exactly to their own straight section.
         if (Math.abs(Math.abs(projection.offset) - track.def.wallHalfWidth) > 1e-3) continue;
         expect(projection.distance > 80.001 && projection.distance < 119.999).toBe(false);
-        expect(projection.distance < 9.999 || projection.distance > track.length - 9.999).toBe(false);
+        expect(projection.distance < 9.999 || projection.distance > track.length - 9.999,
+          JSON.stringify({ projection, point: [vertices.getX(i), vertices.getY(i), vertices.getZ(i)] })).toBe(false);
       }
     }
   });
