@@ -31,7 +31,7 @@ export default defineConfig({
     },
   },
   webServer: {
-    command: 'vite --config e2e/vite.e2e.config.ts --mode development',
+    command: 'vite build --mode e2e && vite preview --config e2e/vite.e2e.config.ts --port 4174 --strictPort',
     url: 'http://127.0.0.1:4174/kart-racer/',
     reuseExistingServer: false,
     timeout: 60_000,

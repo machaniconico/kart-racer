@@ -41,11 +41,8 @@ for (const { id, name, layout, drawCalls: baselineDrawCalls, triangles: baseline
     }))).toEqual({ selected: id, rendered: id });
     // Reproduce the seed-127 baseline: ten stationary frames, including shadows.
     // Synchronous renders avoid CPU movement and wall-clock-dependent culling.
-    const { renderSamples, grid, meshes } = await page.evaluate(async id => {
-      const simPath = `${location.pathname}src/sim/index.ts`;
-      const snapshotPath = `${location.pathname}src/render/snapshot.ts`;
-      const { createRace }: typeof import('../src/sim') = await import(simPath);
-      const { captureRenderSnapshot }: typeof import('../src/render/snapshot') = await import(snapshotPath);
+    const { renderSamples, grid, meshes } = await page.evaluate(id => {
+      const { createRace, captureRenderSnapshot } = window.__kartDebug.modules;
       const renderer = window.__kartDebug.renderer!;
       const state = createRace(127, { trackId: id });
       const snapshot = captureRenderSnapshot(state);
@@ -205,11 +202,8 @@ test('M3-08: NEON eight CPUs finish three laps and mechanisms keep animating', a
   await page.waitForFunction(() => !!window.__kartDebug);
   await page.locator('#course-select input[value="neon"]').check();
   await page.locator('#start-race').click();
-  const { screenshots, ...log } = await page.evaluate(async () => {
-    const simPath = `${location.pathname}src/sim/index.ts`;
-    const snapshotPath = `${location.pathname}src/render/snapshot.ts`;
-    const { createRace, getTrack, sampleTrack }: typeof import('../src/sim') = await import(simPath);
-    const { captureRenderSnapshot }: typeof import('../src/render/snapshot') = await import(snapshotPath);
+  const { screenshots, ...log } = await page.evaluate(() => {
+    const { createRace, getTrack, sampleTrack, captureRenderSnapshot } = window.__kartDebug.modules;
     const debug = window.__kartDebug;
     // Reset synchronously to a fixed seed with all eight slots genuinely CPU-controlled.
     Object.assign(debug.state, createRace(127, { trackId: 'neon', racers: debug.state.karts.map(kart => ({
@@ -239,13 +233,20 @@ test('M3-08: NEON eight CPUs finish three laps and mechanisms keep animating', a
       return { time, lateral: (band.position.x - point.x) * point.nx + (band.position.z - point.z) * point.nz,
         rotationY: disc.rotation.y };
     });
+    const gateMotion = gate.motion!;
+    // The gate is widest (closed) at phase 0 and narrowest (open) at phase PI.
+    const gateTime = (phase: number) => {
+      const time = (phase - gateMotion.phase) * gateMotion.period / (2 * Math.PI);
+      return ((time % gateMotion.period) + gateMotion.period) % gateMotion.period;
+    };
     const screenshots = [
-      { name: 'neon-sweep', distance: sweep.from - 10 },
-      { name: 'neon-gate', distance: gate.from - 10 },
-      { name: 'neon-spin', distance: spin.from - 10 },
-    ].map(({ name, distance }) => {
+      { name: 'neon-sweep', distance: sweep.from - 10, time: sweep.motion!.period / 4 },
+      { name: 'neon-gate-closed', distance: gate.from - 10, time: gateTime(0) },
+      { name: 'neon-gate-open', distance: gate.from - 10, time: gateTime(Math.PI) },
+      { name: 'neon-spin', distance: spin.from - 10, time: sweep.motion!.period / 4 },
+    ].map(({ name, distance, time }) => {
       const point = sampleTrack(track, distance);
-      const state = { ...debug.state, time: sweep.motion!.period / 4,
+      const state = { ...debug.state, time,
         karts: debug.state.karts.map(kart => kart.id === 0 ? { ...kart,
           x: point.x, y: point.y, z: point.z, heading: Math.atan2(point.tx, point.tz),
           trackDistance: distance, lateralOffset: 0, speed: 0, steer: 0,
@@ -260,6 +261,9 @@ test('M3-08: NEON eight CPUs finish three laps and mechanisms keep animating', a
     })), motion, screenshots };
   });
   await testInfo.attach('neon-three-laps-motion', { body: JSON.stringify(log), contentType: 'application/json' });
+  const closed = Buffer.from(screenshots.find(shot => shot.name === 'neon-gate-closed')!.png, 'base64');
+  const open = Buffer.from(screenshots.find(shot => shot.name === 'neon-gate-open')!.png, 'base64');
+  expect(closed.equals(open)).toBe(false);
   for (const { name, png } of screenshots) {
     await testInfo.attach(name, { body: Buffer.from(png, 'base64'), contentType: 'image/png' });
   }
@@ -284,11 +288,8 @@ for (const human of [true, false]) {
     await page.locator('#assist-title').check();
     await page.locator('#start-race').click();
     await page.keyboard.down('ArrowUp');
-    const { screenshots, ...log } = await page.evaluate(async human => {
-      const simPath = `${location.pathname}src/sim/index.ts`;
-      const snapshotPath = `${location.pathname}src/render/snapshot.ts`;
-      const { createRace, FIXED_DT, getTrack, rollAt, sampleTrack, slopeAt }: typeof import('../src/sim') = await import(simPath);
-      const { captureRenderSnapshot }: typeof import('../src/render/snapshot') = await import(snapshotPath);
+    const { screenshots, ...log } = await page.evaluate(human => {
+      const { createRace, FIXED_DT, getTrack, rollAt, sampleTrack, slopeAt, captureRenderSnapshot } = window.__kartDebug.modules;
       const debug = window.__kartDebug;
       Object.assign(debug.state, createRace(127, { trackId: 'snowpeak', racers: debug.state.karts.map(kart => ({
         name: kart.name, color: kart.color, human: human && kart.id === 0,

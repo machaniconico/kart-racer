@@ -1,24 +1,10 @@
 import { mkdir } from 'node:fs/promises';
 import { test as base, expect } from '@playwright/test';
 import type { Page, TestInfo } from '@playwright/test';
-import type { NetPhase, RosterView } from '../src/net/session';
-import type { RaceState, TrackId } from '../src/sim/types';
+import type { KartDebug } from '../src/main';
+import type { TrackId } from '../src/sim/types';
 
-declare global {
-  interface Window {
-    __kartDebug: {
-      screen: 'title' | 'lobby' | 'race' | 'results';
-      mode: 'solo' | 'host' | 'guest';
-      state: RaceState;
-      course: TrackId;
-      render: { drawCalls: number; trackId: TrackId | null };
-      rendererInfo: { memory: { geometries: number } } | undefined;
-      selectCourse(id: TrackId): void;
-      net: { phase: NetPhase; slot: number; roster: RosterView | null };
-      advance(ticks: number, autopilot?: boolean): void;
-    };
-  }
-}
+declare const window: Window & { __kartDebug: KartDebug };
 
 const CONNECTION_TIMEOUT = 40_000;
 const RACE_TIMEOUT = 20_000;

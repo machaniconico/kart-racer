@@ -8,7 +8,7 @@ import type { Transport } from './net/transport';
 import { GameRenderer } from './render/GameRenderer';
 import { kartRotationZ } from './render/kartRoll';
 import { captureRenderSnapshot } from './render/snapshot';
-import { createRace, FIXED_DT, getAIInput, getTrack, projectToTrack, stepRace, surfaceHeightAt, TRACK_IDS } from './sim';
+import { createRace, FIXED_DT, getAIInput, getTrack, projectToTrack, rollAt, sampleTrack, slopeAt, stepRace, surfaceHeightAt, TRACK_IDS } from './sim';
 import { widthAt } from './sim/corridor';
 import { DEFAULT_LAPS, isLapCount } from './sim/laps';
 import type { InputFrame, InputSource, RaceState, TrackId } from './sim';
@@ -561,9 +561,10 @@ function frame(now: number): void {
 ui.show('title');
 frameId = requestAnimationFrame(frame);
 
-// This bridge is compiled away in production. It permits reproducible local browser QA.
+// This bridge is compiled away unless development or the explicit E2E mode enables it.
 function createDebugBridge() {
   return {
+    modules: { createRace, captureRenderSnapshot, getTrack, FIXED_DT, rollAt, sampleTrack, slopeAt },
     get state(): RaceState { return state; },
     get screen() { return screen; },
     get paused() { return paused; },
@@ -588,7 +589,7 @@ function createDebugBridge() {
     /** Selected course: the room's course online, otherwise the title selection. */
     get course(): TrackId { return (host ?? guest)?.course ?? course; },
     render: {
-      get courseGroup() { return renderer?.['course'].group; },
+      get courseGroup() { return renderer?.courseGroup; },
       get drawCalls() { return renderer?.getDrawCalls() ?? 0; },
       get triangles() { return renderer?.renderer.info.render.triangles ?? 0; },
       get trackId() { return renderer?.getTrackId() ?? null; },
@@ -633,7 +634,7 @@ function createDebugBridge() {
 
 export type KartDebug = ReturnType<typeof createDebugBridge>;
 
-if (import.meta.env.DEV) {
+if (import.meta.env.DEV || import.meta.env.VITE_KART_DEBUG === '1') {
   Object.assign(window, { __kartDebug: createDebugBridge() });
 }
 

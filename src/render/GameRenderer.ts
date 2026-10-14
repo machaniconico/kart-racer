@@ -315,6 +315,10 @@ export class GameRenderer {
     this.renderer.render(this.scene, this.camera);
   }
 
+  get courseGroup(): THREE.Group {
+    return this.course.group;
+  }
+
   getTrackId(): TrackId {
     return this.track.def.id;
   }

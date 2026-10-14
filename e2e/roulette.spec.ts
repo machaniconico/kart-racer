@@ -1,5 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
-import type {} from './multiplayer.spec';
+import type { KartDebug } from '../src/main';
+
+declare const window: Window & { __kartDebug: KartDebug };
 
 // The race loop keeps running between Playwright calls, so each scenario runs inside one page.evaluate:
 // key events and __kartDebug.advance() are synchronous there, which makes the tick counts exact.
@@ -26,7 +28,9 @@ function scenario(page: Page, steps: Step[]) {
     me.item = null; me.speed = 0; me.effects.rouletteTime = 0; me.spinTime = 0;
     me.x = box.x; me.z = box.z;
     debug.advance(1);
-    const log = [{ step: 'grab', item: me.item, roulette: me.effects.rouletteTime }];
+    const log: { step: string; item: KartDebug['state']['karts'][number]['item']; roulette: number }[] = [
+      { step: 'grab', item: me.item, roulette: me.effects.rouletteTime },
+    ];
     me.item = 'dash';
     for (const step of plan) {
       if ('key' in step) {
