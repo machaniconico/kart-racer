@@ -321,17 +321,16 @@ describe('banked roads and elevated decks', () => {
 });
 
 describe('MEADOW appearance regression', () => {
-  it('keeps the original seed-127 instance transforms and colors, including distant scenery', () => {
+  it('pins layout 3 seed-127 instance transforms and colors, including distant scenery', () => {
     const { group } = build(getTrack('meadow'), meadow);
-    // Captured by running the pre-extraction GameRenderer.buildScenery in node; re-captured for the M2.5 +30% width
-    // (layout 2): trunks, crowns, rocks and flowers sit relative to the road edge, peaks and clouds do not.
+    // M5-01: measured in node with the new layout and theme, retaining 384 ribbon divisions.
     const golden = [
-      ['trunks', 150, 2263195858, undefined, 0x927050],
-      ['crowns', 150, 2780632739, 1144846729, 0x34a67b],
-      ['rocks', 54, 3559987222, undefined, 0xa3b7a6],
-      ['flowers', 120, 959266697, undefined, 0xffe97e],
-      ['peaks', 16, 2858478304, 3380652807, 0x75b99d],
-      ['clouds', 36, 2799982802, undefined, 0xf7fff0],
+      ['trunks', 240, 3605848358, undefined, 0x927050],
+      ['crowns', 240, 3266488595, 3039214731, 0x34a67b],
+      ['rocks', 72, 308681814, undefined, 0xa3b7a6],
+      ['flowers', 192, 4229755394, undefined, 0xffe97e],
+      ['peaks', 16, 2646345670, 3153255523, 0x75b99d],
+      ['clouds', 36, 3299357665, undefined, 0xf7fff0],
     ] as const;
     for (const [name, count, matrix, color, baseColor] of golden) {
       const mesh = group.getObjectByName(name) as THREE.InstancedMesh<THREE.BufferGeometry, THREE.MeshLambertMaterial>;
@@ -349,6 +348,7 @@ describe('MEADOW appearance regression', () => {
       object instanceof THREE.Mesh && object.geometry.type === 'BufferGeometry');
     expect(ribbons.map(mesh => mesh.material.color.getHex())).toEqual([
       0x596d73, 0x98cf64, 0x82c767, 0xf8f6d8, 0x98cf64, 0x82c767, 0xf8f6d8,
+      0x99683f, 0xffbe62,
     ]);
     expect(meadow.colors.curb).toEqual([0xeb695f, 0xfff1d1]);
     expect(meadow.colors.sky).toBe(0xa3dce6);
@@ -361,7 +361,8 @@ describe('MEADOW appearance regression', () => {
     expect(skyMaterial.uniforms.top.value.getHex()).toBe(0x51b8ed);
     expect(skyMaterial.uniforms.bottom.value.getHex()).toBe(0xdff4ee);
     const road = ribbons[0].geometry.getAttribute('position');
-    expect(road.count).toBe(770);
+    // 384 divisions plus exact samples, width/bank keys and surface boundaries.
+    expect(road.count).toBe(3356);
     for (let side = 0; side < 2; side++) {
       expect([road.getX(side), road.getY(side), road.getZ(side)]).toEqual([
         road.getX(road.count - 2 + side), road.getY(road.count - 2 + side), road.getZ(road.count - 2 + side),
@@ -374,7 +375,7 @@ describe('track-driven surfaces', () => {
   it('draws each kind over its exact distance and lane bounds on a different track shape', () => {
     const base = getTrack('meadow');
     const track = buildTrack({
-      ...base.def,
+      ...base.def, widthKeys: [], bankKeys: [],
       scale: 1.25,
       roadHalfWidth: 6,
       surfaces: [
@@ -407,7 +408,7 @@ describe('track-driven surfaces', () => {
   it('draws a single zone that wraps the finish line along the track, not as one chord', () => {
     const base = getTrack('meadow');
     const surfaces: SurfaceZone[] = [{ kind: 'ice', from: base.length - 60, to: 60 }];
-    const { group } = build(buildTrack({ ...base.def, surfaces }), meadow);
+    const { group } = build(buildTrack({ ...base.def, widthKeys: [], bankKeys: [], surfaces }), meadow);
     const positions = (group.getObjectByName('surface:ice') as THREE.Mesh).geometry.getAttribute('position');
     const segments = Math.ceil(384 * 120 / base.length);
     expect(positions.count).toBe((segments + 1) * 2);
@@ -423,7 +424,7 @@ describe('track-driven surfaces', () => {
       { kind: 'ice', from: base.length - 8, to: base.length },
       { kind: 'ice', from: 0, to: 7 },
     ];
-    const { group } = build(buildTrack({ ...base.def, surfaces }), meadow);
+    const { group } = build(buildTrack({ ...base.def, widthKeys: [], bankKeys: [], surfaces }), meadow);
     const positions = (group.getObjectByName('surface:ice') as THREE.Mesh).geometry.getAttribute('position');
     const join = (Math.ceil(384 * 8 / base.length) + 1) * 2;
     for (let side = 0; side < 2; side++) {
@@ -435,7 +436,7 @@ describe('track-driven surfaces', () => {
 
   it('includes width corners on both sides of a wrapped decal', () => {
     const base = getTrack('meadow');
-    const track = buildTrack({ ...base.def, widthKeys: [
+    const track = buildTrack({ ...base.def, bankKeys: [], widthKeys: [
       { distance: 12.37, roadHalfWidth: 12, wallHalfWidth: 14.5 },
       { distance: base.length - 23.17, roadHalfWidth: 7.2, wallHalfWidth: 9 },
     ], surfaces: [{ kind: 'dirt', from: base.length - 40, to: 30 }] });
@@ -459,7 +460,7 @@ describe('track-driven surfaces', () => {
 describe('variable widths and batched barriers', () => {
   it('follows 7.2 → 12 m widths at every ribbon sample and rail/post/curb instance, including the seam', () => {
     const base = getTrack('meadow');
-    const track = buildTrack({ ...base.def, widthKeys: [
+    const track = buildTrack({ ...base.def, bankKeys: [], widthKeys: [
       { distance: 0, roadHalfWidth: 7.2, wallHalfWidth: 9 },
       { distance: 101.37, roadHalfWidth: 7.2, wallHalfWidth: 9 },
       { distance: 117.37, roadHalfWidth: 12, wallHalfWidth: 14.5 },
@@ -605,7 +606,7 @@ describe('variable widths and batched barriers', () => {
       { from: 180, to: 205, center: 3, halfWidth: 1, taper: 6, scenery },
       { from: base.length - 8, to: 8, center: 0, halfWidth: 1.5, taper: 4, scenery },
     ];
-    const track = buildTrack({ ...base.def, barriers, surfaces: [
+    const track = buildTrack({ ...base.def, widthKeys: [], bankKeys: [], barriers, surfaces: [
       { kind: 'ice', from: 40, to: 50 }, { kind: 'ice', from: 80, to: 90 },
       { kind: 'dirt', from: 120, to: 140 }, { kind: 'dirt', from: base.length - 10, to: 10 },
     ] });
@@ -1056,7 +1057,7 @@ describe('course resource ownership', () => {
         }
       });
       expect(geometries.size).toBeGreaterThan(20);
-      expect(textures.size).toBe(8); // Banner, four chevrons, two lane signs, one instance morph texture.
+      expect(textures.size).toBe(4 + theme.signFractions.length); // Banner, chevrons, two lane signs, morph texture.
       for (const name of ['islands', `island-scenery:${iteration === 0 ? 'rock' : 'building'}`,
         'lane-sign:0:0', 'lane-sign:0:1', 'surface:pit']) {
         const mesh = course.group.getObjectByName(name) as THREE.Mesh;

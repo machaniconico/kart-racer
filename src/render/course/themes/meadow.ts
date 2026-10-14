@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { projectToTrack, sampleTrack } from '../../../sim';
 import type { Track } from '../../../sim';
+import { widthAt } from '../../../sim/corridor';
 import type { SceneryBudget } from '../CourseTheme';
 import type { CourseTheme } from '../buildCourse';
 import { material, place, terrainHeight } from '../buildCourse';
@@ -20,8 +21,11 @@ export const meadow: CourseTheme = {
     hemisphere: { sky: 0xe5faff, ground: 0x6d965b, intensity: 2.25 },
     sun: { color: 0xfff1d4, intensity: 2.25, position: [70, 100, 40], offset: [55, 85, 35] },
   },
-  signFractions: [0.18, 0.37, 0.61, 0.82],
-  budget: { trees: 150, rocks: 54, flowers: 120 },
+  // Approach signs sit between the 24 gates, ahead of the main bends.
+  signFractions: [2.25 / 24, 5.25 / 24, 9.25 / 24, 13.25 / 24, 15.25 / 24, 18.25 / 24, 22.25 / 24],
+  // M5-00's 2149.6 m dry run rendered 78,406 triangles against a 158,975 cap.
+  // Moderate prop growth leaves room for the new width/bank ribbons; M5-05 measures the GPU total.
+  budget: { trees: 240, rocks: 72, flowers: 192 },
   buildProps,
   // MEADOW has no course-specific landmarks.
   buildLandmarks() {},
@@ -30,6 +34,12 @@ export const meadow: CourseTheme = {
 function buildProps(track: Track, scene: THREE.Group, budget: SceneryBudget): void {
   const transform = new THREE.Object3D();
   transform.rotation.order = 'YXZ';
+  const minX = Math.min(...track.samples.map(point => point.x)) - 65;
+  const maxX = Math.max(...track.samples.map(point => point.x)) + 65;
+  const minZ = Math.min(...track.samples.map(point => point.z)) - 65;
+  const maxZ = Math.max(...track.samples.map(point => point.z)) + 65;
+  const centerX = (minX + maxX) / 2;
+  const centerZ = (minZ + maxZ) / 2;
   // Scenery uses a local deterministic sequence and never consumes simulation RNG.
   let seed = 127;
   const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
@@ -41,10 +51,10 @@ function buildProps(track: Track, scene: THREE.Group, budget: SceneryBudget): vo
   for (let i = 0; i < trees; i++) {
     let x = 0, z = 0, projection = projectToTrack(track, 0, 0);
     for (let tries = 0; tries < 100; tries++) {
-      x = (random() - 0.5) * 365;
-      z = (random() - 0.5) * 365;
+      x = minX + random() * (maxX - minX);
+      z = minZ + random() * (maxZ - minZ);
       projection = projectToTrack(track, x, z);
-      if (Math.abs(projection.offset) > track.def.wallHalfWidth + 6) break;
+      if (Math.abs(projection.offset) > widthAt(track, projection.distance).wallHalfWidth + 6) break;
     }
     const y = terrainHeight(track, projection);
     const scale = 0.75 + random() * 0.7;
@@ -66,7 +76,7 @@ function buildProps(track: Track, scene: THREE.Group, budget: SceneryBudget): vo
   }
   for (let i = 0; i < flowers.count; i++) {
     const p = sampleTrack(track, random() * track.length);
-    const offset = (track.def.roadHalfWidth + 1.2 + random() * 1.2) * (i % 2 ? -1 : 1);
+    const offset = (widthAt(track, p.distance).roadHalfWidth + 1.2 + random() * 1.2) * (i % 2 ? -1 : 1);
     place(track, transform, p, offset, 0.28);
     flowers.setMatrixAt(i, transform.matrix);
   }
@@ -80,7 +90,8 @@ function buildProps(track: Track, scene: THREE.Group, budget: SceneryBudget): vo
   const peaks = new THREE.InstancedMesh(new THREE.ConeGeometry(45, 65, 5), material(0x75b99d), 16);
   for (let i = 0; i < peaks.count; i++) {
     const angle = i / peaks.count * Math.PI * 2;
-    transform.position.set(Math.cos(angle) * 290, 13 + random() * 12, Math.sin(angle) * 290);
+    transform.position.set(centerX + Math.cos(angle) * ((maxX - minX) / 2 + 110),
+      13 + random() * 12, centerZ + Math.sin(angle) * ((maxZ - minZ) / 2 + 110));
     transform.rotation.set(0, random() * 3, 0);
     transform.scale.set(1 + random(), 0.7 + random() * 0.8, 1 + random());
     transform.updateMatrix();
@@ -92,7 +103,8 @@ function buildProps(track: Track, scene: THREE.Group, budget: SceneryBudget): vo
   const clouds = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), new THREE.MeshBasicMaterial({ color: 0xf7fff0 }), 36);
   for (let i = 0; i < clouds.count; i++) {
     const angle = i / clouds.count * Math.PI * 2;
-    transform.position.set(Math.cos(angle) * 220, 48 + random() * 24, Math.sin(angle) * 220);
+    transform.position.set(centerX + Math.cos(angle) * (maxX - minX) / 2,
+      48 + random() * 24, centerZ + Math.sin(angle) * (maxZ - minZ) / 2);
     transform.scale.set(8 + random() * 13, 3 + random() * 4, 5 + random() * 6);
     transform.rotation.set(0, 0, 0);
     transform.updateMatrix();

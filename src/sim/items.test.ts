@@ -1139,6 +1139,16 @@ describe('I2 reviewer regressions', () => {
   it.each([1, 7, 42, 314, 981, 65535])('avoids forward bomb proximity self-hits in an eight-kart AI pack (seed %s)', seed => {
     const state = createRace(seed);
     state.boxes = [];
+    // Stage the same eight-kart grid on the new hairpin's exit straight.
+    // Keep the original spacing/lanes and all six seeds and forward-throw checks.
+    for (const kart of state.karts) {
+      const point = sampleTrack(track, kart.trackDistance + 400);
+      Object.assign(kart, {
+        x: point.x + point.nx * kart.lateralOffset, y: point.y,
+        z: point.z + point.nz * kart.lateralOffset,
+        heading: Math.atan2(point.tx, point.tz), trackDistance: point.distance,
+      });
+    }
     let launches = 0;
     let proximityExplosions = 0;
     let selfHits = 0;
@@ -1304,6 +1314,8 @@ describe('I3 ink and autopilot', () => {
   it('drives despite contrary human inputs during autopilot and returns control at expiry', () => {
     const state = race();
     const kart = state.karts[0];
+    // Start on the final bend so the four-second effect expires on the home straight.
+    place(kart, track.length - 65);
     kart.item = 'autopilot';
     stepRace(state, [PRESS]);
     for (let tick = 1; tick < 240; tick++) {
@@ -1891,7 +1903,8 @@ describe('I5 orbit guard', () => {
 
 describe('M1 barrier bands for projectiles', () => {
   const barrier = { from: 1500, to: 1530, center: 0, halfWidth: 1, taper: 4 };
-  const banded = buildTrack({ ...track.def, scale: 1, surfaces: [], racingLine: [], barriers: [barrier],
+  const banded = buildTrack({ ...track.def, scale: 1, surfaces: [], racingLine: [],
+    widthKeys: [], bankKeys: [], barriers: [barrier],
     controlPoints: [[-1500, 0, 0], [-1000, 0, 0], [-500, 0, 0], [0, 0, 0],
       [500, 0, 0], [1000, 0, 0], [1500, 0, 0], [1500, 0, 1000], [-1500, 0, 1000]] });
 
