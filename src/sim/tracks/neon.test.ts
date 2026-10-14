@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { getAIInput } from '../ai';
+import { validateTrackDef } from '../corridor';
 import { TOTAL_LAPS } from '../laps';
 import { createRace, FIXED_DT, stepRace } from '../race';
 import { crossedZone, racingLineOffset } from '../surfaces';
@@ -95,7 +96,7 @@ describe('NEON NIGHTLINE', () => {
 
   it('places one float32-exact boost panel at the entrance of a straight tunnel', () => {
     expect(NEON_TUNNEL.to - NEON_TUNNEL.from).toBeGreaterThanOrEqual(60);
-    expect(track.def.surfaces).toEqual([
+    expect(track.def.surfaces.filter(zone => zone.kind === 'boost')).toEqual([
       { kind: 'boost', from: NEON_TUNNEL.from, to: NEON_TUNNEL.from + 6 },
     ]);
     expect(Math.fround(NEON_TUNNEL.from)).toBe(NEON_TUNNEL.from);
@@ -104,6 +105,47 @@ describe('NEON NIGHTLINE', () => {
       if (point.distance < NEON_TUNNEL.from || point.distance > NEON_TUNNEL.to) continue;
       expect(radius(track.samples[i - 1]!, point, track.samples[i + 1]!)).toBeGreaterThanOrEqual(200);
     }
+  });
+
+  it('validates layout 3 with one sweep, one gate and one 12m spin floor', () => {
+    expect(track.def.layoutVersion).toBe(3);
+    expect(track.def.barriers).toEqual([
+      {
+        from: 176, to: 208, center: -2, halfWidth: 1.2, taper: 4, scenery: 'pillar',
+        motion: { kind: 'sweep', amplitude: 4.0, period: 6, phase: 0 },
+      },
+      {
+        from: 340, to: 370, center: 0, halfWidth: 3.6, taper: 8, scenery: 'block',
+        motion: { kind: 'gate', amplitude: 0, period: 5, phase: 0, minWidth: 1.2 },
+      },
+    ]);
+    expect(track.def.surfaces.filter(zone => zone.kind === 'spin')).toEqual([
+      { kind: 'spin', from: 558, to: 570, offsetMin: -6, offsetMax: 6, rate: 1.0 },
+    ]);
+    expect(() => validateTrackDef(track.def)).not.toThrow();
+  });
+
+  it('starts detours at least 30m early with lateral slopes no greater than 0.30', () => {
+    expect(track.def.racingLine).toEqual([
+      { distance: 0, offset: 0 },
+      { distance: 95, offset: 0 }, { distance: 137, offset: -3.25 },
+      { distance: 176, offset: 6.8 }, { distance: 208, offset: 6.8 }, { distance: 240, offset: 0 },
+      { distance: 260, offset: 0 }, { distance: 302, offset: -3.25 },
+      { distance: 340, offset: 5.2 }, { distance: 370, offset: 5.2 }, { distance: 400, offset: 0 },
+      { distance: 425, offset: 0 }, { distance: 467, offset: -3.25 }, { distance: 507, offset: 0 },
+      { distance: 590, offset: 0 }, { distance: 632, offset: -3.25 },
+    ]);
+    for (const barrier of track.def.barriers!) {
+      const approach = track.def.racingLine.filter(point => point.distance < barrier.from).at(-1)!;
+      expect(barrier.from - approach.distance).toBeGreaterThanOrEqual(30);
+    }
+    for (let i = 1; i < track.def.racingLine.length; i++) {
+      const previous = track.def.racingLine[i - 1]!;
+      const point = track.def.racingLine[i]!;
+      expect(Math.abs(point.offset - previous.offset) / (point.distance - previous.distance))
+        .toBeLessThanOrEqual(0.30);
+    }
+    for (const distance of [558, 564, 570]) expect(racingLineOffset(track, distance)).toBe(0);
   });
 
   it.each([1, 42, 98765])('boosts every CPU on every lap and stays within MEADOW’s wall-hit budget (seed %i)', seed => {

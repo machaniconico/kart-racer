@@ -144,11 +144,18 @@ describe('H1 handling', () => {
 // | 3 / v10 (old)      | 20.094907407407405 | 0         | 1         | 0         | 24 / 72      | 4           |
 // | 4 / v11 (new)      | 19.67476851851852  | 0         | 0         | 0         | 24 / 72      | 4           |
 // Ratio new/old 0.979. Both lanes were used by all 8 CPU IDs in every seed; safe/risky passes: 48/24.
+// M3-05 / NEON layout 3: sweep, gate and spin floor with early detours.
+// Placement adjustments: sweep center 0 -> -2 m; gate taper 4 -> 8 m (halfWidth / taper <= 0.5).
+// Recorded on darwin-arm64, 8 CPUs × seeds [1, 42, 98765] × 3 laps (72 laps):
+// | Layout / protocol | Mean lap (s)       | Wall hits | Band hits |
+// | 2 / v11 (old)     | 18.441435185185185 | 0         | 0         |
+// | 3 / v12 (new)     | 18.308796296296297 | 0         | 3         |
+// Band hits by seed: [2, 1, 0]; all at the gate. New/old mean-lap ratio: 0.993.
 const BASELINE = {
   meadow: { version: 'v11', meanLap: 18.537268518518516, wallHits: 0, bandHits: 0 },
   canyon: { version: 'v11', meanLap: 19.67476851851852, wallHits: 0, bandHits: 4 },
   snowpeak: { version: 'v11', meanLap: 17.939814814814813, wallHits: 0, bandHits: 0 },
-  neon: { version: 'v11', meanLap: 18.441435185185185, wallHits: 0, bandHits: 0 },
+  neon: { version: 'v12', meanLap: 18.308796296296297, wallHits: 0, bandHits: 3 },
 };
 const SEEDS = [1, 42, 98765];
 
@@ -221,6 +228,12 @@ describe('H1 CPU balance: absolute range and recorded baseline', () => {
       }
     }
     const meanLap = totalLapTime / 72;
+    if (trackId === 'neon') {
+      const v11MeanLap = 18.441435185185185;
+      expect(meanLap / v11MeanLap).toBeGreaterThanOrEqual(0.95);
+      expect(meanLap / v11MeanLap).toBeLessThanOrEqual(1.10);
+      expect(bandHits).toBeLessThanOrEqual(4);
+    }
     if (trackId === 'canyon') {
       expect(split).toBeDefined();
       expect(passes.size).toBe(72);

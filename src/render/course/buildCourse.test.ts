@@ -484,11 +484,12 @@ describe('variable widths and batched barriers', () => {
     const track = getTrack(id);
     // Old: baseline + 2 + (hasIsland ? 5 : 0), CANYON 40 + 2 + 5 = 47.
     // New: baseline + 2, CANYON 40 + 2 = 42; its baseline already includes islands.
-    // NEON remains 30 + 2 until M3-05 changes its course data and budget together.
+    // M3-05 NEON: old limit 30 + 2; add two moving bands and one spin disc (30 + 2 + 3).
+    const motionMeshes = id === 'neon' ? 3 : 0;
     const course = build(track, theme);
-    expect(meshCount(course.group)).toBeLessThanOrEqual(RENDER_BASELINE[id].meshes + 2);
-    expect(meshCount(course.group)).toBe(RENDER_BASELINE[id].meshes);
-    expect(course.group.getObjectByName('motion')!.children).toHaveLength(0);
+    expect(meshCount(course.group)).toBeLessThanOrEqual(RENDER_BASELINE[id].meshes + 2 + motionMeshes);
+    expect(meshCount(course.group)).toBe(RENDER_BASELINE[id].meshes + motionMeshes);
+    expect(course.group.getObjectByName('motion')!.children).toHaveLength(motionMeshes);
   });
 });
 

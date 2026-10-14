@@ -434,7 +434,7 @@ describe('validateTrackDef', () => {
     expect(() => validateTrackDef(def)).not.toThrow();
     expect(JSON.stringify(def)).toBe(before);
     // M2.5-01 widens three courses; CANYON keeps its M2 island layout until M2.5-02.
-    expect(def.layoutVersion ?? 1).toBe(id === 'canyon' ? 4 : 2);
+    expect(def.layoutVersion ?? 1).toBe(id === 'canyon' ? 4 : id === 'neon' ? 3 : 2);
   });
 
   it('accepts a safe band and leaves mutable input unchanged', () => {

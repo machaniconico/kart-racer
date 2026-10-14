@@ -535,9 +535,9 @@ describe('M1-03 assist passages', () => {
   }, 120_000);
 
   it('keeps the road centre and roadHalfWidth - |offset| exactly on roads without bands', () => {
-    // Courses with bands or width keys (CANYON since M1-05) are covered by the banded tests above.
+    // Courses with bands or width keys (CANYON since M1-05, NEON since M3-05) are covered by the banded tests above.
     const plain = TRACK_IDS.filter(id => !getTrack(id).def.barriers?.length && !getTrack(id).def.widthKeys?.length);
-    expect(plain.length).toBeGreaterThanOrEqual(3);
+    expect(plain.length).toBeGreaterThanOrEqual(2);
     for (const trackId of plain) {
       const track = getTrack(trackId);
       const state = solo(trackId);
