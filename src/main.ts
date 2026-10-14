@@ -6,8 +6,10 @@ import { HostSession } from './net/hostSession';
 import { generateRoomCode } from './net/roomCode';
 import type { Transport } from './net/transport';
 import { GameRenderer } from './render/GameRenderer';
+import { kartRotationZ } from './render/kartRoll';
 import { captureRenderSnapshot } from './render/snapshot';
-import { createRace, FIXED_DT, getAIInput, getTrack, stepRace, TRACK_IDS } from './sim';
+import { createRace, FIXED_DT, getAIInput, getTrack, projectToTrack, stepRace, surfaceHeightAt, TRACK_IDS } from './sim';
+import { widthAt } from './sim/corridor';
 import type { InputFrame, InputSource, RaceState, TrackId } from './sim';
 import { GameUI } from './ui/GameUI';
 import { LobbyUI } from './ui/LobbyUI';
@@ -550,6 +552,21 @@ function createDebugBridge() {
     get paused() { return paused; },
     get rendererInfo() { return renderer?.renderer.info; },
     get renderer() { return renderer; },
+    get cameraPosition() { return renderer?.getCameraPosition(); },
+    get cameraGroundY() {
+      if (!renderer) return undefined;
+      const player = state.karts.find(kart => kart.id === localId)!;
+      const track = getTrack(state.trackId);
+      const cam = renderer.getCameraPosition();
+      const p = projectToTrack(track, cam.x, cam.z, player.trackDistance);
+      const { wallHalfWidth } = widthAt(track, p.distance);
+      const offset = Math.max(-wallHalfWidth, Math.min(wallHalfWidth, p.offset));
+      return surfaceHeightAt(track, p.distance, offset);
+    },
+    get playerRoll() {
+      const player = state.karts.find(kart => kart.id === localId)!;
+      return kartRotationZ(getTrack(state.trackId), player.trackDistance);
+    },
     get mode() { return mode; },
     /** Selected course: the room's course online, otherwise the title selection. */
     get course(): TrackId { return (host ?? guest)?.course ?? course; },

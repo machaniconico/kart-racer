@@ -15,9 +15,10 @@ const courses = [
   // snowpeak 125 / 41_810 -> 125 / 41_952; neon 125 / 66_080 -> 125 / 62_748.
   // M3-08 re-measured 2026-10-14, same setup: NEON layout 2 -> 3:
   // drawCalls / triangles: 125 / 62_748 -> 126 / 62_812; retain the old budget baseline.
+  // M4-06: SNOWPEAK layout 3 retains the layout-2 budget for the elevated/banked road.
   { id: 'meadow', name: 'MEADOW LOOP', layout: 2, drawCalls: 123, triangles: 41_530 },
   { id: 'canyon', name: 'SUNSCAR CANYON', layout: 4, drawCalls: 129, triangles: 54_564 },
-  { id: 'snowpeak', name: 'FROSTBITE PEAK', layout: 2, drawCalls: 125, triangles: 41_952 },
+  { id: 'snowpeak', name: 'FROSTBITE PEAK', layout: 3, drawCalls: 125, triangles: 41_952 },
   { id: 'neon', name: 'NEON NIGHTLINE', layout: 3, drawCalls: 125, triangles: 62_748 },
 ] as const;
 
@@ -180,6 +181,98 @@ test('M3-08: NEON eight CPUs finish three laps and mechanisms keep animating', a
   expect(Math.abs(log.motion[1].lateral - log.motion[0].lateral)).toBeGreaterThan(0);
   expect(log.motion[1].rotationY).toBeGreaterThan(log.motion[0].rotationY);
 });
+
+// A race has eight slots: cover eight CPUs and the human + seven CPUs separately.
+for (const human of [true, false]) {
+  test(`M4-06: SNOWPEAK ${human ? 'full-throttle assisted player' : 'eight CPUs'} three laps, camera clearance and bank`, async ({ page }, testInfo) => {
+    await page.goto('./');
+    await page.waitForFunction(() => !!window.__kartDebug);
+    await page.locator('#course-select input[value="snowpeak"]').check();
+    await page.locator('#assist-title').check();
+    await page.locator('#start-race').click();
+    await page.keyboard.down('ArrowUp');
+    const { screenshots, ...log } = await page.evaluate(async human => {
+      const simPath = `${location.pathname}src/sim/index.ts`;
+      const snapshotPath = `${location.pathname}src/render/snapshot.ts`;
+      const { createRace, FIXED_DT, getTrack, rollAt, sampleTrack, slopeAt }: typeof import('../src/sim') = await import(simPath);
+      const { captureRenderSnapshot }: typeof import('../src/render/snapshot') = await import(snapshotPath);
+      const debug = window.__kartDebug;
+      Object.assign(debug.state, createRace(127, { trackId: 'snowpeak', racers: debug.state.karts.map(kart => ({
+        name: kart.name, color: kart.color, human: human && kart.id === 0,
+      })) }));
+      const track = getTrack('snowpeak');
+      const renderer = debug.renderer!;
+      const render = (dt: number) => renderer.update(debug.state, captureRenderSnapshot(debug.state), 1, dt, 'race');
+      // Reset the camera once; subsequent samples exercise its normal follow blend.
+      renderer.update(debug.state, captureRenderSnapshot(debug.state), 1, 0, 'title');
+      render(0);
+      const samples: { tick: number; d: number; lap: number; cameraPosition: { x: number; y: number; z: number };
+        cameraGroundY: number; clearance: number; playerRoll: number }[] = [];
+      for (let tick = 0; tick < 60 * 240 && debug.state.phase !== 'finished'; tick += 10) {
+        debug.clearItems();
+        // The human uses Controls (ArrowUp + assist), never AI autopilot.
+        debug.advance(10, !human);
+        render(10 * FIXED_DT);
+        const cameraPosition = debug.cameraPosition!;
+        const cameraGroundY = debug.cameraGroundY!;
+        const player = debug.state.karts[0];
+        const sample = { tick: debug.state.tick, d: player.trackDistance, lap: player.lap,
+          cameraPosition, cameraGroundY, clearance: cameraPosition.y - cameraGroundY, playerRoll: debug.playerRoll };
+        samples.push(sample);
+        // Preserve the first failing distance and heights for a human decision; do not tune the renderer/course.
+        if (!(sample.clearance >= 1)) break;
+      }
+      const screenshots: { name: string; d: number; slope: number; roll: number; png: string }[] = [];
+      if (debug.state.phase === 'finished') {
+        // Stage the exact steepest sample segment and the strongest bank, as M3-08 does for mechanisms.
+        const steepest = track.samples.reduce((best, point) =>
+          Math.abs(slopeAt(track, point.distance)) > Math.abs(slopeAt(track, best.distance)) ? point : best);
+        const steepIndex = track.samples.indexOf(steepest);
+        const steepEnd = track.samples[steepIndex + 1]?.distance ?? track.length;
+        const bank = track.def.bankKeys!.reduce((best, key) => Math.abs(key.roll) > Math.abs(best.roll) ? key : best);
+        for (const { name, d } of [
+          { name: 'm4-06-snowpeak-steepest', d: (steepest.distance + steepEnd) / 2 },
+          { name: 'm4-06-snowpeak-bank', d: bank.distance },
+        ]) {
+          const point = sampleTrack(track, d);
+          const state = { ...debug.state, karts: debug.state.karts.map(kart => kart.id === 0 ? { ...kart,
+            x: point.x, y: point.y, z: point.z, heading: Math.atan2(point.tx, point.tz),
+            trackDistance: d, lateralOffset: 0, speed: 0, steer: 0,
+          } : kart) };
+          const snapshot = captureRenderSnapshot(state);
+          renderer.update(state, snapshot, 1, 0, 'title');
+          renderer.update(state, snapshot, 1, 0, 'race');
+          screenshots.push({ name, d, slope: slopeAt(track, d),
+            roll: rollAt(track, d),
+            png: renderer.renderer.domElement.toDataURL('image/png').split(',')[1] });
+        }
+      }
+      return { trackId: debug.state.trackId, phase: debug.state.phase, samples, screenshots,
+        karts: debug.state.karts.map(({ human, lapTimes, finishTime }) => ({ human, lapTimes, finishTime })) };
+    }, human);
+    await page.keyboard.up('ArrowUp');
+    await testInfo.attach('m4-06-snowpeak-three-laps', { body: JSON.stringify(log), contentType: 'application/json' });
+    for (const { name, png, ...pose } of screenshots) {
+      await testInfo.attach(name, { body: Buffer.from(png, 'base64'), contentType: 'image/png' });
+      await testInfo.attach(`${name}-pose`, { body: JSON.stringify(pose), contentType: 'application/json' });
+    }
+    expect(log.samples.length).toBeGreaterThan(0);
+    for (const sample of log.samples) {
+      expect(sample.clearance, JSON.stringify(sample)).toBeGreaterThanOrEqual(1);
+    }
+    expect(log.samples.some(sample => Math.abs(sample.playerRoll) >= 0.2)).toBe(true);
+    expect(log.trackId).toBe('snowpeak');
+    expect(log.phase).toBe('finished');
+    expect(log.karts).toHaveLength(8);
+    expect(log.karts.filter(kart => kart.human)).toHaveLength(human ? 1 : 0);
+    for (const kart of human ? [log.karts[0]] : log.karts) {
+      expect(kart.lapTimes).toHaveLength(3);
+      expect(kart.finishTime).toBeGreaterThan(0);
+    }
+    expect(screenshots).toHaveLength(2);
+    await expect(page.locator('#results-screen')).toBeVisible();
+  });
+}
 
 for (const missedBoost of [false, true]) {
   test(`M2-06: CANYON shortcut ${missedBoost ? 'fails without boost' : 'clears the pit with boost'}`, async ({ page }, testInfo) => {
