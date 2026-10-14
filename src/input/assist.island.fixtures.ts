@@ -80,7 +80,12 @@ export const islandCourse = (between: (min: number, max: number) => number, curv
   throw new Error('no valid island layout');
 };
 
-/** Band hits (value 1) and other hits except pits (value 2), with head-on band hits (> 30 % speed lost). */
+/**
+ * Band hits (value 1) and other hits except pits (value 2), with head-on band hits (> 30 % speed lost),
+ * the ticks driven (the denominator when `stop` ends the run early) and wallContactTicks: the longest
+ * run of consecutive ticks, from a wall hit on, with |lateralOffset| >= wallHalfWidth - R - 0.2
+ * (a brush counts a tick or two; sliding along the wall counts its whole length).
+ */
 export const run = (track: Track, start: number, offset: number, heading: number, speed: number, steer: number,
   assisted: boolean, ticks: number, stop: (kart: RaceState['karts'][number]) => boolean) => {
   const { state, kart } = onStraight(track, start, offset);
@@ -89,8 +94,11 @@ export const run = (track: Track, start: number, offset: number, heading: number
   let band = 0;
   let wall = 0;
   let headOn = 0;
+  let driven = 0;
+  let wallContactTicks = 0;
+  let contact = -1;
   const frame = { ...input, steer };
-  for (let tick = 0; tick < ticks && !stop(kart); tick++) {
+  for (; driven < ticks && !stop(kart); driven++) {
     const before = kart.speed;
     stepRace(state, [assisted ? applySteerAssist(state, kart, frame, 1) : frame]);
     for (const event of state.events) {
@@ -98,18 +106,28 @@ export const run = (track: Track, start: number, offset: number, heading: number
       if (event.value === 1) {
         band++;
         if (kart.speed < before * 0.7) headOn++;
-      } else if (event.value !== 2) wall++;
+      } else if (event.value !== 2) {
+        wall++;
+        contact = Math.max(contact, 0);
+      }
     }
+    if (contact < 0) continue;
+    const near = Math.abs(kart.lateralOffset) >= widthAt(track, kart.trackDistance).wallHalfWidth - KART_RADIUS - 0.2;
+    contact = near ? contact + 1 : -1;
+    wallContactTicks = Math.max(wallContactTicks, contact);
   }
-  return { band, wall, headOn, kart };
+  return { band, wall, headOn, ticks: driven, wallContactTicks, kart };
 };
 
 // `count` runs per layout set from fixed seeds: lateral offset across the wall, heading error ±25°,
-// 12-32 m/s, steer 0 / ±0.3 held, full throttle for 4 s from 5-60 m before the island.
+// 12-32 m/s, steer 0 / ±0.3 held, full throttle for 4 s from 5-60 m before the island. A run stops
+// early past the last band, so wall hits are counted per tick driven (totals.onTicks / offTicks).
 export const fuzz = (seed: number, curve: boolean | null, pillars: number, count: number) => {
   const { random, between } = seeded(seed);
   const worse: string[] = [];
-  const totals = { onBand: 0, offBand: 0, onWall: 0, offWall: 0 };
+  const totals = { onBand: 0, offBand: 0, onWall: 0, offWall: 0, onTicks: 0, offTicks: 0 };
+  // Per run, wallContactTicks of the assisted and the plain run (0 without a wall hit).
+  const wallContact = { on: [] as number[], off: [] as number[] };
   for (let i = 0; i < count; i++) {
     const isCurve = curve ?? random() < 0.5;
     const { def, track, from } = islandCourse(between, isCurve, pillars);
@@ -128,9 +146,13 @@ export const fuzz = (seed: number, curve: boolean | null, pillars: number, count
     totals.offBand += off.band;
     totals.onWall += on.wall;
     totals.offWall += off.wall;
+    totals.onTicks += on.ticks;
+    totals.offTicks += off.ticks;
+    wallContact.on.push(on.wallContactTicks);
+    wallContact.off.push(off.wallContactTicks);
     if (on.band > off.band) {
       worse.push(JSON.stringify({ i, curve: isCurve, barriers: def.barriers, start, offset, heading, speed, steer, on: on.band, off: off.band }));
     }
   }
-  return { worse, totals };
+  return { worse, totals, wallContact };
 };

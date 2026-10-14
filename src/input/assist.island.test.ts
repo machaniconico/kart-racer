@@ -9,7 +9,18 @@ afterEach(() => vi.restoreAllMocks());
 
 describe('M2-03 one island on a straight', () => {
   it(`never adds band hits over OFF (${RUNS} runs)`, () => {
-    const { worse, totals } = fuzz(0x1514d, false, 0, RUNS);
+    const { worse, totals, wallContact } = fuzz(0x1514d, false, 0, RUNS);
+    // M3-07: recorded, no threshold yet. Wall hits per 1000 ticks driven, and the distribution of
+    // wallContactTicks over the runs with a wall hit (count, median, 90th percentile, max).
+    const spread = (values: number[]) => {
+      const hit = values.filter(value => value > 0).sort((a, b) => a - b);
+      const at = (q: number) => hit[Math.min(hit.length - 1, Math.floor(q * hit.length))] ?? 0;
+      return { runs: hit.length, p50: at(0.5), p90: at(0.9), max: at(1) };
+    };
+    console.info(`[M3-07 straight fuzz] ${JSON.stringify({ ...totals,
+      onWallPer1000Ticks: +(1000 * totals.onWall / totals.onTicks).toFixed(3),
+      offWallPer1000Ticks: +(1000 * totals.offWall / totals.offTicks).toFixed(3),
+      onWallContactTicks: spread(wallContact.on), offWallContactTicks: spread(wallContact.off) })}`);
     expect(worse, JSON.stringify(totals)).toEqual([]);
     expect(totals.onBand, JSON.stringify(totals)).toBeLessThan(totals.offBand);
   });
