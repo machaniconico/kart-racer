@@ -22,8 +22,10 @@ export const canyon: CourseTheme = {
     hemisphere: { sky: 0xfff0d6, ground: 0xa66538, intensity: 2.1 },
     sun: { color: 0xffd8a0, intensity: 2.3, position: [70, 100, 40], offset: [55, 85, 35] },
   },
-  signFractions: [0.24, 0.4, 0.74, 0.9],
-  budget: { trees: 96, rocks: 44, flowers: 60 },
+  signFractions: [0.18, 0.35, 0.70, 0.84],
+  // M5: double the props on the three-times-longer course; keep the remaining
+  // 60 triangles/metre + 30k allowance for ribbons, the deck and kart shadows.
+  budget: { trees: 192, rocks: 88, flowers: 120 },
   buildProps,
   buildLandmarks,
 };
@@ -53,7 +55,17 @@ function buildProps(track: Track, scene: THREE.Group, budget: SceneryBudget): vo
   const mesas = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.72, 1, 1, 6), material(0xb4744e), 16);
   const mesaCaps = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.72, 0.82, 1, 6), material(0xdba271), 16);
 
-  // Reject positions near every part of the road, including the opposite shelf.
+  // Check every branch in XZ: the nearest projection alone can hide an upper
+  // deck behind a narrower lower road. Clearance includes each prop's radius.
+  const clearOfRoad = (x: number, z: number, clearance: number): boolean =>
+    track.samples.every((a, i) => {
+      const b = track.samples[(i + 1) % track.samples.length]!;
+      const dx = b.x - a.x, dz = b.z - a.z;
+      const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (z - a.z) * dz) / (dx * dx + dz * dz)));
+      const distance = a.distance + t * ((i + 1 === track.samples.length ? track.length : b.distance) - a.distance);
+      return Math.hypot(x - a.x - t * dx, z - a.z - t * dz) > widthAt(track, distance).wallHalfWidth + clearance;
+    });
+
   const roadside = (clearance: number) => {
     for (let attempt = 0; attempt < 100; attempt++) {
       const point = sampleTrack(track, random() * track.length);
@@ -61,7 +73,7 @@ function buildProps(track: Track, scene: THREE.Group, budget: SceneryBudget): vo
       const x = point.x + point.nx * offset;
       const z = point.z + point.nz * offset;
       const projection = projectToTrack(track, x, z);
-      if (Math.abs(projection.offset) > widthAt(track, projection.distance).wallHalfWidth + clearance) {
+      if (clearOfRoad(x, z, clearance)) {
         return { x, y: terrainHeight(track, projection), z };
       }
     }
@@ -102,12 +114,18 @@ function buildProps(track: Track, scene: THREE.Group, budget: SceneryBudget): vo
     mesh.count = count;
   }
   pillarCaps.count = pillars.count;
+  const xs = track.samples.map(point => point.x), zs = track.samples.map(point => point.z);
+  const centerX = (Math.min(...xs) + Math.max(...xs)) / 2;
+  const centerZ = (Math.min(...zs) + Math.max(...zs)) / 2;
+  const extent = Math.max(...track.samples.map(point => Math.hypot(point.x - centerX, point.z - centerZ)));
   for (let i = 0; i < mesas.count; i++) {
     const angle = (i + 0.3) / mesas.count * Math.PI * 2;
-    const radius = 255 + random() * 35;
+    // The entire mesa (at most 52 m radius) stays beyond the course envelope,
+    // including the deck and island, as the layout grows in either direction.
+    const radius = extent + 90 + random() * 35;
     const width = 27 + random() * 25;
     const height = 35 + random() * 30;
-    transform.position.set(Math.cos(angle) * radius, height / 2 - 2, Math.sin(angle) * radius);
+    transform.position.set(centerX + Math.cos(angle) * radius, height / 2 - 2, centerZ + Math.sin(angle) * radius);
     transform.rotation.set(0, angle + random() * 0.4, 0);
     transform.scale.set(width, height, width * 0.7);
     transform.updateMatrix();

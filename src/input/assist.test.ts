@@ -177,25 +177,26 @@ describe('applySteerAssist', () => {
     for (const strength of [0, -1, NaN, Infinity]) expect(applySteerAssist(state, kart, frame, strength)).toBe(frame);
   });
 
-  it.each([0, 1, 2, 3, 4, 5, 6, 7])('CANYON (pillars): grid slot %i laps with the assist and no input, hitting no wall or band', (slot) => {
+  it.each([0, 1, 2, 3, 4, 5, 6, 7])('CANYON (island): grid slot %i laps with the assist and no input, hitting no wall or band', (slot) => {
     const state = solo('canyon');
     const grid = createRace(42, { trackId: 'canyon' }).karts[slot]!;
     const kart = state.karts[0]!;
     Object.assign(kart, { x: grid.x, y: grid.y, z: grid.z, heading: grid.heading,
       trackDistance: grid.trackDistance, lateralOffset: grid.lateralOffset });
-    // Layout 3 (M2-05) puts the rock island in the second bend. Near bands the assist keeps the
-    // kart's own line and lets walls make it slide (assistPassage doc), so a no-input kart at full
-    // throttle may brush the wall of its lane or of the exit ramp. Measured: one or two wall hits
-    // per slot, all between 443 m and 573 m. Pillars, the narrow passage and the island itself
-    // (bands and the pit) stay clean.
+    // Layout 5 moves the island onto the upper mesa bend. Derive the approach/exit
+    // fixture from splits[0], so the same full-lap assertion follows the new island.
+    // Near a band, assist preserves the chosen lane; allow its existing two wall
+    // brushes only within the island approach/exit. All bands and pits stay clean.
     const split = getTrack('canyon').def.splits![0]!;
     const inIslandBend = (distance: number) => distance >= split.from - 40 && distance <= split.to + 40;
+    let enteredIsland = false;
     let wall = 0;
     let islandWall = 0;
     let band = 0;
     let pit = 0;
     while (kart.lap < 1 && state.tick < 60 * 120) {
       stepRace(state, [applySteerAssist(state, kart, input, 1)]);
+      enteredIsland ||= kart.trackDistance >= split.from && kart.trackDistance <= split.to;
       for (const event of state.events) {
         if (event.type !== 'hit') continue;
         if (event.value === 1) band++;
@@ -205,6 +206,7 @@ describe('applySteerAssist', () => {
       }
     }
     expect(kart.lap).toBe(1);
+    expect(enteredIsland).toBe(true);
     expect({ wall, band, pit }).toEqual({ wall: 0, band: 0, pit: 0 });
     expect(islandWall).toBeLessThanOrEqual(2);
   });

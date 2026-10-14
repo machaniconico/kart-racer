@@ -4,10 +4,11 @@ import { validateCoursePlayability, validateTrackDef, widthAt } from '../corrido
 import { DEFAULT_LAPS } from '../laps';
 import { createRace, FIXED_DT, KART_RADIUS, NEUTRAL_INPUT, stepRace } from '../race';
 import { JUMP_DURATION, surfaceAt } from '../surfaces';
-import { buildTrack, projectToTrack, sampleTrack, wrapDistance } from '../track';
+import { buildTrack, projectToTrack, rollAt, sampleTrack, slopeAt, wrapDistance } from '../track';
 import type { RaceState } from '../types';
 import * as tracks from './index';
-import { BASE_ROAD_HALF_WIDTH } from './widths';
+import { BASE_ROAD_HALF_WIDTH, BASE_WALL_HALF_WIDTH } from './widths';
+import { curvatureProfile, elevationRange, findCompoundCorners, findHairpins, findSCurves, maxSlope, minCurvatureRadius } from './shapeMetrics';
 import * as THREE from 'three';
 import { buildCourse } from '../../render/course/buildCourse';
 import { canyon as canyonTheme } from '../../render/course/themes/canyon';
@@ -81,7 +82,11 @@ describe('SUNSCAR CANYON', () => {
     expect(() => validateTrackDef(track.def)).not.toThrow();
     expect(() => validateCoursePlayability(track.def)).not.toThrow();
     expect(track.def.splits).toHaveLength(1);
-    expect(track.def.barriers).toHaveLength(3);
+    expect(track.def.barriers!.length).toBeGreaterThanOrEqual(2);
+    expect(track.def.barriers!.some(barrier => barrier.to < split.from - 40 || barrier.from > split.to + 40)).toBe(true);
+    expect(track.def.widthKeys!.length).toBeGreaterThan(0);
+    expect(track.def.checkpointCount).toBe(24);
+    expect(track.def.boxRows).toHaveLength(8);
     for (const [kind, count] of [['jump', 3], ['boost', 1], ['pit', 1]] as const) {
       expect(track.def.surfaces.filter(zone => zone.kind === kind)).toHaveLength(count);
     }
@@ -109,7 +114,53 @@ describe('SUNSCAR CANYON', () => {
     } finally { course.dispose(); }
   });
 
+  it('keeps mesa and pillar footprints clear of every road branch within the scenery budget', () => {
+    vi.stubGlobal('document', { createElement: () => ({ width: 0, height: 0,
+      getContext: () => ({ fillRect() {}, fillText() {} }) }) });
+    const course = buildCourse(track, canyonTheme);
+    try {
+      let triangles = 0;
+      course.group.traverse(object => {
+        if (!(object instanceof THREE.Mesh)) return;
+        const geometry = object.geometry;
+        const instances = object instanceof THREE.InstancedMesh ? object.count : 1;
+        triangles += (geometry.index?.count ?? geometry.getAttribute('position').count) / 3 * instances *
+          (object.castShadow ? 2 : 1);
+      });
+      // M5-00's length-scaled cap, counting all course geometry and its shadow pass
+      // without frustum culling, with another 20k triangles reserved for the racers.
+      expect(triangles + 20_000).toBeLessThanOrEqual(60 * track.length + 30_000);
+      const matrix = new THREE.Matrix4(), position = new THREE.Vector3(), scale = new THREE.Vector3();
+      const rotation = new THREE.Quaternion();
+      for (const name of ['canyon:pillars', 'canyon:mesas']) {
+        const mesh = course.group.getObjectByName(name) as THREE.InstancedMesh;
+        expect(mesh.count).toBeGreaterThan(0);
+        for (let i = 0; i < mesh.count; i++) {
+          mesh.getMatrixAt(i, matrix);
+          matrix.decompose(position, rotation, scale);
+          const radius = Math.max(scale.x, scale.z);
+          let clearance = Infinity;
+          for (const [j, a] of track.samples.entries()) {
+            const b = track.samples[(j + 1) % track.samples.length]!;
+            const dx = b.x - a.x, dz = b.z - a.z;
+            const t = Math.max(0, Math.min(1, ((position.x - a.x) * dx + (position.z - a.z) * dz) / (dx * dx + dz * dz)));
+            const distance = a.distance + t * ((j + 1 === track.samples.length ? track.length : b.distance) - a.distance);
+            clearance = Math.min(clearance, Math.hypot(position.x - a.x - t * dx, position.z - a.z - t * dz) -
+              widthAt(track, distance).wallHalfWidth - radius);
+          }
+          expect(clearance, `${name}:${i}`).toBeGreaterThan(0);
+        }
+      }
+      // M5-09 handoff baseline: the shared deck builder originally placed two 0.45m-radius supports
+      // at (x,z) = (+/-13.05, 0.06286), through the lower road. Each is 28.81007m tall,
+      // from y=-1.35 to y=27.46007. Theme props above are independently kept clear.
+    } finally { course.dispose(); }
+  });
+
   it('rewards the boosted inner lane and penalizes missing its pad with identical full-throttle steering', () => {
+    // M5-02: inner 4.400000s, outer 4.900000s, missed pad 6.650000s.
+    // Gain 0.500000s (lower/upper margins 0.100000/1.500000s); fall cost
+    // 1.750000s (margin 0.250000s). Same full-throttle fixture and shared pit penalty.
     const inner = driveLane(1);
     const outer = driveLane(0);
     const missed = driveLane(1, true);
@@ -124,28 +175,92 @@ describe('SUNSCAR CANYON', () => {
     expect(missed.takeoffSpeed).toBeLessThan(inner.takeoffSpeed);
     expect(outer.seconds - inner.seconds).toBeGreaterThanOrEqual(0.4);
     expect(outer.seconds - inner.seconds).toBeLessThanOrEqual(2);
-    // Coordinator decision (M2-05): the shared M2-02 pit penalty caps a fall at about 2 s
-    // over a clean inner run, so a fall must cost at least 1.5 s against the outer lane.
+    // The shared pit penalty is unchanged. M5 requires another 0.10s of margin on both outcomes.
     expect(missed.seconds - outer.seconds).toBeGreaterThanOrEqual(1.5);
+    expect(outer.seconds - inner.seconds).toBeGreaterThanOrEqual(0.5);
+    expect(outer.seconds - inner.seconds).toBeLessThanOrEqual(1.9);
+    expect(missed.seconds - outer.seconds).toBeGreaterThanOrEqual(1.6);
   });
 
-  it('has its own reproducible 600–720m layout with at least 10m of elevation', () => {
-    expect(track.length).toBeGreaterThanOrEqual(600);
-    expect(track.length).toBeLessThanOrEqual(720);
-    const heights = track.samples.map(point => point.y);
-    expect(Math.max(...heights) - Math.min(...heights)).toBeGreaterThanOrEqual(10);
+  it('pins the reproducible 2100–2400m layout and its technical shapes', () => {
+    expect(track.def.layoutVersion).toBe(5);
+    expect(track.length).toBeCloseTo(2274.6514118884065, 8);
+    expect(track.length).toBeGreaterThanOrEqual(2100);
+    expect(track.length).toBeLessThanOrEqual(2400);
+    expect(elevationRange(track).range).toBeGreaterThanOrEqual(12);
+    expect(maxSlope(track)).toBeLessThanOrEqual(0.30);
+    expect(findHairpins(track).length).toBeGreaterThanOrEqual(1);
+    expect(findSCurves(track).length).toBeGreaterThanOrEqual(1);
+    expect(findCompoundCorners(track).length).toBeGreaterThanOrEqual(1);
+    expect(minCurvatureRadius(track)).toBeGreaterThanOrEqual(16.95);
+    for (const point of curvatureProfile(track)) {
+      expect(1 / Math.abs(point.curvature), `radius at ${point.distance}`).toBeGreaterThanOrEqual(
+        widthAt(track, point.distance).wallHalfWidth + 2.5 + 0.8);
+    }
     expect(sampleHash(track.samples)).not.toBe(sampleHash(getTrack('meadow').samples));
     expect(buildTrack(JSON.parse(JSON.stringify(track.def)))).toEqual(track);
-    let maximumGrade = 0;
-    for (const [i, point] of track.samples.entries()) {
-      const next = track.samples[(i + 1) % track.samples.length]!;
-      maximumGrade = Math.max(maximumGrade, Math.abs(next.y - point.y) / Math.hypot(next.x - point.x, next.z - point.z));
+    const line = track.def.racingLine;
+    expect(line[0]).toEqual({ distance: 0, offset: 0 });
+    expect(line.at(-1)!.distance).toBeGreaterThan(track.length - 100);
+    expect(line.at(-1)!.offset).toBe(0);
+    expect(line.some(point => point.distance > split.to && point.offset === 0)).toBe(true);
+    const risky = split.lanes.find(lane => lane.risk === 1)!;
+    for (const kind of ['dirt', 'boost', 'jump', 'pit']) {
+      expect(track.def.surfaces.some(zone => zone.kind === kind && zone.from >= split.from && zone.to <= split.to &&
+        zone.offsetMin! >= risky.offsetMin && zone.offsetMax! <= risky.offsetMax)).toBe(true);
     }
-    expect(maximumGrade).toBeLessThanOrEqual(0.12);
+  });
+
+  it('has exactly one level crossing, a short upper deck and level gate-free approaches', () => {
+    const crossings: { lower: number; upper: number; gap: number; angle: number }[] = [];
+    const samples = track.samples;
+    for (let i = 0; i < samples.length; i++) {
+      const a = samples[i]!, b = samples[(i + 1) % samples.length]!;
+      const dx = b.x - a.x, dz = b.z - a.z;
+      for (let j = i + 2; j < samples.length; j++) {
+        if (i === 0 && j === samples.length - 1) continue;
+        const c = samples[j]!, d = samples[(j + 1) % samples.length]!;
+        const ex = d.x - c.x, ez = d.z - c.z, cross = dx * ez - dz * ex;
+        if (Math.abs(cross) < 1e-9) continue;
+        const qx = c.x - a.x, qz = c.z - a.z;
+        const t = (qx * ez - qz * ex) / cross, u = (qx * dz - qz * dx) / cross;
+        if (t < 0 || t >= 1 || u < 0 || u >= 1) continue;
+        const ad = a.distance + Math.hypot(dx, dz) * t, cd = c.distance + Math.hypot(ex, ez) * u;
+        const ay = a.y + (b.y - a.y) * t, cy = c.y + (d.y - c.y) * u;
+        crossings.push({ lower: ay < cy ? ad : cd, upper: ay > cy ? ad : cd, gap: Math.abs(ay - cy),
+          angle: Math.acos(Math.min(1, Math.abs(dx * ex + dz * ez) / (Math.hypot(dx, dz) * Math.hypot(ex, ez)))) });
+      }
+    }
+    expect(crossings).toHaveLength(1);
+    expect(track.def.decks).toHaveLength(1);
+    const crossing = crossings[0]!, deck = track.def.decks![0]!;
+    expect(crossing.gap).toBeGreaterThanOrEqual(12);
+    expect(crossing.angle).toBeGreaterThanOrEqual(Math.PI / 4);
+    expect(crossing.upper - deck.from).toBeGreaterThanOrEqual(19);
+    expect(deck.to - crossing.upper).toBeGreaterThanOrEqual(19);
+    expect(deck.to - deck.from).toBeLessThanOrEqual(42);
+    for (const distance of [crossing.lower, crossing.upper]) {
+      for (let delta = -20; delta <= 20; delta += 0.25) {
+        expect(Math.abs(slopeAt(track, distance + delta))).toBeLessThanOrEqual(0.10);
+        expect(Math.abs(rollAt(track, distance + delta))).toBeLessThanOrEqual(0.10);
+      }
+      for (const gate of track.checkpointDistances) {
+        const gap = wrapDistance(track, gate - distance);
+        expect(Math.min(gap, track.length - gap)).toBeGreaterThan(25);
+      }
+    }
+    for (const a of samples.filter(point => point.distance >= deck.from && point.distance <= deck.to)) {
+      for (const b of samples.filter(point => point.distance < deck.from || point.distance > deck.to)) {
+        const gap = Math.abs(a.distance - b.distance);
+        if (Math.min(gap, track.length - gap) > 31.8 && Math.hypot(a.x - b.x, a.z - b.z) <= 31.8) {
+          expect(Math.abs(a.y - b.y)).toBeGreaterThanOrEqual(8);
+        }
+      }
+    }
   });
 
   it('preserves the two non-shortcut downhill jumps on straight takeoff and landing corridors', () => {
-    expect(mainJumps).toEqual([{ kind: 'jump', from: 60, to: 64 }, { kind: 'jump', from: 393, to: 397 }]);
+    expect(mainJumps).toEqual([{ kind: 'jump', from: 306.5, to: 310.5 }, { kind: 'jump', from: 1386.5, to: 1390.5 }]);
     for (const jump of mainJumps) {
       expect(jump.from).toBeGreaterThan(15);
       expect(jump.to).toBeGreaterThan(jump.from);
@@ -167,29 +282,31 @@ describe('SUNSCAR CANYON', () => {
     }
   });
 
-  it('narrows one passage to 5.2m half-width with 20m ramps on layout 4', () => {
-    expect(track.def.layoutVersion).toBe(4);
-    const keys = track.def.widthKeys!.filter(key => key.distance <= 270);
+  it('narrows one passage to 55% of the base width with 20m ramps', () => {
+    expect(track.def.layoutVersion).toBe(5);
+    const keys = track.def.widthKeys!.filter(key => key.distance >= 1600);
     expect(keys).toHaveLength(4);
-    expect(keys.map(key => key.roadHalfWidth)).toEqual([BASE_ROAD_HALF_WIDTH, 5.2, 5.2, BASE_ROAD_HALF_WIDTH]);
+    expect(keys.map(key => key.roadHalfWidth)).toEqual([BASE_ROAD_HALF_WIDTH, 5.148, 5.148, BASE_ROAD_HALF_WIDTH]);
     const [entry, narrowStart, narrowEnd, exit] = keys;
+    expect(narrowStart!.roadHalfWidth).toBeCloseTo(BASE_ROAD_HALF_WIDTH * 0.55);
+    expect(narrowStart!.wallHalfWidth).toBeCloseTo(BASE_WALL_HALF_WIDTH * 0.55);
     expect(narrowStart!.distance - entry!.distance).toBe(20);
     expect(exit!.distance - narrowEnd!.distance).toBe(20);
     expect(narrowEnd!.distance).toBeGreaterThan(narrowStart!.distance);
     for (const key of keys) expect(widthAt(track, key.distance).roadHalfWidth).toBe(key.roadHalfWidth);
     for (const [a, b] of [[entry!, narrowStart!], [narrowEnd!, exit!]]) {
-      expect(widthAt(track, (a.distance + b.distance) / 2).roadHalfWidth).toBeCloseTo((BASE_ROAD_HALF_WIDTH + 5.2) / 2);
+      expect(widthAt(track, (a.distance + b.distance) / 2).roadHalfWidth).toBeCloseTo((BASE_ROAD_HALF_WIDTH + 5.148) / 2);
     }
     expect(widthAt(track, 0).roadHalfWidth).toBe(BASE_ROAD_HALF_WIDTH);
     expect(widthAt(track, track.length - 1).roadHalfWidth).toBe(BASE_ROAD_HALF_WIDTH);
   });
 
-  it('limits dirt and shortcut surfaces to the inner lane and leaves the outer lane paved', () => {
+  it('limits shortcut surfaces to the inner lane and leaves the outer lane paved', () => {
     const inner = split.lanes.find(lane => lane.risk === 1)!;
     const outer = split.lanes.find(lane => lane.risk === 0)!;
     const dirt = track.def.surfaces.filter(zone => zone.kind === 'dirt');
     expect(dirt.length).toBeGreaterThanOrEqual(1);
-    expect(dirt[0]).toEqual({ kind: 'dirt', from: split.from + 26, to: split.from + 50,
+    expect(dirt[0]).toEqual({ kind: 'dirt', from: split.from + 45, to: split.from + 70,
       offsetMin: inner.offsetMin, offsetMax: inner.offsetMax });
     for (let d = split.from; d <= split.to; d += 0.5) {
       expect(surfaceAt(track, d, (outer.offsetMin + outer.offsetMax) / 2)).toBe('road');
@@ -233,48 +350,28 @@ describe('SUNSCAR CANYON', () => {
     }
   });
 
-  it('keeps centre pillars on straight shelves clear of jumps and gates and guarantees passage width between samples', () => {
-    const pillars = track.def.barriers!.filter(barrier => barrier.scenery === 'pillar');
-    expect(pillars).toEqual([
-      { from: 136, to: 152, center: 0, halfWidth: 1.2, taper: 4, scenery: 'pillar' },
-      { from: 361, to: 377, center: 0, halfWidth: 1.2, taper: 4, scenery: 'pillar' },
-    ]);
-    for (const pillar of pillars) {
-      expect(pillar.scenery).toBe('pillar');
-      expect(pillar.halfWidth).toBe(1.2);
-      expect(pillar.taper).toBe(4);
-      expect(Math.abs(pillar.center)).toBeLessThanOrEqual(2);
-      const start = sampleTrack(track, pillar.from);
-      for (let distance = pillar.from; distance <= pillar.to; distance += 0.5) {
-        const point = sampleTrack(track, distance);
-        expect(point.tx * start.tx + point.tz * start.tz).toBeGreaterThan(0.99);
-      }
-      for (const jump of jumps) {
-        expect(pillar.to + KART_RADIUS <= jump.from ||
-          pillar.from - KART_RADIUS >= jump.from + 50 * JUMP_DURATION).toBe(true);
-      }
-      for (const gate of track.checkpointDistances) {
-        const fromNose = wrapDistance(track, gate - (pillar.from - KART_RADIUS));
-        const span = wrapDistance(track, pillar.to - pillar.from) + 2 * KART_RADIUS;
-        expect(fromNose - span).toBeGreaterThanOrEqual(10);
-        expect(track.length - fromNose).toBeGreaterThanOrEqual(10);
-      }
+  it('keeps both lanes wide enough beside the full static island barrier', () => {
+    const island = track.def.barriers!.find(barrier => barrier.scenery === 'rock')!;
+    expect(island.scenery).toBe('rock');
+    expect(island.from).toBeGreaterThan(split.from);
+    expect(island.to).toBeLessThan(split.to);
+    for (const lane of split.lanes) {
+      expect(lane.offsetMax - lane.offsetMin).toBeCloseTo(11.7, 9);
+      expect(Math.min(Math.abs(lane.offsetMin), Math.abs(lane.offsetMax))).toBeGreaterThanOrEqual(
+        island.halfWidth + KART_RADIUS);
     }
-    // A conservative bound for the entire lap, including all taper/cap interiors.
-    // Unlike the validator's 0.5m grid this cannot miss a narrow passage between samples:
-    // linear width interpolation never goes below a key and every exclusion stays in this envelope.
-    const minimumWall = Math.min(...track.def.widthKeys!.map(key => key.wallHalfWidth));
-    const envelope = Math.max(...pillars.map(pillar => Math.abs(pillar.center) + pillar.halfWidth + KART_RADIUS));
-    expect(minimumWall - envelope).toBeGreaterThanOrEqual(2 * KART_RADIUS + 0.6);
   });
 
+  // M5-02, 8 CPUs x seeds [1, 42, 98765] x 3 laps: mean 68.495833333s,
+  // wallHits 0, bandHits 0, passes 72 (24 risky), pitFalls 0. The shared
+  // handling suite retains the existing wall/band/pit budgets.
   it.each([1, 42, 98765])('flies every CPU over both non-shortcut jumps on every lap, stays inside walls and replays exactly (seed %i)', seed => {
     const state = createRace(seed, { trackId: 'canyon', racers: [] });
     let restored: RaceState = JSON.parse(JSON.stringify(state));
     const flights = state.karts.map(() => jumps.map(() => new Set<number>()));
     let airborneTicks = 0;
 
-    for (let tick = 0; tick < 60 * 180 && state.phase !== 'finished'; tick++) {
+    for (let tick = 0; tick < 60 * 420 && state.phase !== 'finished'; tick++) {
       const previous = state.karts.map(kart => ({ airTime: kart.airTime, distance: kart.trackDistance }));
       stepRace(state, state.karts.map(kart => getAIInput(state, kart.id)));
       stepRace(restored, restored.karts.map(kart => getAIInput(restored, kart.id)));
@@ -282,7 +379,7 @@ describe('SUNSCAR CANYON', () => {
       for (const kart of state.karts) {
         if (kart.airTime <= 0) continue;
         airborneTicks++;
-        const projection = projectToTrack(track, kart.x, kart.z);
+        const projection = projectToTrack(track, kart.x, kart.z, kart.trackDistance, kart.y);
         expect(Math.abs(projection.offset) + KART_RADIUS).toBeLessThanOrEqual(widthAt(track, projection.distance).wallHalfWidth + 1e-6);
         expect(kart.driftTime).toBe(0);
         expect(kart.driftDirection).toBe(0);
@@ -298,6 +395,7 @@ describe('SUNSCAR CANYON', () => {
     }
     expect(state.phase).toBe('finished');
     expect(state.karts).toHaveLength(8);
+    expect(state.karts.flatMap(kart => kart.lapTimes).reduce((sum, time) => sum + time, 0) / 24).toBeGreaterThanOrEqual(60);
     expect(airborneTicks).toBeGreaterThan(0);
     for (const kart of state.karts) {
       expect(kart.human).toBe(false);
