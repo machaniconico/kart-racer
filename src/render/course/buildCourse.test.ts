@@ -28,10 +28,12 @@ import { neon } from './themes/neon';
 // canyon 128 / 46_784 / 33 -> 129 / 54_564 / 40 (layout 4).
 // snowpeak 125 / 41_810 / 33 -> 125 / 41_952 / 31 (layout 2).
 // neon 125 / 66_080 / 30 -> 125 / 62_748 / 30 (layout 2).
+// M4-05, same Chromium setup and all 10 frames: snowpeak layout 2 -> 3,
+// 125 / 41_952 / 31 -> 125 / 42_296 / 31 (bank boundaries add ribbon triangles).
 const RENDER_BASELINE = {
   meadow: { drawCalls: 123, triangles: 41_530, meshes: 29 },
   canyon: { drawCalls: 129, triangles: 54_564, meshes: 40 },
-  snowpeak: { drawCalls: 125, triangles: 41_952, meshes: 31 },
+  snowpeak: { drawCalls: 125, triangles: 42_296, meshes: 31 },
   neon: { drawCalls: 125, triangles: 62_748, meshes: 30 },
 } as const;
 
@@ -95,7 +97,8 @@ describe('banked roads and elevated decks', () => {
   });
 
   it.each(['meadow', 'canyon', 'snowpeak', 'neon'] as const)('%s keeps exact vertex and instance buffers with zero bank', id => {
-    const original = getTrack(id);
+    // Public courses may be banked; compare absent keys with explicit zero-roll keys.
+    const original = buildTrack({ ...getTrack(id).def, bankKeys: undefined });
     const themes = { meadow, canyon, snowpeak, neon };
     const zeroBank = buildTrack({ ...original.def, bankKeys: [
       { distance: 0, roll: 0 }, { distance: original.length, roll: 0 },

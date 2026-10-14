@@ -9,7 +9,7 @@ import { getAIInput } from '../ai';
 import { validateTrackDef, widthAt } from '../corridor';
 import { TOTAL_LAPS } from '../laps';
 import { createRace, stepRace } from '../race';
-import { buildTrack, projectToTrack, sampleTrack, wrapDistance } from '../track';
+import { buildTrack, projectToTrack, sampleTrack, slopeAt, wrapDistance } from '../track';
 import type { RaceState, TrackDef, TrackId } from '../types';
 import { COURSE_FINGERPRINT, getTrack, TRACK_IDS, TRACKS } from './index';
 import { BASE_ROAD_HALF_WIDTH, BASE_WALL_HALF_WIDTH } from './widths';
@@ -106,6 +106,12 @@ describe.each(TRACK_IDS)('%s course contract', id => {
 
   it('validates the width profile, passages, grid, boxes and racing line', () => {
     expect(() => validateTrackDef(track.def)).not.toThrow();
+  });
+
+  it('keeps every grade within 30%, including the seam', () => {
+    for (const sample of track.samples) {
+      expect(Math.abs(slopeAt(track, sample.distance)), `distance ${sample.distance}`).toBeLessThanOrEqual(0.30);
+    }
   });
 
   it('keeps curvature radius at least wall half-width plus 2.5m, including the seam', () => {

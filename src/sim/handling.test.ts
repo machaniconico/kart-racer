@@ -162,10 +162,15 @@ describe('H1 handling', () => {
 // | snowpeak | v11 (old) | 17.939814814814813 | 0         | 0         |         |
 // | snowpeak | v13 (new) | 17.86990740740741  | 0         | 0         | 0.996   |
 // CANYON keeps its band-hit budget of 4 (measured 0 here).
+// M4-05 / SNOWPEAK layout 3: 19.43m elevation range, 20.11% climb and one banked sweeper.
+// Recorded on darwin-arm64, 8 CPUs × seeds [1, 42, 98765] × 3 laps (72 laps):
+// | Layout / protocol | Mean lap (s)       | Wall hits | Band hits | New/old |
+// | 2 / v13 (M4-01)   | 17.86990740740741  | 0         | 0         |         |
+// | 3 / v13 (M4-05)   | 17.727314814814815 | 0         | 0         | 0.992   |
 const BASELINE = {
   meadow: { version: 'v13', meanLap: 18.854398148148153, wallHits: 0, bandHits: 0 },
   canyon: { version: 'v13', meanLap: 19.76342592592593, wallHits: 0, bandHits: 4 },
-  snowpeak: { version: 'v13', meanLap: 17.86990740740741, wallHits: 0, bandHits: 0 },
+  snowpeak: { version: 'v13', meanLap: 17.727314814814815, wallHits: 0, bandHits: 0 },
   neon: { version: 'v12', meanLap: 18.308796296296297, wallHits: 0, bandHits: 3 },
 };
 const SEEDS = [1, 42, 98765];
@@ -239,6 +244,16 @@ describe('H1 CPU balance: absolute range and recorded baseline', () => {
       }
     }
     const meanLap = totalLapTime / 72;
+    if (trackId === 'snowpeak') {
+      const m401MeanLap = 17.86990740740741;
+      expect(BASELINE.snowpeak.version).toBe('v13');
+      expect(BASELINE.snowpeak.meanLap / m401MeanLap).toBeGreaterThanOrEqual(0.95);
+      expect(BASELINE.snowpeak.meanLap / m401MeanLap).toBeLessThanOrEqual(1.10);
+      expect(meanLap / m401MeanLap).toBeGreaterThanOrEqual(0.95);
+      expect(meanLap / m401MeanLap).toBeLessThanOrEqual(1.10);
+      expect(wallHits).toBe(0);
+      expect(bandHits).toBe(0);
+    }
     if (trackId === 'neon') {
       const v11MeanLap = 18.441435185185185;
       expect(meanLap / v11MeanLap).toBeGreaterThanOrEqual(0.95);

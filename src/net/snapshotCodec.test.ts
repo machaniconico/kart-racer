@@ -568,7 +568,7 @@ describe('protocol layout fingerprint', () => {
     pinned[10] = 574910572;
     pinned[11] = 1042567012;
     pinned[12] = 313875369;
-    pinned[13] = 313875369;
+    pinned[13] = 2812341565;
     const definitions = TRACK_IDS.map(id => TRACKS[id]);
     expect(COURSE_FINGERPRINT).toBe(Number.parseInt(fingerprint(definitions), 16));
     expect(COURSE_FINGERPRINT).toBe(pinned[PROTOCOL_VERSION]);
