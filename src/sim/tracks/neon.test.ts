@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { getAIInput } from '../ai';
 import { validateTrackDef } from '../corridor';
-import { TOTAL_LAPS } from '../laps';
+import { DEFAULT_LAPS } from '../laps';
 import { createRace, FIXED_DT, stepRace } from '../race';
 import { crossedZone, racingLineOffset } from '../surfaces';
 import { sampleTrack } from '../track';
@@ -55,8 +55,8 @@ function runRace(trackId: TrackId, seed: number) {
   expect(state.karts).toHaveLength(8);
   for (const kart of state.karts) {
     expect(kart.human).toBe(false);
-    expect(kart.lap).toBe(TOTAL_LAPS);
-    expect(kart.lapTimes).toHaveLength(TOTAL_LAPS);
+    expect(kart.lap).toBe(DEFAULT_LAPS);
+    expect(kart.lapTimes).toHaveLength(DEFAULT_LAPS);
     expect(kart.finishTime).not.toBeNull();
     expect(kart.finishTime).toBeLessThanOrEqual(180);
   }

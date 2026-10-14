@@ -15,7 +15,7 @@ export interface InputSource {
 
 export interface RacerSpec { name: string; color: number; human: boolean }
 /** Profiles are in slot order; omitted slots use CPU defaults. */
-export interface RaceOptions { trackId?: TrackId; racers?: readonly RacerSpec[] }
+export interface RaceOptions { trackId?: TrackId; racers?: readonly RacerSpec[]; laps?: number }
 export interface Pose { x: number; y: number; z: number; heading: number }
 export interface KartState extends Pose {
   id: number;
@@ -47,6 +47,8 @@ export interface KartState extends Pose {
   previousItem: boolean;
   aiPhase: number;
   hitCooldown: number;
+  /** Index into track.def.barriers of the last band touched; -1 = none. */
+  lastBand: number;
 }
 export interface ItemBox extends Pose { id: number; respawnTime: number }
 export interface Projectile extends Pose {
@@ -64,6 +66,7 @@ export interface RaceEvent {
 }
 export interface RaceState {
   trackId: TrackId;
+  laps: number;
   tick: number;
   seed: number;
   phase: 'countdown' | 'racing' | 'finished';

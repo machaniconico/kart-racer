@@ -25,13 +25,13 @@ const players: RosterPlayer[] = Array.from({ length: 8 }, (_, slot) => ({
 
 function finalState() {
   return {
-    tick: 600, seed: 42, trackId: 'meadow' as const, phase: 'finished' as const, countdown: 0, racingTicks: 420, time: 7,
+    laps: 3, tick: 600, seed: 42, trackId: 'meadow' as const, phase: 'finished' as const, countdown: 0, racingTicks: 420, time: 7,
     karts: players.map(player => ({
       id: player.slot, name: player.name, color: player.color, x: 0, y: 0, z: 0, heading: 0,
       speed: 0, steer: 0, trackDistance: 0, lateralOffset: 0, lap: 3, nextCheckpoint: 0,
       lapStartTime: 0, lapTimes: [2, 2, 3], finishTime: 7, driftTime: 0, driftDirection: 0,
       boostTime: 0, spinTime: 0, hopTime: 0, item: null, wrongWay: false, startedLap: true,
-      lapProgress: 0, lapValid: true, previousDrift: false, previousItem: false, aiPhase: 0, hitCooldown: 0, airTime: 0,
+      lapProgress: 0, lapValid: true, previousDrift: false, previousItem: false, aiPhase: 0, hitCooldown: 0, airTime: 0, lastBand: -1,
       human: player.kind !== 'cpu', effects: { rouletteTime: 0, rapidTime: 0, rapidUnused: 1, auraTime: 0, shrinkTime: 0, inkTime: 0,
         autoTime: 0, charges: 0, holding: 0, aiHoldTicks: 0, orbitKind: 0, orbitCount: 0 },
     })),
@@ -90,9 +90,10 @@ describe('room codes', () => {
 });
 
 describe('control protocol', () => {
-  it('isolates protocol v13 rooms from earlier versions', () => {
-    expect(PROTOCOL_VERSION).toBe(13);
-    expect(ROOM_PREFIX).toBe('pcircuit-v13-');
+  it('isolates protocol v14 rooms from earlier versions', () => {
+    expect(PROTOCOL_VERSION).toBe(14);
+    expect(ROOM_PREFIX).toBe('pcircuit-v14-');
+    expect(fromPeerId('pcircuit-v13-AB2X')).toBeNull();
     expect(fromPeerId('pcircuit-v12-AB2X')).toBeNull();
     expect(fromPeerId('pcircuit-v9-AB2X')).toBeNull();
     expect(fromPeerId('pcircuit-v8-AB2X')).toBeNull();
@@ -199,6 +200,11 @@ describe('control protocol', () => {
       { ...finalState(), projectiles: [{ ...finalState().projectiles[0], ownerId: 8 }] },
       { ...finalState(), traps: [{ ...finalState().traps[0], age: null }] },
       { ...finalState(), events: [{ type: 'finish', kartId: 0, value: '7' }] },
+      { ...finalState(), laps: 0 }, { ...finalState(), laps: 4 }, { ...finalState(), laps: 2.5 },
+      Object.fromEntries(Object.entries(finalState()).filter(([key]) => key !== 'laps')),
+      { ...finalState(), karts: [{ ...finalState().karts[0], lastBand: -2 }] },
+      { ...finalState(), karts: [{ ...finalState().karts[0], lastBand: 0.5 }] },
+      { ...finalState(), karts: [Object.fromEntries(Object.entries(finalState().karts[0]!).filter(([key]) => key !== 'lastBand'))] },
     ];
     for (const state of invalidStates) {
       expect(isRaceState(state)).toBe(false);

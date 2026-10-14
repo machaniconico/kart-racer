@@ -4,12 +4,12 @@ import type { RosterPlayer } from './session';
 export type { InputFrame, RaceEvent, RaceState } from '../sim/types';
 export type { RosterPlayer } from './session';
 
-export const PROTOCOL_VERSION = 13;
+export const PROTOCOL_VERSION = 14;
 export const ROOM_PREFIX = `pcircuit-v${PROTOCOL_VERSION}-`;
 /** FNV-1a32 of JSON.stringify(SNAPSHOT_LAYOUT), including enum order and flight fields.
- * Pinned to protocol v8; snapshot codec tests compare the actual wire descriptors.
+ * Pinned to protocol v14; snapshot codec tests compare the actual wire descriptors.
  */
-export const LAYOUT_FINGERPRINT = 'f7b2a1f2';
+export const LAYOUT_FINGERPRINT = 'f84bde47';
 export const MAX_PLAYERS = 8;
 export const MAX_NAME_LENGTH = 10;
 export const MAX_CONTROL_LENGTH = 65_536;
@@ -99,10 +99,10 @@ function effects(value: unknown): boolean {
 }
 function kart(value: unknown): boolean {
   return record(value) && keys(value, [...kartNumbers, ...kartBooleans, 'id', 'name', 'color',
-    'lap', 'nextCheckpoint', 'lapTimes', 'finishTime', 'item', 'human', 'effects']) &&
+    'lap', 'nextCheckpoint', 'lapTimes', 'finishTime', 'item', 'human', 'effects', 'lastBand']) &&
     slot(value.id) && isPlayerName(value.name) && color(value.color) &&
     kartNumbers.every(key => finite(value[key])) && kartBooleans.every(key => typeof value[key] === 'boolean') &&
-    integer(value.lap, 0, 255) && integer(value.nextCheckpoint, 0, 255) &&
+    integer(value.lap, 0, 255) && integer(value.nextCheckpoint, 0, 255) && integer(value.lastBand, -1) &&
     arrayOf(value.lapTimes, positiveTime, 255) &&
     (value.finishTime === null || positiveTime(value.finishTime)) &&
     (value.item === null || oneOf(value.item, itemTypes)) &&
@@ -126,9 +126,9 @@ function entity(value: unknown, trap: boolean): boolean {
       (value.kind === 'bolt' && typeof value.ownerCleared === 'boolean'));
 }
 export function isRaceState(value: unknown): value is RaceState {
-  if (!record(value) || !keys(value, ['tick', 'seed', 'trackId', 'phase', 'countdown', 'racingTicks', 'time',
+  if (!record(value) || !keys(value, ['laps', 'tick', 'seed', 'trackId', 'phase', 'countdown', 'racingTicks', 'time',
     'karts', 'boxes', 'projectiles', 'traps', 'events', 'nextEntityId'])) return false;
-  return integer(value.tick) && integer(value.seed) && oneOf(value.trackId, PROTOCOL_TRACK_IDS) && integer(value.racingTicks) &&
+  return integer(value.laps, 1, 3) && integer(value.tick) && integer(value.seed) && oneOf(value.trackId, PROTOCOL_TRACK_IDS) && integer(value.racingTicks) &&
     oneOf(value.phase, ['countdown', 'racing', 'finished']) && finite(value.countdown) && positiveTime(value.time) &&
     arrayOf(value.karts, kart, MAX_PLAYERS, 1) &&
     new Set((value.karts as RecordValue[]).map(entry => entry.id)).size === (value.karts as unknown[]).length &&

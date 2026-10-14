@@ -3,7 +3,13 @@ import { sampleTrack } from './track';
 import { getTrack } from './tracks';
 import type { KartState, RaceState, Track } from './types';
 
-export const TOTAL_LAPS = 3;
+export const DEFAULT_LAPS = 3;
+export const MAX_LAPS = 3;
+export const LAP_CHOICES = [1, 2, 3] as const;
+
+export function isLapCount(n: unknown): n is number {
+  return Number.isInteger(n) && (n as number) >= 1 && (n as number) <= MAX_LAPS;
+}
 
 export interface PreviousPosition { x: number; z: number; trackDistance: number }
 
@@ -54,7 +60,7 @@ export function updateLapTracking(track: Track, state: RaceState, kart: KartStat
       kart.lapTimes.push(state.time - kart.lapStartTime);
       kart.lapStartTime = state.time;
       state.events.push({ type: 'lap', kartId: kart.id, value: kart.lap });
-      if (kart.lap === TOTAL_LAPS) {
+      if (kart.lap === state.laps) {
         kart.finishTime = state.time;
         state.events.push({ type: 'finish', kartId: kart.id, value: state.time });
       }

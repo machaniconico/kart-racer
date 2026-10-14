@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { getAIInput } from '../ai';
 import { validateTrackDef } from '../corridor';
-import { getRank, TOTAL_LAPS } from '../laps';
+import { DEFAULT_LAPS, getRank } from '../laps';
 import { createRace, stepRace } from '../race';
 import { surfaceAt } from '../surfaces';
 import { rollAt, slopeAt } from '../track';
@@ -128,7 +128,7 @@ describe('FROSTBITE PEAK', () => {
     expect(state.karts).toHaveLength(8);
     for (const kart of state.karts) {
       expect(kart.human).toBe(false);
-      expect(kart.lap).toBe(TOTAL_LAPS);
+      expect(kart.lap).toBe(DEFAULT_LAPS);
       expect(kart.lapTimes).toHaveLength(3);
       expect(kart.finishTime).not.toBeNull();
       expect(kart.finishTime).toBeLessThanOrEqual(180);

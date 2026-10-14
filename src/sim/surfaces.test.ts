@@ -11,20 +11,38 @@ import type { InputFrame, RaceState, Track, TrackDef } from './types';
 
 // Final JSON after a full 8-CPU MEADOW race, pinned outside the test.
 // Long races amplify floating-point differences between architectures, so each
-// platform has its own column. darwin-arm64 was measured after M4-01 (slope physics).
-// linux-x64 was copied from the CI log of d66b581 (run 38553580444).
+// platform has its own column. darwin-arm64 was measured after M4.5-00 (protocol v14:
+// RaceState.laps and KartState.lastBand join the JSON; the sim itself is unchanged).
+// linux-x64 is 'pending-ci' until M4.5-08 pins it from a CI log.
 const MEADOW_FINAL_JSON = [
-  [1, '7a7c09b53cec68e197f5caf7215242fd568158cf2936f233358c6e6be6c89db4', 'b651b89838b9d289448a1bc34a7dbaca456a6d2f554f94b814f8223871f931fc'],
-  [2, '71e371e37c208c7e6d0ac0dafcb2129fefae9b6b00598bd5e3f039989f9f9262', 'c4ed4117ca87ed909354502fdfe5e2639b906e0a03a36480aa255d4ea470e329'],
-  [3, '39560d6876d9b17c53f2160a5ca7394e295aa7e8cb61e62ab10754fd0df24e22', 'a63fa79f1747528bf7994d746ad7131d89643f358db5db545377d56987fe2750'],
-  [4, '50b0761f5a7b61ff09c7e8ac35727a05a9b1b864f3b968d8b1991ab5a08cb06e', '559e1a439c51e4d3b417e540fdeec364c9b38fa904231f42f58b78c1658427ef'],
-  [5, 'c7d1b35c33d925c3912b66ff5b0562ccbc81d56dc6decd0dfb19c8bf09add23d', 'acab4f88574d9e265551eb8c266bd1389ee05ab59a081c0da473ebb0da9b863d'],
-  [42, '29de9ef0608c4ed56c0b3eaef66c8b94e5be142732be1e4ac30baa9e5bf8d749', 'ce5c9e63526c2f3f41731998b02b1b7d43cf1fa98f035192161bae5abee42fa2'],
-  [123, '278a805c825a317c38b289b8f2a2f26b2cb3fbf10f892d145b931eb22114e1eb', '6b78a8ce09556b3f94578a0aa53449a6d1ace1dc44f4f2efa375666eb60c7c19'],
-  [999, 'e2f9a289054f8db33cec9be33b27967a9244b5a9453a42fa79699d4657475085', '6128fca1109ac4db0d57e6ddc5e3efffb3c84a3657aeb78df62f72fb2e194b6b'],
-  [12345, 'b5c12e71ceec29852cf01c094ff734fdc9967b88988260538b7928ad309f6271', '97d27aa72de72a28242991df5eddb1ad791b66c1ec16735bf34454f8cf926375'],
-  [98765, '51f005edca96784bfd14e1bfde4edd82736ed7515228f0ea164c99a3bef7107e', '9bdac8d243d878d6d9c292e6913e9efdbe641da4447528e387cae8eb85aa41ec'],
+  [1, '714b19c463e1cada519d7257674792c18fc5c116a55090f6540f31cb6cb67c28', 'pending-ci'],
+  [2, '7cf7f8df13d33e64c3ba1a3a5ab61f2678d2eedf23081ca83cc92562599db42d', 'pending-ci'],
+  [3, '55d3f0b4f878bfc2cbf3505e527b05938ef7cae9fd56191bf161820eb15630d3', 'pending-ci'],
+  [4, 'b0706dbc11b68e0f4194ffbb826a7159eee9709c4d2fa972c2c9b25c3d23e80f', 'pending-ci'],
+  [5, 'eebe019e04594067e228b33ee0dcb138eb03005ecd0dd6bc49448047115f4501', 'pending-ci'],
+  [42, '72b1a341de0f18c73fa49c57a905067f2dbd8b7ca0be2b61c8b02bf705e6350e', 'pending-ci'],
+  [123, '2ed0a63161294d8036637c3144d0ed2a3133d929ed7cd9a1452bee03a9259aaa', 'pending-ci'],
+  [999, 'fa604ff62a707179559198dede0d27de7bdcf17edaadde158809fc149fa1c85a', 'pending-ci'],
+  [12345, '14bc2821cf809da7e0220779793fc2ca7392917b6e699cb0dec5a451c0908ad7', 'pending-ci'],
+  [98765, '60a5ceeb2d58efa8e4cfd8f6a49289b3e081c503570941e975775b94dd894689', 'pending-ci'],
 ] as const;
+// Before M4.5-00 (protocol v13):
+// // Final JSON after a full 8-CPU MEADOW race, pinned outside the test.
+// // Long races amplify floating-point differences between architectures, so each
+// // platform has its own column. darwin-arm64 was measured after M4-01 (slope physics).
+// // linux-x64 was copied from the CI log of d66b581 (run 38553580444).
+// const MEADOW_FINAL_JSON = [
+//   [1, '7a7c09b53cec68e197f5caf7215242fd568158cf2936f233358c6e6be6c89db4', 'b651b89838b9d289448a1bc34a7dbaca456a6d2f554f94b814f8223871f931fc'],
+//   [2, '71e371e37c208c7e6d0ac0dafcb2129fefae9b6b00598bd5e3f039989f9f9262', 'c4ed4117ca87ed909354502fdfe5e2639b906e0a03a36480aa255d4ea470e329'],
+//   [3, '39560d6876d9b17c53f2160a5ca7394e295aa7e8cb61e62ab10754fd0df24e22', 'a63fa79f1747528bf7994d746ad7131d89643f358db5db545377d56987fe2750'],
+//   [4, '50b0761f5a7b61ff09c7e8ac35727a05a9b1b864f3b968d8b1991ab5a08cb06e', '559e1a439c51e4d3b417e540fdeec364c9b38fa904231f42f58b78c1658427ef'],
+//   [5, 'c7d1b35c33d925c3912b66ff5b0562ccbc81d56dc6decd0dfb19c8bf09add23d', 'acab4f88574d9e265551eb8c266bd1389ee05ab59a081c0da473ebb0da9b863d'],
+//   [42, '29de9ef0608c4ed56c0b3eaef66c8b94e5be142732be1e4ac30baa9e5bf8d749', 'ce5c9e63526c2f3f41731998b02b1b7d43cf1fa98f035192161bae5abee42fa2'],
+//   [123, '278a805c825a317c38b289b8f2a2f26b2cb3fbf10f892d145b931eb22114e1eb', '6b78a8ce09556b3f94578a0aa53449a6d1ace1dc44f4f2efa375666eb60c7c19'],
+//   [999, 'e2f9a289054f8db33cec9be33b27967a9244b5a9453a42fa79699d4657475085', '6128fca1109ac4db0d57e6ddc5e3efffb3c84a3657aeb78df62f72fb2e194b6b'],
+//   [12345, 'b5c12e71ceec29852cf01c094ff734fdc9967b88988260538b7928ad309f6271', '97d27aa72de72a28242991df5eddb1ad791b66c1ec16735bf34454f8cf926375'],
+//   [98765, '51f005edca96784bfd14e1bfde4edd82736ed7515228f0ea164c99a3bef7107e', '9bdac8d243d878d6d9c292e6913e9efdbe641da4447528e387cae8eb85aa41ec'],
+// ] as const;
 const PLATFORM_COLUMN: Record<string, 1 | 2> = { 'darwin-arm64': 1, 'linux-x64': 2 };
 const column = PLATFORM_COLUMN[`${process.platform}-${process.arch}`];
 

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { validateTrackDef } from '../sim/corridor';
-import { TOTAL_LAPS } from '../sim/laps';
+import { DEFAULT_LAPS } from '../sim/laps';
 import { createRace, stepRace } from '../sim/race';
 import { buildTrack, sampleTrack } from '../sim/track';
 import * as tracks from '../sim/tracks';
@@ -49,10 +49,10 @@ function drive(offset: number, assisted: boolean) {
   const sample = sampleTrack(track, kart.trackDistance);
   Object.assign(kart, { human: true, x: sample.x + sample.nx * offset, y: sample.y, z: sample.z + sample.nz * offset,
     heading: Math.atan2(sample.tx, sample.tz), lateralOffset: offset });
-  const band = Array.from({ length: TOTAL_LAPS }, () => 0);
-  const wall = Array.from({ length: TOTAL_LAPS }, () => 0);
+  const band = Array.from({ length: DEFAULT_LAPS }, () => 0);
+  const wall = Array.from({ length: DEFAULT_LAPS }, () => 0);
   while (kart.finishTime === null && state.tick < 60 * 60 * 10) {
-    const lap = Math.min(kart.lap, TOTAL_LAPS - 1);
+    const lap = Math.min(kart.lap, DEFAULT_LAPS - 1);
     stepRace(state, [assisted ? applySteerAssist(state, kart, input, 1) : input]);
     for (const event of state.events) {
       if (event.type !== 'hit') continue;

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   BOX_RESPAWN_TIME, DRIFT_BLUE_TIME, DRIFT_ORANGE_TIME, FIXED_DT,
-  KART_RADIUS, NEUTRAL_INPUT, TOTAL_LAPS,
+  KART_RADIUS, NEUTRAL_INPUT, DEFAULT_LAPS,
   chooseItem, createRace, getAIInput, getRank, projectToTrack,
   sampleTrack, stepRace, updateLapTracking, RACE_FINISH_TIMEOUT,
   getFinishTimeRemaining, isRaceTimedOut, KART_EFFECT_LAYOUT, ENTITY_KINDS,
@@ -373,7 +373,7 @@ describe('ordered directional checkpoints and lap timing', () => {
     const kart = state.karts[0]!;
     place(kart, track.length - 0.5, offset);
     let elapsed = 0;
-    for (let distance = 0; distance <= track.length * TOTAL_LAPS + 1; distance += 0.5) {
+    for (let distance = 0; distance <= track.length * DEFAULT_LAPS + 1; distance += 0.5) {
       const previous = { x: kart.x, z: kart.z, trackDistance: kart.trackDistance };
       const point = sampleTrack(track, distance);
       kart.x = point.x + point.nx * offset;
@@ -387,9 +387,41 @@ describe('ordered directional checkpoints and lap timing', () => {
       updateLapTracking(track, state, kart, previous);
       expect(kart.lapValid, `inside hairpin at ${point.distance.toFixed(1)}m`).toBe(true);
     }
-    expect(kart.lap).toBe(TOTAL_LAPS);
-    expect(kart.lapTimes).toHaveLength(TOTAL_LAPS);
+    expect(kart.lap).toBe(DEFAULT_LAPS);
+    expect(kart.lapTimes).toHaveLength(DEFAULT_LAPS);
     expect(kart.finishTime).not.toBeNull();
+  });
+
+  it.each([1, 2])('stops a %i-lap race at that lap count', (laps) => {
+    const state = createRace(42, { laps });
+    expect(state.laps).toBe(laps);
+    for (let i = 0; i < 180; i++) stepRace(state, []);
+    const kart = state.karts[0]!;
+    place(kart, track.length - 0.5);
+    let elapsed = 0;
+    for (let distance = 0; distance <= track.length * (laps + 1) + 1; distance += 0.5) {
+      const previous = { x: kart.x, z: kart.z, trackDistance: kart.trackDistance };
+      const point = sampleTrack(track, distance);
+      kart.x = point.x;
+      kart.z = point.z;
+      const projection = projectToTrack(track, kart.x, kart.z, previous.trackDistance);
+      kart.trackDistance = projection.distance;
+      kart.lateralOffset = projection.offset;
+      kart.heading = Math.atan2(point.tx, point.tz);
+      kart.speed = 12;
+      state.time = elapsed += 0.5 / kart.speed;
+      updateLapTracking(track, state, kart, previous);
+    }
+    expect(kart.lap).toBe(laps);
+    expect(kart.lapTimes).toHaveLength(laps);
+    expect(kart.finishTime).not.toBeNull();
+  });
+
+  it('defaults to three laps and rejects lap counts outside 1 to 3', () => {
+    expect(createRace(1).laps).toBe(DEFAULT_LAPS);
+    expect(DEFAULT_LAPS).toBe(3);
+    for (const laps of [0, 4, 2.5]) expect(() => createRace(1, { laps })).toThrow(RangeError);
+    expect(createRace(1).karts.every(kart => kart.lastBand === -1)).toBe(true);
   });
 
   it.each([8.5, 9, 9.5, 10])('completes a fixed-tick driving probe targeting inside offset %s', (offset) => {
@@ -423,7 +455,7 @@ describe('ordered directional checkpoints and lap timing', () => {
     expect(kart.lapTimes[0]).toBeCloseTo(26.5, 6);
     travelLap(state, 24);
     travelLap(state, 25);
-    expect(kart.lap).toBe(TOTAL_LAPS);
+    expect(kart.lap).toBe(DEFAULT_LAPS);
     expect(kart.finishTime).toBeCloseTo(75.5, 6);
     expect(kart.lapTimes).toHaveLength(3);
     expect(kart.lapTimes.reduce((sum, time) => sum + time, 0)).toBeCloseTo(kart.finishTime!, 10);
@@ -857,7 +889,7 @@ describe('CPU finish independence', () => {
     const cpu = state.karts[1]!;
     place(cpu, 5);
     cpu.speed = 25;
-    cpu.lap = TOTAL_LAPS;
+    cpu.lap = DEFAULT_LAPS;
     cpu.finishTime = 1;
     cpu.lapTimes = [0.3, 0.3, 0.4];
     const initial = { x: cpu.x, z: cpu.z };
@@ -867,7 +899,7 @@ describe('CPU finish independence', () => {
     expect(cpu.speed).toBeLessThan(13);
     expect(cpu.finishTime).toBe(1);
     expect(cpu.lapTimes).toEqual([0.3, 0.3, 0.4]);
-    expect(cpu.lap).toBe(TOTAL_LAPS);
+    expect(cpu.lap).toBe(DEFAULT_LAPS);
     expect(getRank(state, cpu.id)).toBe(1);
   });
 

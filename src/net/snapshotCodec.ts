@@ -6,12 +6,12 @@ import { NEUTRAL_INPUT, quantizeInput } from './inputBuffer';
 import { isRaceState, MAX_PLAYERS, PacketKind } from './protocol';
 
 // All multibyte fields are little endian. The design's field lists total
-// 28/58/25 bytes, giving 1,179 bytes at capacity and 554 with two entities.
-export const SNAPSHOT_HEADER_BYTES = 28;
-export const SNAPSHOT_KART_BYTES = 58;
+// 29/59/25 bytes, giving 1,188 bytes at capacity and 563 with two entities.
+export const SNAPSHOT_HEADER_BYTES = 29;
+export const SNAPSHOT_KART_BYTES = 59;
 export const SNAPSHOT_ENTITY_BYTES = 25;
 export const SNAPSHOT_BOX_COUNT = 12;
-// With 58-byte karts, a 28th entity would exceed the 1,200-byte packet budget.
+// With 59-byte karts, a 28th entity would exceed the 1,200-byte packet budget.
 export const MAX_SNAPSHOT_ENTITIES = 27;
 const BOX_OFFSET = SNAPSHOT_HEADER_BYTES + MAX_PLAYERS * SNAPSHOT_KART_BYTES;
 const BASE_BYTES = BOX_OFFSET + SNAPSHOT_BOX_COUNT;
@@ -28,7 +28,8 @@ const ENTITY_FLIGHT_LAYOUT = {
 } as const;
 const AIR_TIME_LAYOUT = { field: 'airTime', byteOffset: 57, type: 'Uint8', scale: 100 } as const;
 export const SNAPSHOT_LAYOUT = [KART_EFFECT_LAYOUT, ENTITY_KINDS, ITEMS, FLAGS, PHASES, ENTITY_FLIGHT_LAYOUT,
-  AIR_TIME_LAYOUT, { kartBytes: SNAPSHOT_KART_BYTES, maxEntities: MAX_SNAPSHOT_ENTITIES }] as const;
+  AIR_TIME_LAYOUT, { headerBytes: SNAPSHOT_HEADER_BYTES, kartBytes: SNAPSHOT_KART_BYTES, boxCount: SNAPSHOT_BOX_COUNT,
+    maxEntities: MAX_SNAPSHOT_ENTITIES }] as const;
 type Entity = (Projectile | Trap) & ProjectileState;
 
 export interface Snapshot {
@@ -105,6 +106,7 @@ export function encodeSnapshot(
   view.setUint32(21, state.racingTicks, true);
   view.setUint16(25, state.nextEntityId, true);
   view.setUint8(27, entities.length);
+  view.setUint8(28, state.laps);
   for (const kart of state.karts) {
     const offset = SNAPSHOT_HEADER_BYTES + kart.id * SNAPSHOT_KART_BYTES;
     float(view, offset, kart.x);
@@ -128,6 +130,8 @@ export function encodeSnapshot(
     view.setUint8(offset + 42, quantize(kart.hopTime, 100, 0, 255));
     view.setUint8(offset + 43, quantize(kart.hitCooldown, 100, 0, 255));
     view.setUint8(offset + AIR_TIME_LAYOUT.byteOffset, quantize(kart.airTime, AIR_TIME_LAYOUT.scale, 0, 255));
+    if (!uint(kart.lastBand + 1, 255)) throw new RangeError('Snapshot band index overflow');
+    view.setUint8(offset + 58, kart.lastBand + 1);
     const item = ITEMS.indexOf(kart.item);
     if (item < 0) throw new RangeError('Unknown snapshot item');
     view.setUint8(offset + 44, item);
@@ -177,12 +181,13 @@ export function decodeSnapshot(data: unknown, template: RaceState): Snapshot | n
   const count = view.getUint8(27);
   const phase = PHASES[view.getUint8(18)];
   const hostTime = view.getFloat64(6, true);
-  if (view.getUint8(0) !== PacketKind.SNAPSHOT || count > MAX_SNAPSHOT_ENTITIES ||
+  const laps = view.getUint8(28);
+  if (view.getUint8(0) !== PacketKind.SNAPSHOT || count > MAX_SNAPSHOT_ENTITIES || laps < 1 || laps > 3 ||
     data.byteLength !== BASE_BYTES + count * SNAPSHOT_ENTITY_BYTES || !phase ||
     !Number.isFinite(hostTime) || hostTime < 0) return null;
   const racingTicks = view.getUint32(21, true);
   const state: RaceState = {
-    tick: view.getUint32(2, true), seed: view.getUint32(14, true), phase,
+    laps, tick: view.getUint32(2, true), seed: view.getUint32(14, true), phase,
     countdown: view.getUint16(19, true) / 100, racingTicks, time: racingTicks * FIXED_DT,
     karts: [], boxes: [], projectiles: [], traps: [], events: [],
     nextEntityId: view.getUint16(25, true), trackId: template.trackId,
@@ -213,6 +218,7 @@ export function decodeSnapshot(data: unknown, template: RaceState): Snapshot | n
       boostTime: view.getUint8(offset + 40) / 50, spinTime: view.getUint8(offset + 41) / 50,
       hopTime: view.getUint8(offset + 42) / 100, hitCooldown: view.getUint8(offset + 43) / 100, item,
       airTime: view.getUint8(offset + AIR_TIME_LAYOUT.byteOffset) / AIR_TIME_LAYOUT.scale,
+      lastBand: view.getUint8(offset + 58) - 1,
     };
     FLAGS.forEach((key, index) => { kart[key] = (flags & (1 << index)) !== 0; });
     for (const field of KART_EFFECT_LAYOUT) {

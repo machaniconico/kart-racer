@@ -12,7 +12,9 @@ afterEach(() => vi.restoreAllMocks());
 
 // sha256 of the final JSON after 2000 AI ticks on slopeCourse(0); aa3c203's race.ts (before M4-01)
 // and HEAD's race.ts (5800fc4) both give this value with this same fixture and procedure.
-const FLAT_COURSE_PIN = '4e48385419ddf18007f71f58761bb09b5cb935a10a1abc029fbf102adce00dba';
+// M4.5-00 adds RaceState.laps and KartState.lastBand to the JSON; with those keys stripped the old pin
+// 4e48385419ddf18007f71f58761bb09b5cb935a10a1abc029fbf102adce00dba is reproduced, so the physics is unchanged.
+const FLAT_COURSE_PIN = 'ef1b943f61224fb1a8f954dee4448729c48b8425856379c203864489eeaf491f';
 
 function soloRace(track: Track, distance: number, speed = 0, offset = 0): RaceState {
   vi.spyOn(tracks, 'getTrack').mockReturnValue(track);

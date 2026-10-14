@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getAIInput } from '../ai';
 import { validateCoursePlayability, validateTrackDef, widthAt } from '../corridor';
-import { TOTAL_LAPS } from '../laps';
+import { DEFAULT_LAPS } from '../laps';
 import { createRace, FIXED_DT, KART_RADIUS, NEUTRAL_INPUT, stepRace } from '../race';
 import { JUMP_DURATION, surfaceAt } from '../surfaces';
 import { buildTrack, projectToTrack, sampleTrack, wrapDistance } from '../track';
@@ -301,11 +301,11 @@ describe('SUNSCAR CANYON', () => {
     expect(airborneTicks).toBeGreaterThan(0);
     for (const kart of state.karts) {
       expect(kart.human).toBe(false);
-      expect(kart.lap).toBe(TOTAL_LAPS);
+      expect(kart.lap).toBe(DEFAULT_LAPS);
       expect(kart.lapTimes).toHaveLength(3);
       expect(kart.finishTime).not.toBeNull();
       expect(kart.airTime).toBe(0);
-      for (const jump of mainJumps) expect(flights[kart.id]![jumps.indexOf(jump)]!.size).toBe(TOTAL_LAPS);
+      for (const jump of mainJumps) expect(flights[kart.id]![jumps.indexOf(jump)]!.size).toBe(DEFAULT_LAPS);
     }
   }, 30_000);
 });

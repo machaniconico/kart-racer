@@ -542,7 +542,7 @@ describe('effect snapshot compatibility and deterministic replay', () => {
       hash = Math.imul(hash ^ character.charCodeAt(0), 0x01000193) >>> 0;
     }
     expect(hash.toString(16).padStart(8, '0')).toBe(LAYOUT_FINGERPRINT);
-    expect(PROTOCOL_VERSION).toBe(13);
+    expect(PROTOCOL_VERSION).toBe(14);
     const state = race();
     state.karts[0]!.item = 'rapidDash';
     press(state, state.karts[0]!);
@@ -1706,7 +1706,7 @@ describe('I2 held-item defense', () => {
     advanceItems(track, state, FIXED_DT);
     expect(state.projectiles).toHaveLength(40);
     const buffer = encodeSnapshot(state, 0, 0);
-    expect(buffer.byteLength).toBe(1179);
+    expect(buffer.byteLength).toBe(1188);
     const decoded = decodeSnapshot(buffer, createRace(42))!;
     expect(decoded.state.projectiles).toHaveLength(27);
     for (let tick = 0; tick < 360; tick++) advanceItems(track, state, FIXED_DT);

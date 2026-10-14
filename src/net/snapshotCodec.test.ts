@@ -22,7 +22,7 @@ const inputs: InputFrame[] = Array.from({ length: 8 }, (_, id) => ({
   steer: (id - 3.5) / 3.5, throttle: id / 7,
   brake: (id & 1) !== 0, drift: (id & 2) !== 0, useItem: (id & 4) !== 0,
 }));
-const ENTITY_OFFSET = 504;
+const ENTITY_OFFSET = 513;
 
 function projectile(id: number, x = id): Projectile {
   return { kind: 'bolt', id, ownerId: id % 8, x, y: 3.123456, z: -12.765432,
@@ -78,15 +78,15 @@ describe('snapshot codec', () => {
     const state = fixture();
     expect(state.karts).toHaveLength(8);
     expect(state.boxes).toHaveLength(12);
-    expect(encodeSnapshot(state, 0, 0).byteLength).toBe(1179);
+    expect(encodeSnapshot(state, 0, 0).byteLength).toBe(1188);
     expect(encodeSnapshot(state, 0, 0).byteLength).toBeLessThanOrEqual(1200);
     state.projectiles = [projectile(200), projectile(201)];
     state.traps = [];
-    expect(encodeSnapshot(state, 0, 0).byteLength).toBe(554);
+    expect(encodeSnapshot(state, 0, 0).byteLength).toBe(563);
     expect(encodeSnapshot(state, 0, 0).byteLength).toBeLessThanOrEqual(600);
     expect(MAX_SNAPSHOT_ENTITIES).toBe(27);
     expect(SNAPSHOT_BOX_COUNT).toBe(12);
-    expect([SNAPSHOT_HEADER_BYTES, SNAPSHOT_KART_BYTES, SNAPSHOT_ENTITY_BYTES]).toEqual([28, 58, 25]);
+    expect([SNAPSHOT_HEADER_BYTES, SNAPSHOT_KART_BYTES, SNAPSHOT_ENTITY_BYTES]).toEqual([29, 59, 25]);
   });
 
   it('round-trips all moving poses within tolerance, including a ten-second drift', () => {
@@ -136,6 +136,28 @@ describe('snapshot codec', () => {
     });
   });
 
+  it('round-trips the lap count in header byte 28 and lastBand + 1 in kart byte 58', () => {
+    for (const laps of [1, 2, 3]) {
+      const state = fixture();
+      state.laps = laps;
+      [-1, 0, 7].forEach((band, index) => { state.karts[index]!.lastBand = band; });
+      const buffer = encodeSnapshot(state, 23, 123456.789, inputs);
+      expect(new DataView(buffer).getUint8(28)).toBe(laps);
+      expect([0, 1, 2].map(id => new DataView(buffer).getUint8(SNAPSHOT_HEADER_BYTES + id * SNAPSHOT_KART_BYTES + 58)))
+        .toEqual([0, 1, 8]);
+      const decoded = roundTrip(state);
+      expect(decoded.state.laps).toBe(laps);
+      expect(decoded.state.karts.slice(0, 3).map(kart => kart.lastBand)).toEqual([-1, 0, 7]);
+      expect(Object.keys(decoded.state)).toEqual(Object.keys(createRace(123)));
+      expect(Object.keys(decoded.state.karts[0]!)).toEqual(Object.keys(createRace(123).karts[0]!));
+    }
+    for (const laps of [0, 4]) {
+      const buffer = encodeSnapshot(fixture(), 23, 123456.789, inputs);
+      new DataView(buffer).setUint8(28, laps);
+      expect(decodeSnapshot(buffer, createRace(123))).toBeNull();
+    }
+  });
+
   it('packs all roulette buckets alongside all orbit counts in byte seven without growing effects', () => {
     const state = createRace(42);
     const kart = state.karts[0];
@@ -145,7 +167,7 @@ describe('snapshot codec', () => {
       for (let orbitCount = 0; orbitCount <= 3; orbitCount++) {
         Object.assign(kart.effects, { rouletteTime: bucket / 20, orbitCount });
         const packet = encodeSnapshot(state, 0, 0);
-        expect(packet.byteLength).toBe(504);
+        expect(packet.byteLength).toBe(513);
         expect(new DataView(packet).getUint8(SNAPSHOT_HEADER_BYTES + 49 + 7)).toBe((bucket << 2) | orbitCount);
         expect(roundTrip(state).state.karts[0].effects).toEqual(kart.effects);
       }
@@ -491,11 +513,11 @@ describe('snapshot codec', () => {
     const mutations: ((view: DataView) => void)[] = [
       view => view.setUint8(0, PacketKind.INPUT), view => view.setUint8(18, 3),
       view => view.setUint8(27, 29), view => view.setFloat64(6, NaN, true),
-      view => view.setFloat32(28, Infinity, true), view => view.setInt8(28 + 16, -128),
-      view => view.setFloat32(28 + 29, -2, true), view => view.setInt8(28 + 39, 2),
-      view => view.setUint8(28 + 44, 255), view => view.setUint8(28 + 45, 64),
-      view => view.setInt8(28 + 46, -128), view => view.setUint8(28 + 48, 8),
-      view => view.setUint8(28 + 55, 61 << 2), view => view.setUint8(28 + 56, 128),
+      view => view.setFloat32(29, Infinity, true), view => view.setInt8(29 + 16, -128),
+      view => view.setFloat32(29 + 29, -2, true), view => view.setInt8(29 + 39, 2),
+      view => view.setUint8(29 + 44, 255), view => view.setUint8(29 + 45, 64),
+      view => view.setInt8(29 + 46, -128), view => view.setUint8(29 + 48, 8),
+      view => view.setUint8(29 + 55, 61 << 2), view => view.setUint8(29 + 56, 128),
       view => view.setUint8(ENTITY_OFFSET, 255), view => view.setUint8(ENTITY_OFFSET + 3, 8),
       view => view.setUint8(ENTITY_OFFSET + 20, 8), view => view.setFloat32(ENTITY_OFFSET + 21, NaN, true),
       view => view.setUint16(ENTITY_OFFSET + 25 + 1, view.getUint16(ENTITY_OFFSET + 1, true), true),
@@ -539,6 +561,7 @@ describe('protocol layout fingerprint', () => {
       11: 'f7b2a1f2',
       12: 'f7b2a1f2',
       13: 'f7b2a1f2',
+      14: 'f84bde47',
     };
     expect(SNAPSHOT_LAYOUT.slice(0, 2)).toEqual([KART_EFFECT_LAYOUT, ENTITY_KINDS]);
     expect(fingerprint(SNAPSHOT_LAYOUT)).toBe(LAYOUT_FINGERPRINT);
@@ -569,6 +592,7 @@ describe('protocol layout fingerprint', () => {
     pinned[11] = 1042567012;
     pinned[12] = 313875369;
     pinned[13] = 2812341565;
+    pinned[14] = 2812341565;
     const definitions = TRACK_IDS.map(id => TRACKS[id]);
     expect(COURSE_FINGERPRINT).toBe(Number.parseInt(fingerprint(definitions), 16));
     expect(COURSE_FINGERPRINT).toBe(pinned[PROTOCOL_VERSION]);
@@ -585,7 +609,7 @@ describe('I5 orbit snapshots', () => {
       Object.assign(kart.effects, { orbitKind: kart.id % 2 + 1, orbitCount: 3 });
     }
     const buffer = encodeSnapshot(state, 0, 0);
-    expect(buffer.byteLength).toBe(1179);
+    expect(buffer.byteLength).toBe(1188);
     expect(new DataView(buffer).getUint8(27)).toBe(27);
     const orbitFields = KART_EFFECT_LAYOUT.filter(field => field.field.startsWith('orbit'));
     expect(new Set(orbitFields.map(field => field.byteOffset)).size).toBe(2);
@@ -595,7 +619,7 @@ describe('I5 orbit snapshots', () => {
       .toEqual(state.karts.map(kart => [kart.effects.orbitKind, kart.effects.orbitCount]));
     state.projectiles = []; state.traps = [];
     const empty = encodeSnapshot(state, 0, 0);
-    expect(empty.byteLength).toBe(504);
+    expect(empty.byteLength).toBe(513);
     expect(new DataView(empty).getUint8(27)).toBe(0);
     for (const kind of [1, 2]) {
       for (const count of [0, 1, 2, 3]) {

@@ -31,6 +31,7 @@ export function interpolateState(from: Snapshot, to: Snapshot, hostTime: number,
     kart.spinTime = discrete.spinTime;
     kart.hopTime = discrete.hopTime;
     kart.hitCooldown = discrete.hitCooldown;
+    kart.lastBand = discrete.lastBand;
     for (const timer of ['rouletteTime', 'rapidTime', 'auraTime', 'shrinkTime', 'inkTime', 'autoTime'] as const) {
       kart.effects[timer] = discrete.effects[timer];
     }

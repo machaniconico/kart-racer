@@ -1,4 +1,4 @@
-import { raceProgress, updateLapTracking } from './laps';
+import { DEFAULT_LAPS, isLapCount, raceProgress, updateLapTracking } from './laps';
 import { getAIInput } from './ai';
 import { random } from './random';
 import { advanceItems, getKartModifiers, giveBoost, onKartContact, useItem } from './items';
@@ -41,10 +41,11 @@ function allRacersFinished(state: RaceState): boolean {
 
 export function createRace(seed: number, options: RaceOptions = {}): RaceState {
   if (options.racers && options.racers.length > NAMES.length) throw new RangeError('A race supports at most eight racers');
-  const { trackId = 'meadow' } = options;
+  const { trackId = 'meadow', laps = DEFAULT_LAPS } = options;
+  if (!isLapCount(laps)) throw new RangeError('A race runs 1 to 3 laps');
   const track = getTrack(trackId);
   const state: RaceState = {
-    tick: 0, seed: (seed >>> 0) || 0x51c3a97d, phase: 'countdown', countdown: 3,
+    laps, tick: 0, seed: (seed >>> 0) || 0x51c3a97d, phase: 'countdown', countdown: 3,
     racingTicks: 0, time: 0, karts: [], boxes: [], projectiles: [], traps: [], events: [], nextEntityId: 100, trackId: track.def.id,
   };
   for (let id = 0; id < NAMES.length; id++) {
@@ -64,6 +65,7 @@ export function createRace(seed: number, options: RaceOptions = {}): RaceState {
       boostTime: 0, spinTime: 0, hopTime: 0, item: null, wrongWay: false,
       startedLap: false, lapProgress: 0, lapValid: true, previousDrift: false,
       previousItem: false, aiPhase: random(state) * Math.PI * 2, hitCooldown: 0, airTime: 0,
+      lastBand: -1,
     });
   }
   for (const pose of track.boxPoses) {

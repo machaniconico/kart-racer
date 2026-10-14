@@ -1,4 +1,4 @@
-import { getRank, TOTAL_LAPS } from '../sim/laps';
+import { DEFAULT_LAPS, getRank } from '../sim/laps';
 import { getFinishTimeRemaining, isRaceTimedOut } from '../sim/race';
 import { getTrack, TRACK_IDS } from '../sim/tracks';
 import { sampleTrack } from '../sim/track';
@@ -117,7 +117,7 @@ export class GameUI {
 
       <section id="results-screen" class="screen results-screen" aria-labelledby="results-heading" hidden>
         <div class="results-content">
-          <div class="results-heading-row"><div><span id="results-course" class="eyebrow">${initialCourse} · ${TOTAL_LAPS} LAPS</span><h2 id="results-heading">FINISH!</h2></div><span id="result-position" class="result-position">1<span>位</span></span></div>
+          <div class="results-heading-row"><div><span id="results-course" class="eyebrow">${initialCourse} · ${DEFAULT_LAPS} LAPS</span><h2 id="results-heading">FINISH!</h2></div><span id="result-position" class="result-position">1<span>位</span></span></div>
           <div class="finish-summary"><div><span>YOUR TIME</span><strong id="finish-time">00:00.00</strong></div><span id="new-record" class="record-badge" hidden>NEW BEST!</span><div class="finish-best"><span>PERSONAL BEST</span><strong id="finish-best">—</strong></div></div>
           <ol id="leaderboard" class="leaderboard" aria-label="レース順位"></ol>
           <p id="result-laps" class="result-laps"></p>
@@ -241,7 +241,7 @@ export class GameUI {
     this.setCourseLabels(state.trackId);
     this.text('position-value', String(getRank(state, this.localKartId)));
     this.text('position-total', `/ ${state.karts.length}`);
-    this.text('lap-value', String(Math.min(TOTAL_LAPS, player.lap + 1)));
+    this.text('lap-value', String(Math.min(state.laps, player.lap + 1)));
     this.text('total-time', formatTime(player.finishTime ?? state.time));
     this.text('lap-time', formatTime(Math.max(0, state.time - player.lapStartTime)));
     this.text('best-lap', player.lapTimes.length > 0 ? formatTime(Math.min(...player.lapTimes)) : '—');
@@ -349,7 +349,7 @@ export class GameUI {
     if (!player) return;
     const rank = getRank(state, this.localKartId);
     const didFinish = player.finishTime !== null;
-    this.text('results-course', `${getTrack(state.trackId).def.name} · ${TOTAL_LAPS} LAPS`);
+    this.text('results-course', `${getTrack(state.trackId).def.name} · ${state.laps} LAPS`);
     this.text('results-heading', didFinish ? 'FINISH!' : 'RACE OVER');
     this.get('result-position').innerHTML = `${rank}<span>位</span>`;
     this.text('finish-time', didFinish ? formatTime(player.finishTime!) : 'DNF');
@@ -382,7 +382,7 @@ export class GameUI {
       list.append(row);
     }
     const lapResults = player.lapTimes.map((time, index) => `LAP ${index + 1}  ${formatTime(time)}`);
-    if (!didFinish) lapResults.push(`未完走 · ${player.lap} / ${TOTAL_LAPS} 周完了`);
+    if (!didFinish) lapResults.push(`未完走 · ${player.lap} / ${state.laps} 周完了`);
     this.text('result-laps', lapResults.join('   /   '));
     this.setBest(best);
     this.show('results');
