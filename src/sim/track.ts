@@ -203,3 +203,45 @@ export function barrierEscape(track: Track, barrier: Barrier, distance: number, 
   }
   return high + 1e-6;
 }
+
+/**
+ * Grade (rise over XZ run) of the sample segment containing distance; piecewise constant and
+ * consistent with sampleTrack's linear y. The seam segment runs from the last sample to the first.
+ */
+export function slopeAt(track: Track, distance: number): number {
+  // An in-range distance skips wrapDistance, whose (d + length) % length can round an exact
+  // sample distance down into the previous segment.
+  const d = distance >= 0 && distance < track.length ? distance : wrapDistance(track, distance);
+  let low = 0;
+  let high = track.samples.length - 1;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (track.samples[mid]!.distance <= d) low = mid;
+    else high = mid - 1;
+  }
+  const a = track.samples[low]!;
+  const b = track.samples[(low + 1) % track.samples.length]!;
+  const run = low === track.samples.length - 1 ? track.length - a.distance : b.distance - a.distance;
+  return run > 0 ? (b.y - a.y) / run : 0;
+}
+
+/** Bank roll in radians from def.bankKeys, linear and wrapping like widthKeys; 0 without keys. */
+export function rollAt(track: Track, distance: number): number {
+  const keys = track.def.bankKeys;
+  if (!keys?.length) return 0;
+  const d = wrapDistance(track, distance);
+  let a = keys[keys.length - 1]!;
+  let aDistance = a.distance - track.length;
+  for (const b of keys) {
+    if (d < b.distance) return a.roll + (b.roll - a.roll) * (d - aDistance) / (b.distance - aDistance);
+    a = b;
+    aDistance = a.distance;
+  }
+  const b = keys[0]!;
+  return a.roll + (b.roll - a.roll) * (d - aDistance) / (b.distance + track.length - aDistance);
+}
+
+/** Road surface height at a lateral offset; roll > 0 raises the +offset side. */
+export function surfaceHeightAt(track: Track, distance: number, offset: number): number {
+  return sampleTrack(track, distance).y + Math.sin(rollAt(track, distance)) * offset;
+}

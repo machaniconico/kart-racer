@@ -715,8 +715,9 @@ describe('CPU race integration', () => {
   it('resolves eight-CPU races across ten seeds, using all fourteen items from boxes', () => {
     const uses = new Set<string>();
     const orbitKinds = new Set<number>();
-    // Layout 2: seed 19 supplies autopilot; the other nine still cover both barrier kinds.
-    for (const seed of [1, 2, 3, 4, 5, 6, 7, 8, 9, 19]) {
+    // M4-01 slope physics: seeds 1 and 2 supply autopilot and seed 25 the only rapidDash
+    // (seed 19 no longer adds an item); seed 8 still covers both barrier kinds.
+    for (const seed of [1, 2, 3, 4, 5, 6, 7, 8, 9, 25]) {
       const racers = createRace(seed).karts.map(({ name, color }) => ({ name, color, human: false }));
       const state = createRace(seed, { racers });
       let restored: RaceState = JSON.parse(JSON.stringify(state));
@@ -951,12 +952,20 @@ describe('wall contact velocity', () => {
 
 describe('kart contact impulses', () => {
   it('pushes a rear-impact target forward and behaves identically when kart IDs swap', () => {
+    // NEON is flat (y = 0), so slope gravity cannot enter the momentum sum.
+    const neon = getTrack('neon');
+    const placeOnNeon = (kart: KartState, distance: number): void => {
+      const sample = sampleTrack(neon, distance);
+      Object.assign(kart, { x: sample.x, y: sample.y, z: sample.z, heading: Math.atan2(sample.tx, sample.tz),
+        trackDistance: sample.distance, lateralOffset: 0 });
+    };
     const outcomes = [false, true].map((swapIds) => {
-      const state = startRace();
+      const state = createRace(42, { trackId: 'neon' });
+      for (let i = 0; i < 180; i++) stepRace(state, []);
       const rear = state.karts[swapIds ? 1 : 0]!;
       const front = state.karts[swapIds ? 0 : 1]!;
-      place(rear, 50);
-      place(front, 51.2);
+      placeOnNeon(rear, 50);
+      placeOnNeon(front, 51.2);
       front.heading = rear.heading;
       rear.speed = 20;
       front.speed = 5;

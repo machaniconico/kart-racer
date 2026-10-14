@@ -151,10 +151,21 @@ describe('H1 handling', () => {
 // | 2 / v11 (old)     | 18.441435185185185 | 0         | 0         |
 // | 3 / v12 (new)     | 18.308796296296297 | 0         | 3         |
 // Band hits by seed: [2, 1, 0]; all at the gate. New/old mean-lap ratio: 0.993.
+// M4-01: slope physics (grade scales maxSpeed / acceleration, gravity while coasting) acts on the
+// existing heights of MEADOW / CANYON / SNOWPEAK; NEON is flat and unchanged bit for bit.
+// Recorded on darwin-arm64, 8 CPUs × seeds [1, 42, 98765] × 3 laps (72 laps per course):
+// | Course   | Protocol  | Mean lap (s)       | Wall hits | Band hits | New/old |
+// | meadow   | v11 (old) | 18.537268518518516 | 0         | 0         |         |
+// | meadow   | v13 (new) | 18.854398148148153 | 0         | 0         | 1.017   |
+// | canyon   | v11 (old) | 19.67476851851852  | 0         | 4         |         |
+// | canyon   | v13 (new) | 19.76342592592593  | 0         | 0         | 1.005   |
+// | snowpeak | v11 (old) | 17.939814814814813 | 0         | 0         |         |
+// | snowpeak | v13 (new) | 17.86990740740741  | 0         | 0         | 0.996   |
+// CANYON keeps its band-hit budget of 4 (measured 0 here).
 const BASELINE = {
-  meadow: { version: 'v11', meanLap: 18.537268518518516, wallHits: 0, bandHits: 0 },
-  canyon: { version: 'v11', meanLap: 19.67476851851852, wallHits: 0, bandHits: 4 },
-  snowpeak: { version: 'v11', meanLap: 17.939814814814813, wallHits: 0, bandHits: 0 },
+  meadow: { version: 'v13', meanLap: 18.854398148148153, wallHits: 0, bandHits: 0 },
+  canyon: { version: 'v13', meanLap: 19.76342592592593, wallHits: 0, bandHits: 4 },
+  snowpeak: { version: 'v13', meanLap: 17.86990740740741, wallHits: 0, bandHits: 0 },
   neon: { version: 'v12', meanLap: 18.308796296296297, wallHits: 0, bandHits: 3 },
 };
 const SEEDS = [1, 42, 98765];

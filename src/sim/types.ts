@@ -93,6 +93,7 @@ export interface WidthKey {
   readonly roadHalfWidth: number;
   readonly wallHalfWidth: number;
 }
+/** Bank at an arc-length distance in metres; roll in radians, |roll| ≤ 0.35, > 0 raises the +offset side. */
 export interface BankKey { readonly distance: number; readonly roll: number }
 /** Deterministic motion evaluated at racingTicks × FIXED_DT seconds; countdown time is zero. */
 export interface BarrierMotion {
@@ -150,9 +151,11 @@ export interface TrackDef {
   readonly themeId: TrackId;
   readonly layoutVersion?: number;
   readonly widthKeys?: readonly WidthKey[];
+  /** Linearly interpolated roll (rollAt), wrapping across the seam like widthKeys; absent means 0. */
   readonly bankKeys?: readonly BankKey[];
   readonly barriers?: readonly Barrier[];
   readonly splits?: readonly SplitSection[];
+  /** Elevated sections in arc-length metres, for rendering only (supports under the upper pass). */
   readonly decks?: readonly { readonly from: number; readonly to: number }[];
   /** Fraction of checkpoint spacing, applied to gates 1..n-1; gate 0 stays at zero. */
   readonly checkpointPhase?: number;

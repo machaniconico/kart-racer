@@ -5,7 +5,7 @@ import { advanceItems, getKartModifiers, giveBoost, onKartContact, useItem } fro
 import { createKartEffects } from './itemTypes';
 import { corridorAt, exclusionAt, freeIntervalFor, widthAt } from './corridor';
 import type { CorridorNormal } from './corridor';
-import { barrierEscape, insideBarrier, projectToTrack, sampleTrack } from './track';
+import { barrierEscape, insideBarrier, projectToTrack, rollAt, sampleTrack, slopeAt } from './track';
 import { getTrack } from './tracks';
 import { crossedZone, insideZone, JUMP_DURATION, JUMP_HEIGHT, spinRateAt, surfaceAt } from './surfaces';
 import type { InputFrame, KartState, RaceOptions, RaceState, Track } from './types';
@@ -85,6 +85,8 @@ function updateProjection(track: Track, kart: KartState): void {
   kart.trackDistance = projection.distance;
   kart.lateralOffset = projection.offset;
   kart.y = projection.height;
+  const roll = rollAt(track, kart.trackDistance);
+  if (roll !== 0) kart.y += Math.sin(roll) * kart.lateralOffset;
   if (kart.airTime > 0) {
     const t = 1 - kart.airTime / JUMP_DURATION;
     kart.y += JUMP_HEIGHT * 4 * t * (1 - t);
@@ -291,6 +293,13 @@ function advanceKart(track: Track, state: RaceState, kart: KartState, input: Inp
   const surface = surfaceAt(track, kart.trackDistance, kart.lateralOffset);
   const onIce = surface === 'ice';
   const onDirt = surface === 'dirt';
+  // Grade along the kart's heading, positive uphill; exactly 0 on flat ground so nothing below changes.
+  const slope = slopeAt(track, kart.trackDistance);
+  let grade = 0;
+  if (slope !== 0) {
+    const sample = sampleTrack(track, kart.trackDistance);
+    grade = slope * (Math.sin(kart.heading) * sample.tx + Math.cos(kart.heading) * sample.tz);
+  }
   let maxSpeed = kart.human ? 32 : 30.2 + (kart.id % 3) * 0.35;
   if (!kart.human) {
     const humanProgress = state.karts.filter((racer) => racer.human).map(racer => raceProgress(track, racer));
@@ -301,24 +310,34 @@ function advanceKart(track: Track, state: RaceState, kart: KartState, input: Inp
   }
   maxSpeed *= modifiers.maxSpeedMultiplier;
   if (kart.boostTime > 0) maxSpeed *= 1.46;
+  if (grade !== 0) maxSpeed *= Math.max(0.80, Math.min(1.15, 1 - 0.5 * grade));
   if (onGrass) maxSpeed = Math.min(maxSpeed, kart.boostTime > 0 ? 26 : 14);
   // Dirt mirrors grass: boosting raises its cap to 26, but the cap always holds.
   else if (onDirt) maxSpeed = Math.min(maxSpeed, kart.boostTime > 0 ? 26 : 20);
   if (kart.finishTime !== null) maxSpeed = 12;
   const spinning = kart.spinTime > 0;
   // Dirt stops driving at its cap (boosted or not) so full throttle settles there instead of overshooting the drag.
-  const acceleration = spinning || (onDirt && kart.speed >= maxSpeed) ? 0 :
+  let acceleration = spinning || (onDirt && kart.speed >= maxSpeed) ? 0 :
     input.throttle * (kart.boostTime > 0 ? 36 : onGrass ? 13 : onIce ? 15 : onDirt ? 16 : 22);
+  if (grade !== 0 && acceleration !== 0) acceleration *= Math.max(0.5, Math.min(1.3, 1 - 0.8 * grade));
   const deceleration = spinning ? 12 : input.brake ? (onIce ? 18 : 42) : input.throttle > 0 ? 2.1 : onIce ? 1.8 : 5.5;
   kart.speed = Math.max(0, kart.speed + (acceleration - deceleration) * FIXED_DT);
+  // Gravity acts only while coasting or braking; a downhill roll never exceeds maxSpeed.
+  // Static friction: a kart below 0.5 m/s stays put, so grids and stops never creep downhill.
+  if (grade !== 0 && (input.throttle === 0 || input.brake) && kart.speed >= 0.5) {
+    kart.speed = Math.min(maxSpeed, Math.max(0, kart.speed - 9.8 * 0.6 * grade * FIXED_DT));
+  }
   if (kart.speed > maxSpeed) kart.speed += (maxSpeed - kart.speed) * Math.min(1, FIXED_DT * (onGrass ? 6 : 4));
   kart.steer += (input.steer - kart.steer) * Math.min(1, FIXED_DT * (onIce ? 6 : 12));
   if (!spinning) {
     // Reach full steering at low speed, then ease it off through fast corners.
-    const turnRate = Math.max(1.72, 2.1 - Math.max(0, kart.speed - 15) * 0.025) *
+    let turnRate = Math.max(1.72, 2.1 - Math.max(0, kart.speed - 15) * 0.025) *
       Math.min(1, kart.speed / 6) * (onIce ? 0.5 : onDirt ? 0.85 : 1);
     // Countersteering opens the arc without reversing an established drift.
     const steering = kart.driftDirection === 0 ? kart.steer : kart.driftDirection * 0.75 + kart.steer * 0.6;
+    // A banked turn grips harder when steering toward its low (−sign(roll)) side.
+    const roll = rollAt(track, kart.trackDistance);
+    if (roll !== 0 && steering * roll < 0) turnRate *= 1 + 0.3 * Math.abs(roll) / 0.35;
     kart.heading += steering * turnRate * FIXED_DT;
     kart.heading = Math.atan2(Math.sin(kart.heading), Math.cos(kart.heading));
   }
