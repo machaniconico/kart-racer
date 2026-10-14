@@ -15,6 +15,8 @@ export interface CourseTheme {
     readonly skyBottom: number;
     readonly ground: number;
     readonly road: number;
+    readonly deck?: number;
+    readonly pillar?: number;
     readonly shoulder: number;
     readonly line: number;
     readonly curb: readonly [number, number];

@@ -4,6 +4,7 @@ import { getTrack, sampleTrack } from '../sim';
 import type { RaceState, Track, TrackId } from '../sim';
 import { LOOK_AHEAD_DISTANCE, lookAheadOffset, trackTurn } from './cameraLookAhead';
 import type { RenderSnapshot } from './snapshot';
+import { kartRotationZ } from './kartRoll';
 import { buildCourse, disposeObjectTree, type Course } from './course/buildCourse';
 import type { CourseTheme } from './course/CourseTheme';
 import { meadow } from './course/themes/meadow';
@@ -123,6 +124,7 @@ export class GameRenderer {
 
   private buildKart(color: number): KartVisual {
     const root = new THREE.Group();
+    root.rotation.order = 'YXZ';
     const body = new THREE.Group();
     root.add(body);
     const paint = material(color);
@@ -220,6 +222,7 @@ export class GameRenderer {
       const prev = previous.karts[kart.id] ?? kart;
       visual.root.position.set(mix(prev.x, kart.x, alpha), mix(prev.y, kart.y, alpha), mix(prev.z, kart.z, alpha));
       visual.root.rotation.y = angleMix(prev.heading, kart.heading, alpha);
+      visual.root.rotation.z = kartRotationZ(this.track, kart.trackDistance);
       const p = sampleTrack(this.track, kart.trackDistance);
       const next = sampleTrack(this.track, kart.trackDistance + 1);
       const slope = (next.y - p.y) * Math.cos(kart.heading - Math.atan2(p.tx, p.tz));
@@ -314,6 +317,11 @@ export class GameRenderer {
 
   getTrackId(): TrackId {
     return this.track.def.id;
+  }
+
+  getCameraPosition(): { x: number; y: number; z: number } {
+    const { x, y, z } = this.camera.position;
+    return { x, y, z };
   }
 
   getDrawCalls(): number {

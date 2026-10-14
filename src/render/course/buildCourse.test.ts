@@ -2,13 +2,16 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import * as THREE from 'three';
 import { WebGLGeometries } from 'three/src/renderers/webgl/WebGLGeometries.js';
 import { WebGLInfo } from 'three/src/renderers/webgl/WebGLInfo.js';
-import { buildTrack, getTrack, sampleTrack } from '../../sim';
+import { buildTrack, getTrack, projectToTrack, rollAt, sampleTrack, surfaceHeightAt } from '../../sim';
 import type { Barrier, RaceState, SurfaceZone, Track } from '../../sim';
 import * as trackRegistry from '../../sim/tracks';
 import { islandSplit } from '../../sim/tracks/features';
 import { GameUI } from '../../ui/GameUI';
 import { barrierCenterAt, barrierHalfWidthAt, exclusionAt, KART_RADIUS, widthAt } from '../../sim/corridor';
-import { buildCourse, type Course } from './buildCourse';
+import { bankCourse, figureEightCourse, figureEightCrossings, stadiumSections } from '../../sim/elevation.fixture';
+import { kartRotationZ, rolledLocalPointY } from '../kartRoll';
+import { GameRenderer } from '../GameRenderer';
+import { buildCourse, place, terrainHeight, type Course } from './buildCourse';
 import { buildMotion } from './motion';
 import { meadow } from './themes/meadow';
 import { canyon } from './themes/canyon';
@@ -79,6 +82,234 @@ function hash(array: Float32Array): number {
   }
   return result >>> 0;
 }
+
+describe('banked roads and elevated decks', () => {
+  it('returns a camera position copy without constructing a WebGL renderer', () => {
+    const camera = new THREE.PerspectiveCamera();
+    camera.position.set(1, 2, 3);
+    const read = () => Reflect.apply(GameRenderer.prototype.getCameraPosition, { camera }, []);
+    const position = read();
+    expect(position).toEqual({ x: 1, y: 2, z: 3 });
+    position.y = 100;
+    expect(read()).toEqual({ x: 1, y: 2, z: 3 });
+  });
+
+  it.each(['meadow', 'canyon', 'snowpeak', 'neon'] as const)('%s keeps exact vertex and instance buffers with zero bank', id => {
+    const original = getTrack(id);
+    const themes = { meadow, canyon, snowpeak, neon };
+    const zeroBank = buildTrack({ ...original.def, bankKeys: [
+      { distance: 0, roll: 0 }, { distance: original.length, roll: 0 },
+    ] });
+    const meshes = (course: Course): THREE.Mesh[] => {
+      const result: THREE.Mesh[] = [];
+      course.group.traverse(object => { if (object instanceof THREE.Mesh) result.push(object); });
+      return result;
+    };
+    const before = meshes(build(original, themes[id]));
+    const after = meshes(build(zeroBank, themes[id]));
+    expect(after).toHaveLength(before.length);
+    before.forEach((mesh, i) => {
+      expect(after[i].geometry.getAttribute('position').array).toEqual(mesh.geometry.getAttribute('position').array);
+      expect(after[i].castShadow).toBe(mesh.castShadow);
+      if (mesh instanceof THREE.InstancedMesh) {
+        expect((after[i] as THREE.InstancedMesh).instanceMatrix.array).toEqual(mesh.instanceMatrix.array);
+      }
+    });
+    expect(kartRotationZ(zeroBank, original.length / 3)).toBe(0);
+  });
+
+  it('uses sim surface heights for both ribbon edges, decals, curbs, rails, posts and place()', () => {
+    const def = bankCourse(0.3);
+    const { rightCorner: [from, to] } = stadiumSections(def);
+    const track = buildTrack({ ...def, surfaces: [{ kind: 'ice', from, to, offsetMin: -5, offsetMax: 4 }] });
+    const { group } = build(track, meadow);
+    const distances = [...new Set([
+      ...Array.from({ length: 385 }, (_, i) => i / 384 * track.length),
+      ...def.bankKeys!.map(key => key.distance), from, to,
+    ])].sort((a, b) => a - b);
+    for (const [name, lift, offsets] of [
+      ['road', 0.06, (d: number) => [-widthAt(track, d).roadHalfWidth, widthAt(track, d).roadHalfWidth]],
+      ['shoulder:1', 0.01, (d: number) => [widthAt(track, d).roadHalfWidth, widthAt(track, d).wallHalfWidth]],
+      ['line:-1', 0.075, (d: number) => [-(widthAt(track, d).roadHalfWidth - 0.16), -(widthAt(track, d).roadHalfWidth + 0.06)]],
+    ] as const) {
+      const vertices = (group.getObjectByName(name) as THREE.Mesh).geometry.getAttribute('position');
+      expect(vertices.count).toBe(distances.length * 2);
+      distances.forEach((d, i) => offsets(d).forEach((offset, side) => {
+        expect(Math.abs(vertices.getY(i * 2 + side) - surfaceHeightAt(track, d, offset) - lift)).toBeLessThan(1e-6);
+      }));
+    }
+    const decal = (group.getObjectByName('surface:ice') as THREE.Mesh).geometry.getAttribute('position');
+    for (let i = 0; i < decal.count; i++) {
+      expect(Math.abs(decal.getY(i) - surfaceHeightAt(track, from, i % 2 ? 4 : -5) - 0.1)).toBeLessThan(1e-6);
+    }
+    const sections = [...new Set([
+      ...Array.from({ length: Math.floor(track.length / 3) + 1 }, (_, i) => i / Math.floor(track.length / 3) * track.length),
+      ...def.bankKeys!.map(key => key.distance),
+    ])].sort((a, b) => a - b);
+    const matrix = new THREE.Matrix4();
+    for (const [name, lift, extra] of [['curbs', 0.12, 0.32], ['rails', 0.83, 0], ['posts', 0.51, 0]] as const) {
+      const mesh = group.getObjectByName(name) as THREE.InstancedMesh;
+      sections.slice(0, -1).forEach((d, i) => {
+        const middle = (d + sections[i + 1]) / 2;
+        const width = widthAt(track, middle);
+        for (const side of [0, 1]) {
+          const offset = (side * 2 - 1) * (extra ? width.roadHalfWidth + extra : width.wallHalfWidth);
+          mesh.getMatrixAt(i * 2 + side, matrix);
+          expect(Math.abs(matrix.elements[13] - surfaceHeightAt(track, middle, offset) - lift)).toBeLessThan(1e-6);
+        }
+      });
+    }
+    const object = new THREE.Object3D(), d = (from + to) / 2;
+    place(track, object, sampleTrack(track, d), 3, 0.28);
+    expect(object.position.y).toBe(surfaceHeightAt(track, d, 3) + 0.28);
+    const wall = widthAt(track, d).wallHalfWidth;
+    const projection = { distance: d, offset: wall + 11, height: sampleTrack(track, d).y, heading: 0 };
+    expect(terrainHeight(track, projection)).toBeCloseTo((surfaceHeightAt(track, d, wall) - 1.35) / 2, 12);
+  });
+
+  it.each([0.3, -0.3, 0])('rolls the kart toward the high side for roll %s at every heading', roll => {
+    const def = bankCourse(roll), track = buildTrack(def);
+    const { rightCorner: [from, to] } = stadiumSections(def);
+    const d = (from + to) / 2;
+    expect(kartRotationZ(track, d)).toBe(roll);
+    for (const heading of [0, Math.PI / 2, Math.PI, -Math.PI / 2, 0.37]) {
+      const rotationZ = kartRotationZ(track, d);
+      expect(Math.abs(rolledLocalPointY(heading, rotationZ, 3)
+        - (surfaceHeightAt(track, d, 3) - surfaceHeightAt(track, d, 0)))).toBeLessThan(0.05);
+    }
+    expect(kartRotationZ(track, 0)).toBe(0);
+    expect(kartRotationZ(track, from - 10)).toBeCloseTo(rollAt(track, from - 10), 12);
+  });
+
+  it('cuts all embankment vertices out of the deck span and adds exactly a slab and one pillar batch', () => {
+    const def = figureEightCourse(), track = buildTrack(def);
+    const { upper } = figureEightCrossings(def);
+    const center = sampleTrack(track, upper), span = def.decks![0];
+    const { group } = build(track, meadow);
+    const plain = build(buildTrack({ ...def, decks: undefined }), meadow);
+    expect(meshCount(group)).toBe(meshCount(plain.group) + 2);
+    for (const side of [-1, 1]) {
+      const inside = (vertices: THREE.BufferAttribute | THREE.InterleavedBufferAttribute): number[][] => {
+        const hits: number[][] = [];
+        for (let i = 0; i < vertices.count; i++) {
+          const x = vertices.getX(i) - center.x, z = vertices.getZ(i) - center.z;
+          const along = x * center.tx + z * center.tz;
+          const offset = x * center.nx + z * center.nz;
+          if (Math.abs(vertices.getY(i) + 1.35) < 1e-6 && along > span.from - upper + 1e-4
+            && along < span.to - upper - 1e-4 && Math.abs(offset) <= track.def.wallHalfWidth + 22 + 1e-5) {
+            hits.push([vertices.getX(i), vertices.getY(i), vertices.getZ(i), along, offset]);
+          }
+        }
+        return hits;
+      };
+      const ground = group.getObjectByName(`ground:${side}`) as THREE.Mesh;
+      expect(inside(ground.geometry.getAttribute('position'))).toEqual([]);
+      const continuous = plain.group.getObjectByName(`ground:${side}`) as THREE.Mesh;
+      expect(continuous.geometry.getAttribute('position').count).toBe(770);
+      expect(continuous.geometry.getIndex()!.count).toBe(384 * 6);
+      expect(inside(continuous.geometry.getAttribute('position')).length).toBeGreaterThan(0);
+    }
+    const deck = group.getObjectByName('decks') as THREE.Mesh<THREE.BufferGeometry, THREE.MeshLambertMaterial>;
+    expect(deck.castShadow).toBe(true);
+    expect(deck.receiveShadow).toBe(true);
+    expect(deck.material.color.getHex()).toBe(meadow.colors.road);
+    const vertices = deck.geometry.getAttribute('position'), normals = deck.geometry.getAttribute('normal');
+    const ys = Array.from({ length: vertices.count }, (_, i) => vertices.getY(i));
+    expect(Math.max(...ys)).toBeCloseTo(surfaceHeightAt(track, upper, 0) + 0.06, 5);
+    expect(Math.max(...ys) - Math.min(...ys)).toBeCloseTo(0.6, 5);
+    const normalYs = Array.from({ length: normals.count }, (_, i) => normals.getY(i));
+    expect(normalYs.some(y => y > 0.99)).toBe(true);
+    expect(normalYs.some(y => y < -0.99)).toBe(true);
+    expect(normalYs.some(y => Math.abs(y) < 0.01)).toBe(true);
+    const cylinders: THREE.InstancedMesh[] = [];
+    group.traverse(object => {
+      if (object instanceof THREE.InstancedMesh && object.geometry.type === 'CylinderGeometry'
+        && object.name !== 'trunks') cylinders.push(object);
+    });
+    expect(cylinders).toHaveLength(1);
+    const pillars = cylinders[0], matrix = new THREE.Matrix4();
+    expect(pillars.name).toBe('deck-pillars');
+    expect((pillars.material as THREE.MeshLambertMaterial).color.getHex()).toBe(meadow.colors.post);
+    expect(pillars.count).toBeGreaterThanOrEqual((Math.ceil((span.to - span.from) / 20) + 1) * 2);
+    let previous: THREE.Vector3 | undefined;
+    for (let i = 0; i < pillars.count; i += 2) {
+      pillars.getMatrixAt(i, matrix);
+      const point = new THREE.Vector3().setFromMatrixPosition(matrix);
+      if (previous) expect(Math.hypot(point.x - previous.x, point.z - previous.z)).toBeLessThanOrEqual(20 + 1e-5);
+      previous = point;
+      expect(point.y - matrix.elements[5] / 2).toBeCloseTo(-1.35, 5);
+      expect(point.y + matrix.elements[5] / 2).toBeCloseTo(surfaceHeightAt(track, upper, 0) + 0.06 - 0.6, 5);
+    }
+    expect(group.getObjectByName('rails')!.castShadow).toBe(false);
+    expect((group.getObjectByName('road') as THREE.Mesh).castShadow).toBe(false);
+  });
+
+  it('removes scenery above the lower corridor while retaining surviving instance colors', () => {
+    const def = figureEightCourse(), track = buildTrack(def);
+    const { lower, upper } = figureEightCrossings(def);
+    const center = sampleTrack(track, lower), high = sampleTrack(track, upper);
+    const matrices = new THREE.Matrix4();
+    for (const theme of [meadow, canyon, snowpeak, neon]) {
+      const { group } = build(track, theme);
+      for (const name of ['trunks', 'crowns', 'rocks', 'flowers', 'snowpeak:trunks', 'snowpeak:rocks',
+        'canyon:cacti', 'canyon:stones', 'neon:buildings']) {
+        const mesh = group.getObjectByName(name);
+        if (!(mesh instanceof THREE.InstancedMesh)) continue;
+        for (let i = 0; i < mesh.count; i++) {
+          mesh.getMatrixAt(i, matrices);
+          const x = matrices.elements[12] - center.x, z = matrices.elements[14] - center.z;
+          expect(Math.abs(x * center.tx + z * center.tz) < 19.9
+            && Math.abs(x * center.nx + z * center.nz) < track.def.wallHalfWidth - 0.001).toBe(false);
+        }
+      }
+    }
+    const custom = { ...meadow, buildLandmarks() {}, buildProps(_track: Track, scene: THREE.Group) {
+      const props = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshLambertMaterial(), 3);
+      [new THREE.Vector3(0, high.y + 1, 0), new THREE.Vector3(high.nx * 30, high.y + 1, high.nz * 30),
+        new THREE.Vector3(400, 1, 400)].forEach((position, i) => {
+        props.setMatrixAt(i, new THREE.Matrix4().makeTranslation(position));
+        props.setColorAt(i, new THREE.Color(i === 2 ? 0x123456 : 0xffffff));
+      });
+      props.name = 'test-props';
+      scene.add(props);
+    } };
+    const filtered = build(track, custom).group.getObjectByName('test-props') as THREE.InstancedMesh;
+    expect(filtered.count).toBe(1);
+    const color = new THREE.Color();
+    filtered.getColorAt(0, color);
+    expect(color.getHex()).toBe(0x123456);
+  });
+
+  it('extends pillars to a lower roadway below the terrain and accepts optional deck colors', () => {
+    const def = figureEightCourse();
+    const track = buildTrack({ ...def, controlPoints: def.controlPoints.map(([x, y, z]) => [x, y - 4, z]) });
+    const { group } = build(track, { ...meadow, colors: { ...meadow.colors, deck: 0x123456, pillar: 0x654321 } });
+    const pillars = group.getObjectByName('deck-pillars') as THREE.InstancedMesh;
+    const matrix = new THREE.Matrix4();
+    // The middle support row lies over the lower road (y = -4).
+    pillars.getMatrixAt(Math.floor(pillars.count / 4) * 2, matrix);
+    expect(matrix.elements[13] - matrix.elements[5] / 2).toBeCloseTo(-4, 5);
+    expect((pillars.material as THREE.MeshLambertMaterial).color.getHex()).toBe(0x654321);
+    expect(((group.getObjectByName('decks') as THREE.Mesh).material as THREE.MeshLambertMaterial).color.getHex()).toBe(0x123456);
+  });
+
+  it('cuts wrapped and multiple deck spans without adding more batches', () => {
+    const base = buildTrack(bankCourse(0));
+    const track = buildTrack({ ...base.def, decks: [{ from: base.length - 10, to: 10 }, { from: 80, to: 120 }] });
+    const { group } = build(track, meadow);
+    expect(meshCount(group)).toBe(meshCount(build(base, meadow).group) + 2);
+    for (const side of [-1, 1]) {
+      const vertices = (group.getObjectByName(`ground:${side}`) as THREE.Mesh).geometry.getAttribute('position');
+      for (let i = 0; i < vertices.count; i++) {
+        const projection = projectToTrack(track, vertices.getX(i), vertices.getZ(i));
+        // Inner edges project exactly to their own straight section.
+        if (Math.abs(Math.abs(projection.offset) - track.def.wallHalfWidth) > 1e-3) continue;
+        expect(projection.distance > 80.001 && projection.distance < 119.999).toBe(false);
+        expect(projection.distance < 9.999 || projection.distance > track.length - 9.999).toBe(false);
+      }
+    }
+  });
+});
 
 describe('MEADOW appearance regression', () => {
   it('keeps the original seed-127 instance transforms and colors, including distant scenery', () => {

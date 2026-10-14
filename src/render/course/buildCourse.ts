@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { sampleTrack } from '../../sim';
+import { rollAt, sampleTrack, surfaceHeightAt, wrapDistance } from '../../sim';
 import type { Barrier, SurfaceZone, Track, TrackProjection, TrackSample } from '../../sim';
 import { widthAt } from '../../sim/corridor';
 import type { CourseTheme as BaseCourseTheme } from './CourseTheme';
@@ -18,6 +18,17 @@ export interface CourseTheme extends BaseCourseTheme {
 
 const surfaceFallback = { dirt: 0x99683f, pit: 0x302724 };
 type RibbonOffsets = (distance: number) => readonly [number, number];
+type Span = { readonly from: number; readonly to: number };
+
+/** Preserve the original arithmetic, including signed zero, on unbanked courses. */
+function pointHeight(track: Track, point: TrackSample, offset: number): number {
+  return rollAt(track, point.distance) === 0 ? point.y : surfaceHeightAt(track, point.distance, offset);
+}
+
+function withinSpan(track: Track, distance: number, span: Span): boolean {
+  const d = wrapDistance(track, distance);
+  return span.from <= span.to ? d >= span.from && d < span.to : d >= span.from || d < span.to;
+}
 
 export function material(color: number): THREE.MeshLambertMaterial {
   return new THREE.MeshLambertMaterial({ color, flatShading: true });
@@ -31,31 +42,39 @@ function box(w: number, h: number, d: number, mat: THREE.Material): THREE.Mesh {
 export function terrainHeight(track: Track, projection: TrackProjection): number {
   const offset = Math.abs(projection.offset);
   const { wallHalfWidth } = widthAt(track, projection.distance);
+  if (track.def.decks?.some(deck => withinSpan(track, projection.distance, deck))) return -1.35;
+  const height = rollAt(track, projection.distance) === 0 ? projection.height
+    : surfaceHeightAt(track, projection.distance, Math.sign(projection.offset) * wallHalfWidth);
   return offset < wallHalfWidth + 22
-    ? projection.height + (-1.35 - projection.height) * ((offset - wallHalfWidth) / 22) : -1.35;
+    ? height + (-1.35 - height) * ((offset - wallHalfWidth) / 22) : -1.35;
 }
 
 function ribbonGeometry(track: Track, offsets: RibbonOffsets, lift = 0, slope = false,
   from = 0, to = track.length, boundaries: readonly number[] = [],
-  cutouts: readonly SurfaceZone[] = []): THREE.BufferGeometry {
-  const positions: number[] = [];
-  const indices: number[] = [];
+  cutouts: readonly SurfaceZone[] = [], omitted: readonly Span[] = []): THREE.BufferGeometry {
+  let positions: number[] = [];
+  let indices: number[] = [];
   const count = Math.max(1, Math.ceil(384 * (to - from) / track.length));
   // A variable-width edge must also follow the sampled centerline's corners;
   // otherwise a straight chord between width keys cuts inside curved sections.
   const distances = sectionDistances(track, count, from, to,
-    [...boundaries, ...track.def.surfaces.flatMap(zone => [zone.from, zone.to]),
+    [...boundaries, ...omitted.flatMap(span => [span.from, span.to]),
+      ...track.def.surfaces.flatMap(zone => [zone.from, zone.to]),
       ...(track.def.widthKeys?.length ? track.samples.map(point => point.distance) : [])]);
   for (const distance of distances) {
     const p = sampleTrack(track, distance);
     for (const [j, offset] of offsets(distance).entries()) {
-      positions.push(p.x + p.nx * offset, slope && j === 1 ? -1.35 : p.y + lift, p.z + p.nz * offset);
+      positions.push(p.x + p.nx * offset, slope && j === 1 ? -1.35 : pointHeight(track, p, offset) + lift,
+        p.z + p.nz * offset);
     }
   }
   // Keep the road beside a lane-sized pit, leaving the lowered decal visible.
   for (let i = 0; i < distances.length - 1; i++) {
     const a = distances[i], b = distances[i + 1];
     const middle = (a + b) / 2 % track.length;
+    if (omitted.some(span => withinSpan(track, middle, span))) continue;
+    if (slope && omitted.length && [i * 2 + 1, i * 2 + 3].some(index =>
+      roadHeightAtXZ(track, positions[index * 3], positions[index * 3 + 2], true, 22) !== undefined)) continue;
     const holes = cutouts.filter(zone => zone.from <= zone.to
       ? middle >= zone.from && middle < zone.to : middle >= zone.from || middle < zone.to);
     if (!holes.length) {
@@ -80,11 +99,24 @@ function ribbonGeometry(track: Track, offsets: RibbonOffsets, lift = 0, slope = 
         const p = sampleTrack(track, d);
         const [left, right] = offsets(d);
         for (const offset of [Math.max(left, Math.min(right, lo)), Math.max(left, Math.min(right, hi))]) {
-          positions.push(p.x + p.nx * offset, p.y + lift, p.z + p.nz * offset);
+          positions.push(p.x + p.nx * offset, pointHeight(track, p, offset) + lift, p.z + p.nz * offset);
         }
       }
       indices.push(n, n + 2, n + 1, n + 1, n + 2, n + 3);
     }
+  }
+  if (omitted.length) {
+    // Deck cutouts must not leave even unreferenced embankment vertices behind.
+    const compact: number[] = [];
+    const remap = new Map<number, number>();
+    indices = indices.map(index => {
+      if (!remap.has(index)) {
+        remap.set(index, compact.length / 3);
+        compact.push(...positions.slice(index * 3, index * 3 + 3));
+      }
+      return remap.get(index)!;
+    });
+    positions = compact;
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
@@ -97,7 +129,8 @@ function ribbonGeometry(track: Track, offsets: RibbonOffsets, lift = 0, slope = 
 function sectionDistances(track: Track, count: number, from = 0, to = track.length,
   boundaries: readonly number[] = []): number[] {
   const distances = new Set(Array.from({ length: count + 1 }, (_, i) => from + i / count * (to - from)));
-  for (const distance of [...(track.def.widthKeys ?? []).map(key => key.distance), ...boundaries]) {
+  for (const distance of [...(track.def.widthKeys ?? []).map(key => key.distance),
+    ...(track.def.bankKeys ?? []).map(key => key.distance), ...boundaries]) {
     for (let lap = Math.floor(from / track.length); lap <= Math.floor(to / track.length); lap++) {
       const d = distance + lap * track.length;
       if (d > from && d < to) distances.add(d);
@@ -107,8 +140,8 @@ function sectionDistances(track: Track, count: number, from = 0, to = track.leng
 }
 
 function ribbon(track: Track, scene: THREE.Group, offsets: RibbonOffsets, color: number, lift = 0, slope = false,
-  cutouts: readonly SurfaceZone[] = []): THREE.Mesh {
-  const geo = ribbonGeometry(track, offsets, lift, slope, 0, track.length, [], cutouts);
+  cutouts: readonly SurfaceZone[] = [], omitted: readonly Span[] = []): THREE.Mesh {
+  const geo = ribbonGeometry(track, offsets, lift, slope, 0, track.length, [], cutouts, omitted);
   const mat = material(color);
   mat.side = THREE.DoubleSide;
   const mesh = new THREE.Mesh(geo, mat);
@@ -177,8 +210,145 @@ export function buildCourse(track: Track, theme: CourseTheme): Course {
 }
 
 export function buildScenery(track: Track, theme: CourseTheme, scene: THREE.Group): void {
+  const existing = new Set(scene.children);
   theme.buildProps(track, scene, theme.budget);
   theme.buildLandmarks(track, scene);
+  if (!track.def.decks?.length) return;
+  // Themes keep their original random sequence. Compact only the newly built
+  // scenery, keeping instance colors paired with their surviving transforms.
+  const matrix = new THREE.Matrix4();
+  const color = new THREE.Color();
+  const position = new THREE.Vector3();
+  scene.updateMatrixWorld(true);
+  for (const child of scene.children) {
+    if (existing.has(child)) continue;
+    child.traverse(object => {
+      if (!(object instanceof THREE.InstancedMesh)) return;
+      let kept = 0;
+      for (let i = 0; i < object.count; i++) {
+        object.getMatrixAt(i, matrix);
+        position.setFromMatrixPosition(matrix).applyMatrix4(object.matrixWorld);
+        // Include the removed 22 m embankment beside the upper road: scenery
+        // there must not hang over the lower road either.
+        const upper = roadHeightAtXZ(track, position.x, position.z, true, 22);
+        const lower = upper === undefined ? undefined : roadHeightAtXZ(track, position.x, position.z, false, 0, upper - 0.6);
+        if (upper !== undefined && lower !== undefined && lower < upper - 0.6) continue;
+        object.setMatrixAt(kept, matrix);
+        if (object.instanceColor) {
+          object.getColorAt(i, color);
+          object.setColorAt(kept, color);
+        }
+        kept++;
+      }
+      object.count = kept;
+      object.instanceMatrix.needsUpdate = true;
+      if (object.instanceColor) object.instanceColor.needsUpdate = true;
+    });
+  }
+}
+
+/** Examine both crossing branches instead of the single nearest XZ projection. */
+function roadHeightAtXZ(track: Track, x: number, z: number, deck: boolean, margin = 0,
+  ceiling = Infinity): number | undefined {
+  let height: number | undefined;
+  let nearestSquared = Infinity;
+  for (let i = 0; i < track.samples.length; i++) {
+    const a = track.samples[i], b = track.samples[(i + 1) % track.samples.length];
+    const dx = b.x - a.x, dz = b.z - a.z;
+    const lengthSquared = dx * dx + dz * dz;
+    if (lengthSquared === 0) continue;
+    const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (z - a.z) * dz) / lengthSquared));
+    const d = a.distance + t * ((i + 1 === track.samples.length ? track.length : b.distance) - a.distance);
+    if (Boolean(track.def.decks?.some(span => withinSpan(track, d, span))) !== deck) continue;
+    const half = widthAt(track, d).wallHalfWidth + margin;
+    const squared = (x - a.x - dx * t) ** 2 + (z - a.z - dz * t) ** 2;
+    if (squared > half * half + 1e-8 || squared >= nearestSquared) continue;
+    const point = sampleTrack(track, d);
+    const offset = (x - point.x) * point.nx + (z - point.z) * point.nz;
+    const y = pointHeight(track, point, offset);
+    if (y >= ceiling) continue;
+    nearestSquared = squared;
+    height = y;
+  }
+  return height;
+}
+
+function buildDecks(track: Track, theme: CourseTheme, scene: THREE.Group): void {
+  if (!track.def.decks?.length) return;
+  const positions: number[] = [];
+  const indices: number[] = [];
+  const supports: { x: number; z: number; bottom: number; top: number }[] = [];
+  const quad = (a: number[], b: number[], c: number[], d: number[]): void => {
+    const n = positions.length / 3;
+    positions.push(...a, ...b, ...c, ...d);
+    indices.push(n, n + 1, n + 2, n, n + 2, n + 3);
+  };
+  for (const span of track.def.decks) {
+    const to = span.to < span.from ? span.to + track.length : span.to;
+    const count = Math.max(1, Math.ceil((to - span.from) / 20));
+    const supportDistances = Array.from({ length: count + 1 }, (_, i) => span.from + i / count * (to - span.from));
+    // The outer row can be longer than the centerline on a bend or width taper.
+    for (let i = 1; i < supportDistances.length; i++) {
+      const a = sampleTrack(track, supportDistances[i - 1]), b = sampleTrack(track, supportDistances[i]);
+      const wa = widthAt(track, a.distance).wallHalfWidth - 0.6;
+      const wb = widthAt(track, b.distance).wallHalfWidth - 0.6;
+      if ([-1, 1].some(side => Math.hypot(b.x + b.nx * side * wb - a.x - a.nx * side * wa,
+        b.z + b.nz * side * wb - a.z - a.nz * side * wa) > 20 + 1e-9)) {
+        supportDistances.splice(i, 0, (supportDistances[i - 1] + supportDistances[i]) / 2);
+        i--;
+      }
+    }
+    const distances = sectionDistances(track, Math.max(1, Math.ceil(384 * (to - span.from) / track.length)),
+      span.from, to, [...track.samples.map(point => point.distance), ...supportDistances]);
+    const sections = distances.map(d => {
+      const point = sampleTrack(track, d);
+      const half = widthAt(track, d).wallHalfWidth;
+      const top = [-half, half].map(offset => [point.x + point.nx * offset,
+        pointHeight(track, point, offset) + 0.06, point.z + point.nz * offset]);
+      return [...top, ...top.map(([x, y, z]) => [x, y - 0.6, z])];
+    });
+    for (let i = 0; i < sections.length - 1; i++) {
+      const a = sections[i], b = sections[i + 1];
+      quad(a[0], b[0], b[1], a[1]); // Top.
+      quad(a[2], a[3], b[3], b[2]); // Underside.
+      quad(a[0], a[2], b[2], b[0]);
+      quad(a[1], b[1], b[3], a[3]);
+    }
+    const first = sections[0], last = sections[sections.length - 1];
+    quad(first[0], first[1], first[3], first[2]);
+    quad(last[0], last[2], last[3], last[1]);
+    for (const d of supportDistances) {
+      const point = sampleTrack(track, d);
+      for (const side of [-1, 1]) {
+        const offset = side * (widthAt(track, d).wallHalfWidth - 0.6);
+        const x = point.x + point.nx * offset, z = point.z + point.nz * offset;
+        const top = pointHeight(track, point, offset) + 0.06 - 0.6;
+        const bottom = Math.min(-1.35, roadHeightAtXZ(track, x, z, false, 0, top) ?? -1.35);
+        if (top > bottom) supports.push({ x, z, bottom, top });
+      }
+    }
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  const deck = new THREE.Mesh(geometry, material(theme.colors.deck ?? theme.colors.road));
+  deck.name = 'decks';
+  deck.castShadow = true;
+  deck.receiveShadow = true;
+  const pillars = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.45, 0.45, 1, 8),
+    material(theme.colors.pillar ?? theme.colors.post), supports.length);
+  const transform = new THREE.Object3D();
+  supports.forEach(({ x, z, bottom, top }, i) => {
+    transform.position.set(x, (bottom + top) / 2, z);
+    transform.scale.set(1, top - bottom, 1);
+    transform.updateMatrix();
+    pillars.setMatrixAt(i, transform.matrix);
+  });
+  pillars.name = 'deck-pillars';
+  pillars.castShadow = true;
+  pillars.receiveShadow = true;
+  scene.add(deck, pillars);
 }
 
 function buildBarriers(track: Track, theme: CourseTheme, group: THREE.Group): void {
@@ -222,7 +392,7 @@ function buildBarriers(track: Track, theme: CourseTheme, group: THREE.Group): vo
         const lateral = radius > 1e-6 ? vertices.getX(i) / radius : 0;
         const offset = barrier.center + lateral * half;
         vertices.setXYZ(i, point.x + point.nx * offset - origin.x,
-          point.y + 0.06 + (vertices.getY(i) + 0.5) * height - origin.y,
+          pointHeight(track, point, offset) + 0.06 + (vertices.getY(i) + 0.5) * height - origin.y,
           point.z + point.nz * offset - origin.z);
       }
       shape.computeVertexNormals();
@@ -290,7 +460,7 @@ function buildIslands(track: Track, theme: CourseTheme, group: THREE.Group): voi
         const point = sampleTrack(track, b.from + along);
         const height = scenery === 'rock' ? 4 - i % 3 : 4 + i % 5;
         const width = Math.min(scenery === 'rock' ? height : 4, 2 * halfAt(b, along));
-        transform.position.set(point.x + point.nx * b.center, point.y + 0.21 + height / 2,
+        transform.position.set(point.x + point.nx * b.center, pointHeight(track, point, b.center) + 0.21 + height / 2,
           point.z + point.nz * b.center);
         transform.rotation.set(0, Math.atan2(point.tx, point.tz), 0);
         transform.scale.set(width, height, scenery === 'rock' ? height : 4);
@@ -313,7 +483,7 @@ function buildIslands(track: Track, theme: CourseTheme, group: THREE.Group): voi
         theme.colors.signBackground, theme.colors.signText);
       const offset = (side === 0 ? -1 : 1) * (wall + 0.25);
       sign.name = `lane-sign:${index}:${side}`;
-      sign.position.set(point.x + point.nx * offset, point.y + 3, point.z + point.nz * offset);
+      sign.position.set(point.x + point.nx * offset, pointHeight(track, point, offset) + 3, point.z + point.nz * offset);
       sign.rotation.y = Math.atan2(-point.tx, -point.tz);
       sign.scale.set(4.8, 1.2, 1);
       group.add(sign);
@@ -358,21 +528,22 @@ function buildRoad(track: Track, theme: CourseTheme, scene: THREE.Group): void {
   ribbon(track, scene, d => {
     const { roadHalfWidth } = widthAt(track, d);
     return [-roadHalfWidth, roadHalfWidth];
-  }, colors.road, 0.06, false, track.def.surfaces.filter(zone => zone.kind === 'pit')).name = 'road';
+  }, colors.road, 0.06, false, track.def.surfaces.filter(zone => zone.kind === 'pit'), track.def.decks).name = 'road';
   for (const side of [-1, 1]) {
     ribbon(track, scene, d => {
       const w = widthAt(track, d);
       return [side * w.roadHalfWidth, side * w.wallHalfWidth];
-    }, colors.shoulder, 0.01).name = `shoulder:${side}`;
+    }, colors.shoulder, 0.01, false, [], track.def.decks).name = `shoulder:${side}`;
     ribbon(track, scene, d => {
       const { wallHalfWidth } = widthAt(track, d);
       return [side * wallHalfWidth, side * (wallHalfWidth + 22)];
-    }, colors.ground, 0, true).name = `ground:${side}`;
+    }, colors.ground, 0, true, [], track.def.decks).name = `ground:${side}`;
     ribbon(track, scene, d => {
       const { roadHalfWidth } = widthAt(track, d);
       return [side * (roadHalfWidth - 0.16), side * (roadHalfWidth + 0.06)];
     }, colors.line, 0.075).name = `line:${side}`;
   }
+  buildDecks(track, theme, scene);
   const distances = sectionDistances(track, Math.floor(track.length / 3));
   const count = distances.length - 1;
   const curb = new THREE.InstancedMesh(new THREE.BoxGeometry(0.65, 0.16, 1), material(0xffffff), count * 2);
@@ -419,22 +590,26 @@ function buildRoad(track: Track, theme: CourseTheme, scene: THREE.Group): void {
   const start = sampleTrack(track, 0);
   const { roadHalfWidth: startHalfWidth } = widthAt(track, 0);
   const arch = new THREE.Group();
-  arch.position.set(start.x, start.y, start.z);
+  arch.position.set(start.x, pointHeight(track, start, 0), start.z);
+  arch.rotation.order = 'YXZ';
   arch.rotation.y = Math.atan2(start.tx, start.tz);
+  // Keep local XZ widths unchanged while shearing the gantry and checker heights.
   const gateMaterial = material(colors.gate);
   for (const x of [-startHalfWidth - 1.1, startHalfWidth + 1.1]) {
     const post = box(0.65, 7.5, 0.65, gateMaterial);
-    post.position.set(x, 3.75, 0);
+    post.position.set(x, 3.75 + (pointHeight(track, start, x) - start.y), 0);
     post.castShadow = true;
     arch.add(post);
   }
   const top = box(startHalfWidth * 2 + 3, 1.6, 0.65, gateMaterial);
   top.position.y = 7;
+  top.rotation.z = rollAt(track, 0);
   arch.add(top);
   const banner = textPlane('POCKET CIRCUIT', 768, 80, colors.bannerBackground, colors.bannerText);
   banner.scale.set(startHalfWidth * 1.5, 1.12, 1);
   banner.position.set(0, 7.02, -0.34);
   banner.rotation.y = Math.PI;
+  banner.rotation.z = rollAt(track, 0);
   arch.add(banner);
   const rear = banner.clone();
   rear.position.z = 0.34;
@@ -443,8 +618,9 @@ function buildRoad(track: Track, theme: CourseTheme, scene: THREE.Group): void {
   const line = new THREE.InstancedMesh(new THREE.BoxGeometry(startHalfWidth / 8, 0.03, 0.75), material(0xffffff), 48);
   for (let x = 0; x < 16; x++) {
     for (let z = 0; z < 3; z++) {
-      transform.position.set((x - 7.5) * startHalfWidth / 8, 0.09, (z - 1) * 0.75);
-      transform.rotation.set(0, 0, 0);
+      const offset = (x - 7.5) * startHalfWidth / 8;
+      transform.position.set(offset, 0.09 + (pointHeight(track, start, offset) - start.y), (z - 1) * 0.75);
+      transform.rotation.set(0, 0, rollAt(track, 0));
       transform.updateMatrix();
       line.setMatrixAt(x * 3 + z, transform.matrix);
       line.setColorAt(x * 3 + z, new THREE.Color((x + z) % 2 ? colors.checker[1] : colors.checker[0]));
@@ -457,7 +633,7 @@ function buildRoad(track: Track, theme: CourseTheme, scene: THREE.Group): void {
     const p = sampleTrack(track, track.length * fraction);
     const sign = textPlane('› › ›', 256, 96, colors.signBackground, colors.signText);
     const offset = widthAt(track, p.distance).wallHalfWidth + 0.25;
-    sign.position.set(p.x + p.nx * offset, p.y + 2.5, p.z + p.nz * offset);
+    sign.position.set(p.x + p.nx * offset, pointHeight(track, p, offset) + 2.5, p.z + p.nz * offset);
     sign.scale.set(4.8, 1.8, 1);
     sign.rotation.y = Math.atan2(-p.nx, -p.nz);
     scene.add(sign);
@@ -465,9 +641,10 @@ function buildRoad(track: Track, theme: CourseTheme, scene: THREE.Group): void {
 }
 
 export function place(track: Track, object: THREE.Object3D, point: TrackSample, offset: number, lift: number): void {
-  object.position.set(point.x + point.nx * offset, point.y + lift, point.z + point.nz * offset);
+  object.position.set(point.x + point.nx * offset, pointHeight(track, point, offset) + lift, point.z + point.nz * offset);
   const next = sampleTrack(track, point.distance + 0.5);
-  object.rotation.set(-Math.atan2(next.y - point.y, 0.5), Math.atan2(point.tx, point.tz), 0, 'YXZ');
+  object.rotation.set(-Math.atan2(pointHeight(track, next, offset) - pointHeight(track, point, offset), 0.5),
+    Math.atan2(point.tx, point.tz), rollAt(track, point.distance), 'YXZ');
   object.scale.set(1, 1, 1);
   object.updateMatrix();
 }
