@@ -17,6 +17,18 @@ export function playRouletteSound(kit: SoundKit, kind: 'tick' | 'stop', time: nu
   kit.tone(4186, time + 0.01, 0.2, 0.04, 'triangle');
 }
 
+/** Pit fall (hit value 2): low descending tone, then silence. Ends within 0.5 s. */
+export function playFallSound(kit: SoundKit, time: number): void {
+  kit.tone(320, time, 0.38, 0.22, 'sine', 55);
+  kit.tone(160, time + 0.04, 0.34, 0.12, 'triangle', 40);
+}
+
+/** Band / rail hit: the original impact sound. */
+export function playHitSound(kit: SoundKit, time: number): void {
+  kit.noise(time, 0.22, 0.32, 450);
+  kit.tone(210, time, 0.28, 0.20, 'sawtooth', 55);
+}
+
 /** Uses only the engine's master-routed, tracked voices: mute and suspend apply. */
 export function playItemEvent(kit: SoundKit, event: RaceEvent, time: number): void {
   switch (event.type) {

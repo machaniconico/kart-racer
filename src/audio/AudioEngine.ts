@@ -1,5 +1,5 @@
 import type { RaceEvent, RaceState } from '../sim/types';
-import { playItemEvent, playRouletteSound, type SoundKit } from './itemSounds';
+import { playFallSound, playHitSound, playItemEvent, playRouletteSound, type SoundKit } from './itemSounds';
 
 /** Small original WebAudio instruments; no audio files or network requests. */
 export class AudioEngine {
@@ -90,8 +90,8 @@ export class AudioEngine {
           this.tone(1180, now + 0.14, 0.18, 0.18, 'sine');
           break;
         case 'hit':
-          this.noise(now, 0.22, 0.32, 450);
-          this.tone(210, now, 0.28, 0.20, 'sawtooth', 55);
+          if (event.value === 2) playFallSound(this.kit, now);
+          else playHitSound(this.kit, now);
           break;
         case 'boost':
           this.tone(190, now, 0.27, 0.12, 'triangle', 780);
