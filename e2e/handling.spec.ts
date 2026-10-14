@@ -1,6 +1,8 @@
 import { test, expect, type Page } from '@playwright/test';
-import type {} from './multiplayer.spec';
+import type { KartDebug } from '../src/main';
 import { getTrack } from '../src/sim/tracks';
+
+declare const window: Window & { __kartDebug: KartDebug };
 
 // Handling v5 (H6). Touch projects steer through Controls with assist on by default; sensitivity is touch-only UI.
 // Ticks run synchronously inside page.evaluate (__kartDebug.advance), so the sampling is exact and not timing dependent.
@@ -95,9 +97,7 @@ test.describe('touch device', () => {
       for (let tick = 0; tick < 60 * 20; tick++) {
         // This run measures the assist against walls and bands only, so take CPU items out of play:
         // a stray shell or banana spin would otherwise count as a hit and make the result seed-dependent.
-        debug.state.projectiles = [];
-        debug.state.traps = [];
-        for (const kart of debug.state.karts) if (kart.id !== 0) kart.item = null;
+        debug.clearItems();
         // Keep Controls' touch assist and auto-accelerate active; no AI autopilot or driver input.
         debug.advance(1);
         // Events are replaced each tick, so count every player hit before advancing again.

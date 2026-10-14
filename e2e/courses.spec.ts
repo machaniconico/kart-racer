@@ -1,8 +1,10 @@
 import { test, expect } from '@playwright/test';
-import type {} from './multiplayer.spec';
+import type { KartDebug } from '../src/main';
 import { getTrack } from '../src/sim/tracks';
 import { sampleTrack } from '../src/sim/track';
-import type { GameRenderer } from '../src/render/GameRenderer';
+import { KART_RADIUS, widthAt } from '../src/sim/corridor';
+
+declare const window: Window & { __kartDebug: KartDebug };
 
 // C-010 timing (2026-10-05): npm test, 738 passed, Vitest 4.57 s / wall 4.84 s.
 // .omc/baseline-v3.txt records 3 s before C-001; the 6 s budget needs no seed reduction.
@@ -11,10 +13,12 @@ const courses = [
   // M1-04 -> M2.5 (drawCalls / triangles), including shadows:
   // meadow 123 / 41_530 -> 123 / 41_530; canyon 128 / 46_784 -> 129 / 54_564.
   // snowpeak 125 / 41_810 -> 125 / 41_952; neon 125 / 66_080 -> 125 / 62_748.
+  // M3-08 re-measured 2026-10-14, same setup: NEON layout 2 -> 3:
+  // drawCalls / triangles: 125 / 62_748 -> 126 / 62_812; retain the old budget baseline.
   { id: 'meadow', name: 'MEADOW LOOP', layout: 2, drawCalls: 123, triangles: 41_530 },
   { id: 'canyon', name: 'SUNSCAR CANYON', layout: 4, drawCalls: 129, triangles: 54_564 },
   { id: 'snowpeak', name: 'FROSTBITE PEAK', layout: 2, drawCalls: 125, triangles: 41_952 },
-  { id: 'neon', name: 'NEON NIGHTLINE', layout: 2, drawCalls: 125, triangles: 62_748 },
+  { id: 'neon', name: 'NEON NIGHTLINE', layout: 3, drawCalls: 125, triangles: 62_748 },
 ] as const;
 
 for (const { id, name, layout, drawCalls: baselineDrawCalls, triangles: baselineTriangles } of courses) {
@@ -39,9 +43,9 @@ for (const { id, name, layout, drawCalls: baselineDrawCalls, triangles: baseline
     const { renderSamples, grid, meshes } = await page.evaluate(async id => {
       const simPath = `${location.pathname}src/sim/index.ts`;
       const snapshotPath = `${location.pathname}src/render/snapshot.ts`;
-      const { createRace } = await import(simPath) as typeof import('../src/sim');
-      const { captureRenderSnapshot } = await import(snapshotPath) as typeof import('../src/render/snapshot');
-      const { renderer } = window.__kartDebug as typeof window.__kartDebug & { renderer: GameRenderer };
+      const { createRace }: typeof import('../src/sim') = await import(simPath);
+      const { captureRenderSnapshot }: typeof import('../src/render/snapshot') = await import(snapshotPath);
+      const renderer = window.__kartDebug.renderer!;
       const state = createRace(127, { trackId: id });
       const snapshot = captureRenderSnapshot(state);
       const samples: { drawCalls: number; triangles: number }[] = [];
@@ -52,8 +56,9 @@ for (const { id, name, layout, drawCalls: baselineDrawCalls, triangles: baseline
       }
       let meshes = 0;
       // Count course meshes only, matching buildCourse.test.ts (exclude karts/items).
-      const course = (renderer as unknown as { course: import('../src/render/course/buildCourse').Course }).course;
-      course.group.traverse(object => { if ((object as import('three').Mesh).isMesh) meshes++; });
+      window.__kartDebug.render.courseGroup!.traverse(object => {
+        if (object.type === 'Mesh' || object.type === 'InstancedMesh') meshes++;
+      });
       return { renderSamples: samples, meshes, grid: renderer.renderer.domElement.toDataURL('image/png').split(',')[1] };
     }, id);
     await testInfo.attach(`${id}-start-grid`, { body: Buffer.from(grid, 'base64'), contentType: 'image/png' });
@@ -71,7 +76,7 @@ for (const { id, name, layout, drawCalls: baselineDrawCalls, triangles: baseline
     await expect(page.locator('#race-screen')).toBeVisible();
     await expect.poll(() => page.evaluate(() => window.__kartDebug.state.phase)).toBe('racing');
     await page.evaluate(() => {
-      const debug = window.__kartDebug as typeof window.__kartDebug & { clearItems(): void };
+      const debug = window.__kartDebug;
       for (let second = 0; second < 200 && debug.state.phase !== 'finished'; second++) {
         debug.clearItems();
         debug.advance(60, true);
@@ -101,6 +106,81 @@ for (const { id, name, layout, drawCalls: baselineDrawCalls, triangles: baseline
   });
 }
 
+test('M3-08: NEON eight CPUs finish three laps and mechanisms keep animating', async ({ page }, testInfo) => {
+  await page.goto('./');
+  await page.waitForFunction(() => !!window.__kartDebug);
+  await page.locator('#course-select input[value="neon"]').check();
+  await page.locator('#start-race').click();
+  const { screenshots, ...log } = await page.evaluate(async () => {
+    const simPath = `${location.pathname}src/sim/index.ts`;
+    const snapshotPath = `${location.pathname}src/render/snapshot.ts`;
+    const { createRace, getTrack, sampleTrack }: typeof import('../src/sim') = await import(simPath);
+    const { captureRenderSnapshot }: typeof import('../src/render/snapshot') = await import(snapshotPath);
+    const debug = window.__kartDebug;
+    // Reset synchronously to a fixed seed with all eight slots genuinely CPU-controlled.
+    Object.assign(debug.state, createRace(127, { trackId: 'neon', racers: debug.state.karts.map(kart => ({
+      name: kart.name, color: kart.color, human: false,
+    })) }));
+    for (let second = 0; second < 240 && debug.state.phase !== 'finished'; second++) {
+      debug.clearItems();
+      debug.advance(60, true);
+    }
+    const track = getTrack('neon');
+    const renderer = debug.renderer!;
+    const group = debug.render.courseGroup!;
+    const sweepIndex = track.def.barriers!.findIndex(barrier => barrier.motion?.kind === 'sweep');
+    const gateIndex = track.def.barriers!.findIndex(barrier => barrier.motion?.kind === 'gate');
+    const spinIndex = track.def.surfaces.findIndex(zone => zone.kind === 'spin');
+    const sweep = track.def.barriers![sweepIndex];
+    const gate = track.def.barriers![gateIndex];
+    const spin = track.def.surfaces[spinIndex];
+    const point = sampleTrack(track, (sweep.from + sweep.to) / 2);
+    const band = group.getObjectByName(`motion:barrier:${sweepIndex}`)!;
+    const disc = group.getObjectByName(`motion:spin:${spinIndex}`)!;
+    // Finished simulation time is frozen. Render the completed state at two explicit
+    // times, a quarter sweep period apart, to exercise GameRenderer's motion update.
+    const motion = [0, sweep.motion!.period / 4].map(time => {
+      const state = { ...debug.state, time };
+      renderer.update(state, captureRenderSnapshot(state), 1, 0, 'results');
+      return { time, lateral: (band.position.x - point.x) * point.nx + (band.position.z - point.z) * point.nz,
+        rotationY: disc.rotation.y };
+    });
+    const screenshots = [
+      { name: 'neon-sweep', distance: sweep.from - 10 },
+      { name: 'neon-gate', distance: gate.from - 10 },
+      { name: 'neon-spin', distance: spin.from - 10 },
+    ].map(({ name, distance }) => {
+      const point = sampleTrack(track, distance);
+      const state = { ...debug.state, time: sweep.motion!.period / 4,
+        karts: debug.state.karts.map(kart => kart.id === 0 ? { ...kart,
+          x: point.x, y: point.y, z: point.z, heading: Math.atan2(point.tx, point.tz),
+          trackDistance: distance, lateralOffset: 0, speed: 0, steer: 0,
+        } : kart) };
+      const snapshot = captureRenderSnapshot(state);
+      renderer.update(state, snapshot, 1, 0, 'title');
+      renderer.update(state, snapshot, 1, 0, 'race');
+      return { name, png: renderer.renderer.domElement.toDataURL('image/png').split(',')[1] };
+    });
+    return { phase: debug.state.phase, karts: debug.state.karts.map(({ human, lapTimes, finishTime }) => ({
+      human, lapTimes, finishTime,
+    })), motion, screenshots };
+  });
+  await testInfo.attach('neon-three-laps-motion', { body: JSON.stringify(log), contentType: 'application/json' });
+  for (const { name, png } of screenshots) {
+    await testInfo.attach(name, { body: Buffer.from(png, 'base64'), contentType: 'image/png' });
+  }
+  await expect(page.locator('#results-screen')).toBeVisible();
+  expect(log.phase).toBe('finished');
+  expect(log.karts).toHaveLength(8);
+  for (const kart of log.karts) {
+    expect(kart.human).toBe(false);
+    expect(kart.lapTimes).toHaveLength(3);
+    expect(kart.finishTime).toBeGreaterThan(0);
+  }
+  expect(Math.abs(log.motion[1].lateral - log.motion[0].lateral)).toBeGreaterThan(0);
+  expect(log.motion[1].rotationY).toBeGreaterThan(log.motion[0].rotationY);
+});
+
 for (const missedBoost of [false, true]) {
   test(`M2-06: CANYON shortcut ${missedBoost ? 'fails without boost' : 'clears the pit with boost'}`, async ({ page }, testInfo) => {
     await page.goto('./');
@@ -115,23 +195,24 @@ for (const missedBoost of [false, true]) {
     const lane = split.lanes.find(candidate => candidate.risk === 1)!;
     const center = (lane.offsetMin + lane.offsetMax) / 2;
     const start = track.def.widthKeys!.filter(key => key.distance < split.from).at(-1)!.distance;
+    const initialOffset = Math.min(center, widthAt(track, start).wallHalfWidth - KART_RADIUS);
     const mergeEnd = track.def.racingLine!.find(point => point.distance > split.to && point.offset === 0)!.distance;
     // Sample the actual course at 10 cm intervals for a lane-centre steering target.
     const points = Array.from({ length: Math.ceil((split.to + 30 - start) * 10) + 1 },
       (_, i) => sampleTrack(track, start + i / 10));
     const boost = track.def.surfaces.find(zone => zone.kind === 'boost' && zone.from >= split.from && zone.to <= split.to)!;
     const jump = track.def.surfaces.find(zone => zone.kind === 'jump' && zone.from >= split.from && zone.to <= split.to)!;
-    const { approach, ...log } = await page.evaluate(({ split, center, start, mergeEnd, points, boost, jump, missedBoost }) => {
-      const debug = window.__kartDebug as typeof window.__kartDebug & { clearItems(): void };
+    const { approach, ...log } = await page.evaluate(({ split, center, initialOffset, start, mergeEnd, points, boost, jump, missedBoost }) => {
+      const debug = window.__kartDebug;
       const kart = debug.state.karts[0];
       const point = points[0];
       Object.assign(kart, {
-        x: point.x + point.nx * center, y: point.y, z: point.z + point.nz * center,
-        heading: Math.atan2(point.tx, point.tz), trackDistance: start, lateralOffset: center,
+        x: point.x + point.nx * initialOffset, y: point.y, z: point.z + point.nz * initialOffset,
+        heading: Math.atan2(point.tx, point.tz), trackDistance: start, lateralOffset: initialOffset,
         speed: 0, steer: 0, boostTime: 0, spinTime: 0, airTime: 0,
       });
       const initial = { trackDistance: kart.trackDistance, lateralOffset: kart.lateralOffset, speed: kart.speed };
-      const { renderer } = debug as typeof debug & { renderer: GameRenderer };
+      const renderer = debug.renderer!;
       const snapshot = { karts: debug.state.karts, entities: new Map() };
       // Switch camera modes to snap to the placed kart, then capture before any sim tick.
       renderer.update(debug.state, snapshot, 1, 0, 'title');
@@ -175,10 +256,10 @@ for (const missedBoost of [false, true]) {
         else Reflect.deleteProperty(navigator, 'getGamepads');
       }
       return { approach, initial, ticks, events, trackDistance: kart.trackDistance };
-    }, { split, center, start, mergeEnd, points, boost, jump, missedBoost });
+    }, { split, center, initialOffset, start, mergeEnd, points, boost, jump, missedBoost });
     await testInfo.attach('canyon-island-approach', { body: Buffer.from(approach, 'base64'), contentType: 'image/png' });
     await testInfo.attach('canyon-shortcut', { body: JSON.stringify(log), contentType: 'application/json' });
-    expect(log.initial).toEqual({ trackDistance: start, lateralOffset: center, speed: 0 });
+    expect(log.initial).toEqual({ trackDistance: start, lateralOffset: initialOffset, speed: 0 });
     expect(log.ticks.some(tick => tick.airTime > 0)).toBe(true);
     const pitHits = log.events.filter(event => event.type === 'hit' && event.value === 2);
     if (missedBoost) {
@@ -196,7 +277,7 @@ for (const missedBoost of [false, true]) {
 test('C-010: eight course switches keep renderer geometry memory bounded', async ({ page }, testInfo) => {
   await page.goto('./');
   await page.waitForFunction(() => !!window.__kartDebug?.rendererInfo);
-  // Canyon has the largest geometry count (80); visit every course twice.
+  // Canyon has the largest geometry count; visit every course twice.
   const sequence = ['canyon', 'snowpeak', 'neon', 'meadow', 'canyon', 'snowpeak', 'neon', 'meadow'] as const;
   const samples = [];
   for (const id of sequence) {
@@ -222,4 +303,7 @@ test('C-010: eight course switches keep renderer geometry memory bounded', async
     expect(sample.geometries).toBeLessThanOrEqual(samples[0].geometries);
     if (index >= 4) expect(sample.geometries).toBe(samples[index - 4].geometries);
   }
+  const neonLoads = samples.filter(sample => sample.trackId === 'neon');
+  expect(neonLoads).toHaveLength(2);
+  expect(neonLoads[1].geometries).toBeLessThanOrEqual(neonLoads[0].geometries);
 });

@@ -543,8 +543,8 @@ ui.show('title');
 frameId = requestAnimationFrame(frame);
 
 // This bridge is compiled away in production. It permits reproducible local browser QA.
-if (import.meta.env.DEV) {
-  const debug = {
+function createDebugBridge() {
+  return {
     get state(): RaceState { return state; },
     get screen() { return screen; },
     get paused() { return paused; },
@@ -554,6 +554,7 @@ if (import.meta.env.DEV) {
     /** Selected course: the room's course online, otherwise the title selection. */
     get course(): TrackId { return (host ?? guest)?.course ?? course; },
     render: {
+      get courseGroup() { return renderer?.['course'].group; },
       get drawCalls() { return renderer?.getDrawCalls() ?? 0; },
       get triangles() { return renderer?.renderer.info.render.triangles ?? 0; },
       get trackId() { return renderer?.getTrackId() ?? null; },
@@ -594,7 +595,12 @@ if (import.meta.env.DEV) {
       if (state.phase === 'finished' && screen === 'race') finish();
     },
   };
-  Object.assign(window, { __kartDebug: debug });
+}
+
+export type KartDebug = ReturnType<typeof createDebugBridge>;
+
+if (import.meta.env.DEV) {
+  Object.assign(window, { __kartDebug: createDebugBridge() });
 }
 
 if (import.meta.hot) import.meta.hot.dispose(() => {
