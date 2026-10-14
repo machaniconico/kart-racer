@@ -41,10 +41,13 @@ describe('course registry and MEADOW golden baseline', () => {
     expectFrozen(TRACKS);
   });
 
-  // Pending marker: M6-01–04 each replace one scaffold; M6-05 changes this to an empty list.
-  it('still registers the four new courses as MEADOW-layout scaffolds', () => {
-    expect(scaffoldIds()).toEqual(['harbor', 'forest', 'volcano', 'skyline']);
-    for (const id of scaffoldIds()) expect(TRACKS[id].layoutVersion).toBe(1);
+  // Pending marker: M6-01–04 each replace one scaffold in parallel, so only the subset is pinned
+  // here; M6-05 changes this to an empty list.
+  it('registers only the four new courses as MEADOW-layout scaffolds', () => {
+    for (const id of scaffoldIds()) {
+      expect(['harbor', 'forest', 'volcano', 'skyline']).toContain(id);
+      expect(TRACKS[id].layoutVersion).toBe(1);
+    }
   });
 
   it.each(['', 'MEADOW', 'unknown', '__proto__', 'constructor'])('rejects unknown ID %j', id => {
