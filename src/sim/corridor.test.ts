@@ -1,15 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { corridorAt, exclusionAt, freeIntervalFor, KART_RADIUS, validateCoursePlayability, validateTrackDef, widthAt } from './corridor';
+import { barrierCenterAt, barrierHalfWidthAt, corridorAt, exclusionAt, freeIntervalFor, KART_RADIUS,
+  validateCoursePlayability, validateTrackDef, widthAt } from './corridor';
 import { KART_RADIUS as RACE_RADIUS } from './race';
 import { buildTrack } from './track';
 import { getTrack, TRACK_IDS, TRACKS } from './tracks';
-import type { Barrier, TrackDef } from './types';
+import type { Barrier, BarrierMotion, SurfaceZone, TrackDef } from './types';
 
 // Synthetic corridor cases keep their original dimensions, independent of MEADOW's layout.
 const base: TrackDef = { ...TRACKS.meadow, roadHalfWidth: 7.2, wallHalfWidth: 10.5, boxLanes: [-4.1, 0, 4.1] };
 const length = getTrack('meadow').length;
 const band: Barrier = { from: 25, to: 40, center: 0, halfWidth: 2, taper: 4 };
 const fixture = (overrides: Partial<TrackDef> = {}): TrackDef => ({ ...base, ...overrides });
+const syntheticDef = (overrides: Partial<TrackDef> = {}): TrackDef => ({
+  ...base, scale: 1, checkpointCount: 1,
+  controlPoints: [
+    [-150, 3, 0], [-100, 3, 0], [-50, 3, 0], [0, 3, 0],
+    [50, 3, 0], [100, 3, 0], [150, 3, 0], [150, 3, 100], [-150, 3, 100],
+  ],
+  boxRows: [0.45, 0.55, 0.7, 0.85], surfaces: [], racingLine: [], ...overrides,
+});
 
 describe('widthAt', () => {
   it('interpolates continuously across the lap seam every 0.5 m', () => {
@@ -125,20 +134,259 @@ describe('exclusionAt', () => {
       .toBe(exclusionAt(track, short, short.to - 1, 0)!.halfWidth);
   });
 
-  it.each(['sweep', 'gate'] as const)('keeps %s motion static at every supplied time', kind => {
-    const moving: Barrier = { ...band, motion: { kind, amplitude: 2, period: 4, phase: 1, minWidth: 3 } };
-    const trackWithMotion = buildTrack(fixture({ barriers: [moving] }));
+  it('keeps a motionless barrier bit-identical at every supplied time', () => {
+    const staticTrack = buildTrack(syntheticDef({ barriers: [band] }));
     for (const time of [-5, 0, 1, 100]) {
       for (const d of [band.from - 0.5, band.from + 2, 32, band.to + 0.5]) {
-        const actual = exclusionAt(track, moving, d, time)!;
+        const actual = exclusionAt(track, band, d, time)!;
         const expected = exclusionAt(track, band, d, 0)!;
         expect(actual.halfWidth).toBe(expected.halfWidth);
         expect(actual.min).toBe(expected.min);
         expect(actual.max).toBe(expected.max);
         expect(actual.normalAt(0)).toEqual(expected.normalAt(0));
-        expect(corridorAt(trackWithMotion, d, time)).toEqual(corridorAt(trackWithMotion, d, 0));
+        expect(corridorAt(staticTrack, d, time)).toEqual(corridorAt(staticTrack, d, 0));
       }
+      expect(barrierCenterAt({ ...band, center: -0 }, time)).toBe(-0);
+      expect(barrierHalfWidthAt(band, time)).toBe(band.halfWidth);
     }
+  });
+});
+
+describe('deterministic barrier motion', () => {
+  const band: Barrier = { from: 125, to: 145, center: 1.25, halfWidth: 2, taper: 4 };
+  const sweep: BarrierMotion = { kind: 'sweep', amplitude: 2.75, period: 8, phase: 0 };
+  const gate: BarrierMotion = { kind: 'gate', amplitude: 0, period: 8, phase: 0, minWidth: 0.35 };
+
+  it.each([sweep, gate])('matches the static corridor exactly at time zero ($kind)', motion => {
+    const stationary = buildTrack(syntheticDef({ barriers: [band] }));
+    const moving = buildTrack(syntheticDef({ barriers: [{ ...band, motion }] }));
+    for (let d = band.from - 2; d <= band.to + 2; d += 0.125) {
+      expect(corridorAt(moving, d, 0)).toEqual(corridorAt(stationary, d, 0));
+    }
+  });
+
+  it('reaches the sweep amplitude after a quarter-period and moves noses and tapers with it', () => {
+    const moving = { ...band, motion: sweep };
+    const time = sweep.period / 4;
+    const center = band.center + sweep.amplitude;
+    expect(barrierCenterAt(moving, time)).toBeCloseTo(center, 12);
+    expect(barrierHalfWidthAt(moving, time)).toBe(band.halfWidth);
+    const track = buildTrack(syntheticDef({ barriers: [moving] }));
+    const shifted = { ...band, center };
+    const stationary = buildTrack(syntheticDef({ barriers: [shifted] }));
+    for (const d of [band.from - 0.5, band.from + 2, 135, band.to - 2, band.to + 0.5]) {
+      const actual = exclusionAt(track, moving, d, time)!;
+      const expected = exclusionAt(track, shifted, d, 0)!;
+      expect(actual.min).toBe(expected.min);
+      expect(actual.max).toBe(expected.max);
+      expect(actual.normalAt(center - 0.5)).toEqual(expected.normalAt(center - 0.5));
+      expect(corridorAt(track, d, time)).toEqual(corridorAt(stationary, d, 0));
+    }
+  });
+
+  it('reaches the gate minimum half-width after a half-period, including taper normals', () => {
+    const moving = { ...band, motion: gate };
+    const time = gate.period / 2;
+    expect(barrierCenterAt(moving, time)).toBe(band.center);
+    expect(barrierHalfWidthAt(moving, time)).toBeCloseTo(gate.minWidth!, 12);
+    const track = buildTrack(syntheticDef({ barriers: [moving] }));
+    for (const d of [band.from - 0.5, band.from + 2, 135, band.to - 2, band.to + 0.5]) {
+      const actual = exclusionAt(track, moving, d, time)!;
+      const expected = exclusionAt(track, { ...band, halfWidth: gate.minWidth! }, d, 0)!;
+      expect(actual.min).toBeCloseTo(expected.min, 12);
+      expect(actual.max).toBeCloseTo(expected.max, 12);
+      expect(actual.normalAt(actual.min).d).toBeCloseTo(expected.normalAt(expected.min).d, 12);
+      expect(actual.normalAt(actual.min).offset).toBeCloseTo(expected.normalAt(expected.min).offset, 12);
+    }
+  });
+
+  it.each([sweep, gate])('is repeatable after JSON restoration and out-of-order queries ($kind)', motion => {
+    const moving = { ...band, motion: { ...motion, phase: -0.37 } };
+    const def = syntheticDef({ barriers: [moving] });
+    const before = JSON.stringify(def);
+    const track = buildTrack(def);
+    const restored = buildTrack(JSON.parse(before));
+    for (const time of [13.5, 0, -2, 4, 13.5]) {
+      expect(corridorAt(track, 135, time)).toEqual(corridorAt(restored, 135, time));
+      expect(barrierCenterAt(moving, time + motion.period)).toBeCloseTo(barrierCenterAt(moving, time), 12);
+      expect(barrierHalfWidthAt(moving, time + motion.period)).toBeCloseTo(barrierHalfWidthAt(moving, time), 12);
+    }
+    expect(JSON.stringify(def)).toBe(before);
+  });
+});
+
+describe('moving barrier validation', () => {
+  const band: Barrier = { from: 125, to: 145, center: 0, halfWidth: 2, taper: 4 };
+  const sweep: BarrierMotion = { kind: 'sweep', amplitude: 2, period: 8, phase: 0 };
+  const gate: BarrierMotion = { kind: 'gate', amplitude: 0, period: 8, phase: 0, minWidth: 0.5 };
+  const withMotion = (motion: BarrierMotion): TrackDef => syntheticDef({ barriers: [{ ...band, motion }] });
+
+  it.each([sweep, gate])('accepts safe $kind motion without mutating its JSON', motion => {
+    const def = withMotion(motion);
+    const before = JSON.stringify(def);
+    expect(() => validateTrackDef(def)).not.toThrow();
+    expect(() => validateTrackDef(JSON.parse(before))).not.toThrow();
+    expect(JSON.stringify(def)).toBe(before);
+  });
+
+  it.each([
+    { ...sweep, period: 0 }, { ...sweep, period: -1 },
+    { ...sweep, period: Infinity }, { ...sweep, period: NaN },
+    { ...sweep, amplitude: -0.01 }, { ...sweep, amplitude: Infinity }, { ...sweep, amplitude: NaN },
+    { ...sweep, phase: Infinity }, { ...sweep, phase: -Infinity }, { ...sweep, phase: NaN },
+    { ...gate, minWidth: undefined }, { ...gate, minWidth: -0.01 }, { ...gate, minWidth: 0 },
+    { ...gate, minWidth: 2.01 }, { ...gate, minWidth: Infinity }, { ...gate, minWidth: NaN },
+    { ...gate, amplitude: -0.01 },
+  ])('rejects invalid motion fields (%j)', motion => {
+    expect(() => validateTrackDef(withMotion(motion))).toThrow(RangeError);
+  });
+
+  it.each([sweep, gate])('enforces the 6 m/s edge-speed limit for $kind', motion => {
+    const distance = motion.kind === 'sweep' ? 2 * motion.amplitude : band.halfWidth - motion.minWidth!;
+    const period = Math.PI * distance / 6;
+    expect(() => validateTrackDef(withMotion({ ...motion, period }))).not.toThrow();
+    expect(() => validateTrackDef(withMotion({ ...motion, period: period * 0.999 }))).toThrow(RangeError);
+    expect(() => validateTrackDef(withMotion({ ...motion, period: period * 0.999 }))).toThrow(/edge speed/);
+  });
+
+  it('accepts a gate whose minimum equals its static half-width', () => {
+    expect(() => validateTrackDef(withMotion({ ...gate, minWidth: band.halfWidth }))).not.toThrow();
+  });
+
+  it.each([Math.PI / 32, -Math.PI / 32])('samples a sweep peak missed by the period/32 grid (phase %s)', phase => {
+    const motion = { ...sweep, amplitude: 40, period: 64, phase };
+    const def = syntheticDef({ roadHalfWidth: 3.6, wallHalfWidth: 5.44,
+      barriers: [{ ...band, center: -40, motion }] });
+    const track = buildTrack(def);
+    const widest = (time: number): number => Math.max(...corridorAt(track, 135, time)
+      .map(interval => interval.max - interval.min));
+    for (let time = 0; time <= motion.period; time += motion.period / 32) {
+      expect(widest(time)).toBeGreaterThan(2 * KART_RADIUS + 0.6 + 0.05);
+    }
+    const peak = (Math.PI / 2 - phase) * motion.period / (2 * Math.PI);
+    expect(widest(peak)).toBeLessThan(2 * KART_RADIUS + 0.6);
+    expect(() => validateTrackDef(def)).toThrow(RangeError);
+    expect(() => validateTrackDef(def)).toThrow(/free interval/);
+  });
+
+  it('checks a gate that starts narrow and blocks the passage when it widens', () => {
+    const def = syntheticDef({ roadHalfWidth: 3.6, wallHalfWidth: 6.4,
+      barriers: [{ ...band, halfWidth: 3, taper: 6, motion: { ...gate, phase: Math.PI } }] });
+    expect(corridorAt(buildTrack(def), 135, 0).some(interval => interval.max - interval.min >= 2.55)).toBe(true);
+    expect(() => validateTrackDef(def)).toThrow(RangeError);
+    expect(() => validateTrackDef(def)).toThrow(/free interval/);
+  });
+
+  it('checks interpolated racing-line points at later times', () => {
+    const def = syntheticDef({ racingLine: [{ distance: 100, offset: 0 }, { distance: 160, offset: 0 }],
+      barriers: [{ ...band, center: 4, motion: { ...sweep, amplitude: 4 } }] });
+    expect(() => validateTrackDef({ ...def, barriers: [{ ...band, center: 4 }] })).not.toThrow();
+    expect(() => validateTrackDef(def)).toThrow(RangeError);
+    expect(() => validateTrackDef(def)).toThrow(/racingLine/);
+  });
+
+  it('checks start-grid slots at later times', () => {
+    const track = buildTrack(syntheticDef());
+    const start = track.length - 8 - 3 * 4.5;
+    const barrier = { ...band, from: start - 2, to: start + 2, center: 6, halfWidth: 0.5, taper: 2 };
+    expect(() => validateTrackDef(syntheticDef({ barriers: [barrier] }))).not.toThrow();
+    const def = syntheticDef({ barriers: [{ ...barrier, motion: { ...sweep, amplitude: 4 } }] });
+    expect(() => validateTrackDef(def)).toThrow(RangeError);
+    expect(() => validateTrackDef(def)).toThrow(/start grid slot/);
+  });
+
+  it('checks boxes at intermediate grid times, not just the quarter-period extrema', () => {
+    const length = buildTrack(syntheticDef()).length;
+    const moving = { ...band, center: -4, halfWidth: 0.1,
+      motion: { ...sweep, amplitude: 8, period: 16 } };
+    const def = syntheticDef({ boxRows: [135 / length, 0.55, 0.7, 0.85], boxLanes: [0, 8, 9], barriers: [moving] });
+    const track = buildTrack(def);
+    for (const time of [0, 4, 8, 12, 16]) {
+      const exclusion = exclusionAt(track, moving, 135, time)!;
+      expect(def.boxLanes.every(offset => offset < exclusion.min || offset > exclusion.max)).toBe(true);
+    }
+    expect(() => validateTrackDef({ ...def, barriers: [{ ...moving, motion: undefined }] })).not.toThrow();
+    expect(() => validateTrackDef(def)).toThrow(RangeError);
+    expect(() => validateTrackDef(def)).toThrow(/item box/);
+  });
+
+  it.each([140, 145 + 2 * KART_RADIUS - 0.01, 145 + 2 * KART_RADIUS])(
+    'rejects overlapping moving ranges including noses (second from %s)', from => {
+      const def = syntheticDef({ barriers: [{ ...band, motion: sweep },
+        { ...band, from, to: from + 20, center: 7, motion: gate }] });
+      expect(() => validateTrackDef(def)).toThrow(RangeError);
+      expect(() => validateTrackDef(def)).toThrow(/moving barrier.*overlap/);
+    },
+  );
+
+  it('rejects moving ranges that overlap across the lap seam', () => {
+    const length = buildTrack(syntheticDef()).length;
+    expect(() => validateTrackDef(syntheticDef({ barriers: [
+      { ...band, from: length - 20, to: 20, motion: sweep },
+      { ...band, from: 21, to: 40, motion: gate },
+    ] }))).toThrow(/moving barrier.*overlap/);
+  });
+
+  it('accepts separated moving bands with different periods and overlapping static bands', () => {
+    expect(() => validateTrackDef(syntheticDef({ barriers: [{ ...band, motion: sweep },
+      { ...band, from: band.to + 2 * KART_RADIUS + 0.01, to: 170, motion: { ...gate, period: 13.5 } },
+    ] }))).not.toThrow();
+    expect(() => validateTrackDef(syntheticDef({ barriers: [band, { ...band, motion: gate }] }))).not.toThrow();
+  });
+});
+
+describe('spin-zone validation', () => {
+  const spin: SurfaceZone = { kind: 'spin', from: 125, to: 135, offsetMin: -5, offsetMax: 5, rate: 1 };
+  const withSpin = (zone: SurfaceZone): TrackDef => syntheticDef({ surfaces: [zone] });
+
+  it.each([-1.5, -0.01, 0.01, 1.5])('accepts a straight disc with rate %s rad/s', rate => {
+    const def = withSpin({ ...spin, rate });
+    const json = JSON.stringify(def);
+    expect(() => validateTrackDef(def)).not.toThrow();
+    expect(JSON.stringify(def)).toBe(json);
+  });
+
+  it.each([undefined, 0, -1.50001, 1.50001, NaN, Infinity, -Infinity])('rejects spin rate %s', rate => {
+    expect(() => validateTrackDef(withSpin({ ...spin, rate }))).toThrow(RangeError);
+  });
+
+  it.each([
+    { ...spin, offsetMin: undefined }, { ...spin, offsetMax: undefined },
+    { ...spin, offsetMin: NaN }, { ...spin, offsetMax: Infinity },
+    { ...spin, offsetMax: 4.9 }, { ...spin, offsetMax: -5 },
+    { ...spin, to: spin.from + 30.01, offsetMax: spin.offsetMin! + 30.01 },
+    { ...spin, to: spin.from }, { ...spin, from: 135, to: 125 },
+  ])('rejects invalid spin diameter or offsets (%j)', zone => {
+    expect(() => validateTrackDef(withSpin(zone))).toThrow(RangeError);
+  });
+
+  it('rejects a spin on a curve', () => {
+    const def = fixture({ surfaces: [spin], racingLine: [] });
+    expect(() => validateTrackDef(def)).toThrow(RangeError);
+    expect(() => validateTrackDef(def)).toThrow(/curvature radius/);
+  });
+
+  it.each([120, 135.5])('rejects barrier body or nose overlap (barrier from %s)', from => {
+    const def = syntheticDef({ surfaces: [spin], barriers: [
+      { from, to: from + 20, center: 0, halfWidth: 2, taper: 4 },
+    ] });
+    expect(() => validateTrackDef(def)).toThrow(RangeError);
+    expect(() => validateTrackDef(def)).toThrow(/spin.*barrier exclusion/);
+  });
+
+  it('checks barrier overlap throughout the motion cycle while allowing a separated disc', () => {
+    const barrier: Barrier = { from: 120, to: 145, center: 8, halfWidth: 2, taper: 4 };
+    const def = syntheticDef({ surfaces: [spin], barriers: [barrier] });
+    expect(() => validateTrackDef(def)).not.toThrow();
+    const moving = { ...barrier, motion: { kind: 'sweep' as const, amplitude: 6, period: 8, phase: 0 } };
+    expect(() => validateTrackDef({ ...def, barriers: [moving] })).toThrow(RangeError);
+    expect(() => validateTrackDef({ ...def, barriers: [moving] })).toThrow(/spin.*barrier exclusion/);
+  });
+
+  it('allows a barrier near the disc corner when its exclusion stays outside the circle', () => {
+    expect(() => validateTrackDef(syntheticDef({ surfaces: [spin], barriers: [
+      { from: 134, to: 154, center: 4.9, halfWidth: 0.1, taper: 4 },
+    ] }))).not.toThrow();
   });
 });
 

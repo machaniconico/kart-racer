@@ -94,11 +94,17 @@ export interface WidthKey {
   readonly wallHalfWidth: number;
 }
 export interface BankKey { readonly distance: number; readonly roll: number }
+/** Deterministic motion evaluated at racingTicks × FIXED_DT seconds; countdown time is zero. */
 export interface BarrierMotion {
+  /** Sweep moves the lateral centre; gate varies the half-width about a fixed centre. */
   readonly kind: 'sweep' | 'gate';
+  /** Nonnegative sweep displacement amplitude in metres; unused for gates. */
   readonly amplitude: number;
+  /** Positive duration of one full cycle in seconds. */
   readonly period: number;
+  /** Finite angular phase in radians; zero starts at the static geometry. */
   readonly phase: number;
+  /** Gate's minimum half-width in metres (required for gates), greater than zero. */
   readonly minWidth?: number;
 }
 export interface Barrier {
@@ -123,6 +129,7 @@ export interface SurfaceZone {
   readonly to: number;
   readonly offsetMin?: number;
   readonly offsetMax?: number;
+  /** Spin angular velocity in rad/s; required for spin zones, with 0 < |rate| ≤ 1.5. */
   readonly rate?: number;
 }
 

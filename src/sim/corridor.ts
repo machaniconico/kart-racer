@@ -45,12 +45,26 @@ export function widthAt(track: Track, d: number): { roadHalfWidth: number; wallH
   };
 }
 
+/** Lateral centre in metres at race time in seconds (zero during countdown). */
+export function barrierCenterAt(barrier: Barrier, time: number): number {
+  const motion = barrier.motion;
+  if (motion?.kind !== 'sweep') return barrier.center;
+  return barrier.center + motion.amplitude * Math.sin(2 * Math.PI * time / motion.period + motion.phase);
+}
+
+/** Half-width in metres; a phase-zero gate starts at its static half-width. */
+export function barrierHalfWidthAt(barrier: Barrier, time: number): number {
+  const motion = barrier.motion;
+  if (motion?.kind !== 'gate') return barrier.halfWidth;
+  return barrier.halfWidth - (barrier.halfWidth - motion.minWidth!) *
+    (1 - Math.cos(2 * Math.PI * time / motion.period + motion.phase)) / 2;
+}
+
 /**
  * Section 1.5's band expansion: semicircular caps and half(d) + R on the taper.
  * Distances and normals use (arc metres, lateral metres), including wrapped bands.
- * Motion is reserved for M3; time deliberately has no effect in M1.
  */
-export function exclusionAt(track: Track, barrier: Barrier, d: number, _time: number): Exclusion | null {
+export function exclusionAt(track: Track, barrier: Barrier, d: number, time: number): Exclusion | null {
   const radius = KART_RADIUS;
   const span = wrap(barrier.to - barrier.from, track.length);
   let along = wrap(d - barrier.from, track.length);
@@ -59,17 +73,19 @@ export function exclusionAt(track: Track, barrier: Barrier, d: number, _time: nu
   const cap = along <= 0 ? along : along >= span ? along - span : null;
   if (cap !== null && Math.abs(cap) > radius + EPSILON) return null;
   const taper = barrier.taper ?? 4;
+  const center = barrierCenterAt(barrier, time);
+  const bandHalfWidth = barrierHalfWidthAt(barrier, time);
   // Wrapping can round an exact cap endpoint slightly inward; preserve its zero width.
   const halfWidth = cap !== null ? Math.abs(cap) >= radius - EPSILON ? 0 : Math.sqrt(radius * radius - cap * cap) :
-    barrier.halfWidth * Math.min(1, along / taper, (span - along) / taper) + radius;
-  const slope = along < taper && along < span / 2 ? barrier.halfWidth / taper :
-    along > span - taper && along > span / 2 ? -barrier.halfWidth / taper : 0;
+    bandHalfWidth * Math.min(1, along / taper, (span - along) / taper) + radius;
+  const slope = along < taper && along < span / 2 ? bandHalfWidth / taper :
+    along > span - taper && along > span / 2 ? -bandHalfWidth / taper : 0;
   return {
-    min: barrier.center - halfWidth,
-    max: barrier.center + halfWidth,
+    min: center - halfWidth,
+    max: center + halfWidth,
     halfWidth,
     normalAt(offset) {
-      const lateral = offset - barrier.center;
+      const lateral = offset - center;
       if (cap !== null) {
         const length = Math.hypot(cap, lateral);
         if (length === 0) return { d: along <= 0 ? -1 : 1, offset: 0 };
@@ -135,15 +151,15 @@ function zoneOffsets(track: Track, zone: SurfaceZone, d: number): Interval {
 }
 
 /** The widest available route can have a minimum where two gap widths cross. */
-function addPassageCrossings(track: Track, distances: Set<number>): void {
-  const barriers = [...(track.def.barriers ?? [])].sort((a, b) => a.center - b.center);
+function addPassageCrossings(track: Track, distances: Set<number>, time: number): void {
+  const barriers = [...(track.def.barriers ?? [])].sort((a, b) => barrierCenterAt(a, time) - barrierCenterAt(b, time));
   if (barriers.length < 2) return;
   const ordered = [...distances].sort((a, b) => a - b);
   for (let i = 0; i < ordered.length; i++) {
     const from = ordered[i]!;
     const to = ordered[i + 1] ?? ordered[0]! + track.length;
     const edges = barriers.map(barrier => [
-      exclusionAt(track, barrier, from, 0), exclusionAt(track, barrier, to, 0),
+      exclusionAt(track, barrier, from, time), exclusionAt(track, barrier, to, time),
     ] as const).filter((pair): pair is readonly [Exclusion, Exclusion] => pair[0] !== null && pair[1] !== null);
     if (edges.length < 2) continue;
     const widths = [from, to].map((d, end) => {
@@ -170,6 +186,26 @@ function addPassageCrossings(track: Track, distances: Set<number>): void {
       }
     }
   }
+}
+
+/** Validated motions only: a common time grid plus exact phase extrema, without an LCM. */
+function barrierSampleTimes(barriers: readonly Barrier[]): number[] {
+  const motions = barriers.flatMap(barrier => barrier.motion ? [barrier.motion] : []);
+  if (!motions.length) return [0];
+  const minPeriod = Math.min(...motions.map(motion => motion.period));
+  const maxPeriod = Math.max(...motions.map(motion => motion.period));
+  const times = new Set([0, maxPeriod]);
+  const step = minPeriod / 32;
+  for (let i = 1; i * step < maxPeriod; i++) times.add(i * step);
+  for (const motion of motions) {
+    for (let quarter = 0; quarter < 4; quarter++) {
+      const first = wrap((quarter * Math.PI / 2 - motion.phase) * motion.period / (2 * Math.PI), motion.period);
+      for (let cycle = 0; first + cycle * motion.period <= maxPeriod; cycle++) {
+        times.add(first + cycle * motion.period);
+      }
+    }
+  }
+  return [...times].sort((a, b) => a - b);
 }
 
 /** Throws on unsafe geometry without changing the source definition or its JSON. */
@@ -227,6 +263,24 @@ export function validateTrackDef(def: TrackDef): void {
     if ((barrier.scenery === 'rock' || barrier.scenery === 'building') && taper < 8) {
       throw new RangeError('island taper must be at least 8 m');
     }
+    const motion = barrier.motion;
+    if (motion) {
+      requireFinite(motion.period, 'barrier motion period');
+      requireFinite(motion.amplitude, 'barrier motion amplitude');
+      requireFinite(motion.phase, 'barrier motion phase');
+      if (motion.period <= 0) throw new RangeError('barrier motion period must be positive');
+      if (motion.amplitude < 0) throw new RangeError('barrier motion amplitude must be nonnegative');
+      if (motion.kind === 'gate') {
+        if (motion.minWidth === undefined) throw new RangeError('gate minWidth is required');
+        requireFinite(motion.minWidth, 'gate minWidth');
+        if (motion.minWidth <= 0 || motion.minWidth > barrier.halfWidth) {
+          throw new RangeError('gate minWidth must be positive and at most halfWidth');
+        }
+      }
+      const speed = motion.kind === 'sweep' ? 2 * Math.PI * motion.amplitude / motion.period :
+        Math.PI * (barrier.halfWidth - motion.minWidth!) / motion.period;
+      if (speed > 6) throw new RangeError('barrier edge speed must not exceed 6 m/s');
+    }
     const span = wrap(barrier.to - barrier.from, length);
     if (span === 0) throw new RangeError('barrier endpoints must be distinct around the lap');
     for (const tip of [barrier.from, barrier.to]) {
@@ -242,16 +296,26 @@ export function validateTrackDef(def: TrackDef): void {
     }
   }
 
-  const assertFree = (d: number, offset: number, label: string): void => {
+  const moving = barriers.filter(barrier => barrier.motion);
+  for (let i = 0; i < moving.length; i++) for (let j = i + 1; j < moving.length; j++) {
+    const a = moving[i]!;
+    const b = moving[j]!;
+    if (arcsOverlap(a.from - KART_RADIUS, wrap(a.to - a.from, length) + 2 * KART_RADIUS,
+      b.from - KART_RADIUS, wrap(b.to - b.from, length) + 2 * KART_RADIUS, length)) {
+      throw new RangeError('moving barrier distance ranges including noses must not overlap');
+    }
+  }
+  const times = barrierSampleTimes(barriers);
+  const assertFree = (d: number, offset: number, label: string, time: number): void => {
     requireFinite(offset, `${label} offset`);
     if (barriers.some(barrier => {
-      const exclusion = exclusionAt(track, barrier, d, 0);
+      const exclusion = exclusionAt(track, barrier, d, time);
       return exclusion !== null && offset >= exclusion.min && offset <= exclusion.max;
     })) throw new RangeError(`${label} is inside a barrier exclusion`);
   };
   for (const point of def.racingLine) {
     checkDistance(point.distance, 'racingLine distance');
-    assertFree(point.distance, point.offset, 'racingLine');
+    for (const time of times) assertFree(point.distance, point.offset, 'racingLine', time);
     addDistance(point.distance);
   }
   for (let i = 1; i < def.racingLine.length; i++) {
@@ -260,22 +324,27 @@ export function validateTrackDef(def: TrackDef): void {
     }
   }
   for (let slot = 0; slot < 8; slot++) {
-    assertFree(length - 8 - Math.floor(slot / 2) * 4.5, slot % 2 === 0 ? -2 : 2, `start grid slot ${slot}`);
+    for (const time of times) {
+      assertFree(length - 8 - Math.floor(slot / 2) * 4.5, slot % 2 === 0 ? -2 : 2, `start grid slot ${slot}`, time);
+    }
   }
   for (const row of def.boxRows) {
     requireFinite(row, 'box row');
     if (row < 0 || row >= 1) throw new RangeError('box rows must be lap fractions in [0, 1)');
-    for (const offset of def.boxLanes) assertFree(row * length, offset, 'item box');
+    for (const offset of def.boxLanes) for (const time of times) assertFree(row * length, offset, 'item box', time);
   }
 
   for (let d = 0; d < length; d += 0.5) addDistance(d);
-  addPassageCrossings(track, distances);
-  for (const d of distances) {
-    if (!corridorAt(track, d, 0).some(interval => interval.max - interval.min >= MIN_PASSAGE + PASSAGE_MARGIN - EPSILON)) {
-      throw new RangeError(`No free interval at ${d} m is at least 2R + 0.6 + 0.05 m wide`);
-    }
-    if (def.racingLine.length) {
-      assertFree(d, racingLineOffset(track, d), 'racingLine');
+  for (const time of times) {
+    const samples = times.length === 1 ? distances : new Set(distances);
+    addPassageCrossings(track, samples, time);
+    for (const d of samples) {
+      if (!corridorAt(track, d, time).some(interval => interval.max - interval.min >= MIN_PASSAGE + PASSAGE_MARGIN - EPSILON)) {
+        throw new RangeError(`No free interval at ${d} m, time ${time} s is at least 2R + 0.6 + 0.05 m wide`);
+      }
+      if (def.racingLine.length) {
+        assertFree(d, racingLineOffset(track, d), 'racingLine', time);
+      }
     }
   }
   for (let i = 0; i < def.checkpointCount; i++) {
@@ -286,7 +355,7 @@ export function validateTrackDef(def: TrackDef): void {
     }
   }
 
-  const zones = def.surfaces.filter(zone => zone.kind === 'jump' || zone.kind === 'pit');
+  const zones = def.surfaces.filter(zone => zone.kind === 'jump' || zone.kind === 'pit' || zone.kind === 'spin');
   for (const zone of zones) {
     checkDistance(zone.from, `${zone.kind} from`);
     checkDistance(zone.to, `${zone.kind} to`);
@@ -310,6 +379,39 @@ export function validateTrackDef(def: TrackDef): void {
     for (const d of distances) if (wrap(d - from, length) <= span + EPSILON) result.push(d);
     return result;
   };
+  for (const spin of zones.filter(zone => zone.kind === 'spin')) {
+    if (spin.rate === undefined) throw new RangeError('spin rate is required');
+    requireFinite(spin.rate, 'spin rate');
+    if (spin.rate === 0 || Math.abs(spin.rate) > 1.5) throw new RangeError('spin rate must satisfy 0 < |rate| <= 1.5 rad/s');
+    const diameter = spin.to - spin.from;
+    if (diameter <= 0 || diameter > 30) throw new RangeError('spin diameter must be positive and at most 30 m');
+    if (spin.offsetMin === undefined || spin.offsetMax === undefined ||
+      Math.abs(diameter - (spin.offsetMax - spin.offsetMin)) > EPSILON) {
+      throw new RangeError('spin requires offsetMin / offsetMax spanning its diameter');
+    }
+    for (let i = 0; i < track.samples.length; i++) {
+      const a = track.samples[(i + track.samples.length - 1) % track.samples.length]!;
+      const b = track.samples[i]!;
+      const c = track.samples[(i + 1) % track.samples.length]!;
+      // Include triples straddling either boundary, even for zones between samples.
+      if (!arcsOverlap(a.distance, wrap(c.distance - a.distance, length), spin.from, diameter, length)) continue;
+      const twiceArea = Math.abs((b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x));
+      const radius = twiceArea === 0 ? Infinity : Math.hypot(b.x - a.x, b.z - a.z) *
+        Math.hypot(c.x - b.x, c.z - b.z) * Math.hypot(c.x - a.x, c.z - a.z) / (2 * twiceArea);
+      if (radius < 200) throw new RangeError('spin requires curvature radius at least 200 m');
+    }
+    const radius = diameter / 2;
+    const center = (spin.offsetMin + spin.offsetMax) / 2;
+    const samples = [...sectionDistances(spin.from, spin.to), spin.from + radius];
+    for (const d of samples) for (const time of times) {
+      const along = wrap(d - spin.from, length) - radius;
+      const halfWidth = Math.sqrt(Math.max(0, radius * radius - along * along));
+      if (barriers.some(barrier => {
+        const exclusion = exclusionAt(track, barrier, d, time);
+        return exclusion !== null && exclusion.max >= center - halfWidth && exclusion.min <= center + halfWidth;
+      })) throw new RangeError('spin must not overlap a barrier exclusion');
+    }
+  }
   const splits = def.splits ?? [];
   for (const split of splits) {
     checkDistance(split.from, 'split from');
