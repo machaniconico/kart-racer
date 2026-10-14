@@ -371,3 +371,28 @@ export class HostSession {
     catch { this.disconnect(guest); guest.link.close(); }
   }
 }
+
+/** Lobby renderer rebuilds (C-010, M6-07). A course change only requests one; frame() runs it on a
+ * later frame, after the requesting message/event task has sent and shown the change, and then holds
+ * drawing until the GPU work is done. The caller polls the network before every frame() call, so a
+ * slow GPU never blocks PONG/snapshot handling. */
+export class RendererRebuild {
+  private requested = false;
+  private gpuDone: (() => boolean) | null = null;
+
+  request(): void { this.requested = true; }
+
+  /** Holds drawing until `done` reports the GPU finished a rebuild's queued work. */
+  waitFor(done: () => boolean): void { this.gpuDone = done; }
+
+  /** Once per frame, after network polling: runs a requested rebuild, then returns whether to draw. */
+  frame(rebuild: () => void): boolean {
+    if (this.requested) {
+      this.requested = false;
+      rebuild();
+    }
+    if (this.gpuDone && !this.gpuDone()) return false;
+    this.gpuDone = null;
+    return true;
+  }
+}

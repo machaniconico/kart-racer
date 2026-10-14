@@ -2,7 +2,7 @@ import './style.css';
 import { AudioEngine } from './audio/AudioEngine';
 import { Controls } from './input/Controls';
 import { GuestSession } from './net/guestSession';
-import { HostSession } from './net/hostSession';
+import { HostSession, RendererRebuild } from './net/hostSession';
 import { generateRoomCode } from './net/roomCode';
 import type { Transport } from './net/transport';
 import { GameRenderer } from './render/GameRenderer';
@@ -110,6 +110,8 @@ let pendingNet = false;
 /** Online "leave?" confirmation; unlike pause it never stops the simulation. */
 let leaving = false;
 let guestAlpha = 1;
+/** Defers lobby rebuilds and gates drawing on the GPU so net polling continues (C-010, M6-07). */
+const rendererRebuild = new RendererRebuild();
 
 function fail(message: string): void {
   fatal = true;
@@ -259,6 +261,18 @@ function recreateRenderer(id: number): void {
     renderer = new GameRenderer(ui.canvas, state, id);
     // Draw once now so shader compilation happens inside this one main-thread stall.
     renderer.update(state, captureRenderSnapshot(state), 1, 0, screen);
+    const gl2 = renderer.renderer.getContext();
+    if (gl2 instanceof WebGL2RenderingContext) {
+      // Drawing before this fence signals would block the main thread on the GPU.
+      const fence = gl2.fenceSync(gl2.SYNC_GPU_COMMANDS_COMPLETE, 0);
+      gl2.flush();
+      if (fence) rendererRebuild.waitFor(() => {
+        // A non-blocking status read.
+        if (!gl2.isContextLost() && gl2.getSyncParameter(fence, gl2.SYNC_STATUS) !== gl2.SIGNALED) return false;
+        gl2.deleteSync(fence);
+        return true;
+      });
+    }
   } catch (error) {
     renderer = undefined;
     console.error('The 3D renderer could not restart.', error);
@@ -370,13 +384,15 @@ function enterLobby(): void {
 }
 
 /** Lobby: builds the room's course as soon as it is known, so race_start never rebuilds the renderer.
- * Rebuilding blocks the main thread (rAF and net polling) for a moment; the lobby tolerates that. */
+ * Rebuilding blocks the main thread (rAF and net polling) for a moment; the lobby tolerates that.
+ * The rebuild waits for the next frame so the course message or change event that triggered it
+ * finishes first: its DOM update and sends are not held behind the stall. */
 function prepareCourse(id: TrackId, rebuild = true): void {
   if (state.trackId !== id) {
     state = createRace(seed(), { trackId: id });
     previous = captureRenderSnapshot(state);
   }
-  if (rebuild && renderer && !fatal && renderer.getTrackId() !== id) recreateRenderer(localId);
+  if (rebuild && renderer && !fatal && renderer.getTrackId() !== id) rendererRebuild.request();
 }
 
 function renderLobby(): void {
@@ -551,7 +567,10 @@ function frame(now: number): void {
     host?.frame(); // Keeps RTT probes running in the lobby and results.
     guest?.frame(); // A connecting guest (still solo mode) needs its timeout/PING too.
   }
-  if (!fatal && renderer) {
+  const draw = rendererRebuild.frame(() => {
+    if (screen === 'lobby' && renderer && !fatal && renderer.getTrackId() !== state.trackId) recreateRenderer(localId);
+  });
+  if (!fatal && renderer && draw) {
     const alpha = mode === 'guest' ? guestAlpha : accumulator / FIXED_DT;
     renderer.update(state, previous, screen === 'race' && !paused ? alpha : 1, paused ? 0 : elapsed, screen);
   }

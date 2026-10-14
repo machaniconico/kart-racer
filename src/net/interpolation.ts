@@ -35,8 +35,16 @@ export function interpolateState(from: Snapshot, to: Snapshot, hostTime: number,
     for (const timer of ['rouletteTime', 'rapidTime', 'auraTime', 'shrinkTime', 'inkTime', 'autoTime'] as const) {
       kart.effects[timer] = discrete.effects[timer];
     }
-    kart.x += Math.sin(kart.heading) * kart.speed * seconds;
-    kart.z += Math.cos(kart.heading) * kart.speed * seconds;
+    // Advance along the travel direction (heading minus drift slip, as the sim moves) at the latest
+    // speed, turning it at the last snapshot pair's heading rate so a curve is followed as an arc.
+    const travel = kart.heading - kart.driftDirection * Math.min(0.23, kart.driftTime * 0.35);
+    const turn = previous && duration > 0 && seconds > 0
+      ? Math.atan2(Math.sin(current.heading - previous.heading), Math.cos(current.heading - previous.heading)) * seconds * 1000 / duration
+      : 0;
+    // sin(a + t) - sin(a) = 2 sin(t/2) cos(a + t/2): the exact arc, and the straight line as turn -> 0.
+    const chord = Math.abs(turn) > 1e-9 ? 2 * Math.sin(turn / 2) / turn : 1;
+    kart.x += Math.sin(travel + turn / 2) * kart.speed * seconds * chord;
+    kart.z += Math.cos(travel + turn / 2) * kart.speed * seconds * chord;
     // Karts carry no vertical speed, so extrapolate y along the last snapshot pair's slope.
     if (previous && duration > 0) kart.y += (current.y - previous.y) * seconds * 1000 / duration;
   }

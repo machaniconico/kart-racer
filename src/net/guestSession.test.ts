@@ -8,7 +8,7 @@ import { GuestSession } from './guestSession';
 import { HostSession } from './hostSession';
 import { InputBuffer, NEUTRAL_INPUT, unpack } from './inputBuffer';
 import type { InputPacket } from './inputBuffer';
-import { interpolateState, SnapshotBuffer } from './interpolation';
+import { interpolateState, MAX_EXTRAPOLATION_MS, SnapshotBuffer } from './interpolation';
 import { MockTransport } from './mockTransport';
 import type { MockTransportOptions } from './mockTransport';
 import { encodeControlMessage, PacketKind, parseControlMessage, PROTOCOL_VERSION } from './protocol';
@@ -18,6 +18,7 @@ import { decodeSnapshot, encodeSnapshot } from './snapshotCodec';
 import type { Snapshot } from './snapshotCodec';
 import type { PeerLink, Transport } from './transport';
 
+const HISTORY_SEEDS = [92, 7, 1234, 31, 211];
 const inputs = (): InputFrame[] => Array.from({ length: 8 }, () => ({ ...NEUTRAL_INPUT }));
 const roster: RosterPlayer[] = createRace(1).karts.map(kart => ({
   slot: kart.id, name: kart.id === 1 ? 'Guest' : kart.name, color: kart.color,
@@ -854,12 +855,28 @@ describe('HostSession integration', () => {
     host.close();
   });
 
-  it.each([{ prediction: false }, { prediction: true }])
-  ('matches host history for 600 ticks at RTT 120ms and loss 10% (prediction $prediction)', async ({ prediction }) => {
-    const network = new MockTransport({ latencyMs: 60, lossRate: 0.1, seed: 92 });
+  // M6-07: seeds x TRACK_IDS x prediction; seed 92 runs 600 ticks, the added seeds 400 (AC3: +30 s).
+  // Max non-local error per seed and course (worse prediction mode) as "views <= 100 ms old (m) /
+  // stale excess over |v| x (age - 100 ms) (m)"; "-" means no view was older than the cap:
+  //   seed  meadow     canyon     snowpeak   neon       harbor     forest     volcano    skyline
+  //   92    0.42/-     0.07/-     0.26/-     0.28/-     0.29/-     0.26/-     0.28/-     0.28/-
+  //   7     0.04/0.00  0.03/0.00  0.04/0.00  0.03/0.00  0.03/0.00  0.03/0.00  0.04/0.00  0.03/0.00
+  //   1234  0.08/0.00  0.04/0.00  0.08/0.00  0.13/0.00  0.05/0.00  0.05/0.00  0.04/0.00  0.14/0.00
+  //   31    0.05/-     0.08/-     0.05/-     0.07/-     0.06/-     0.05/-     0.10/-     0.06/-
+  //   211   0.07/0.00  0.11/0.00  0.07/0.00  0.06/0.00  0.07/0.00  0.14/0.00  0.13/0.00  0.10/0.00
+  // Seed 211 loses consecutive snapshots while karts race within 400 ticks, so (b) covers moving
+  // karts; seeds 7/1234 only lose them on the grid. At 600 ticks seed 1234 read 3.66 m on NEON
+  // before M6-07 (four losses near t516); arc extrapolation lowered 9 of 80 case maxima, raised none.
+  it.each(HISTORY_SEEDS.flatMap(seed => TRACK_IDS.flatMap(trackId => [false, true].map(prediction => ({ seed, trackId, prediction })))))
+  ('matches host history at RTT 120ms and loss 10% (seed $seed, $trackId, prediction $prediction)', async ({ seed, trackId, prediction }) => {
+    // Added seeds run 400 ticks to keep this file within +30 s of its pre-M6-07 duration.
+    const ticks = seed === 92 ? 600 : 400;
+    const network = new MockTransport({ latencyMs: 60, lossRate: 0.1, seed });
     const host = await HostSession.create(network, { roomCode: 'AB2X', now: () => network.now, hostInput: { sample: getAIInput } });
     const guest = new GuestSession(network, { now: () => network.now, prediction });
+    const sample = vi.spyOn(SnapshotBuffer.prototype, 'sample');
     await guest.join('AB2X');
+    host.setCourse(trackId);
     for (let n = 0; n < 200; n++) { host.frame(); guest.frame(); network.advance(10); }
     const state = host.startRace(431);
     network.advance(host.startAtHostTime - network.now);
@@ -867,10 +884,12 @@ describe('HostSession integration', () => {
     const history = new Map<number, RaceState>();
     history.set(0, structuredClone(state));
     let comparisons = 0;
-    const views: { hostTick: number; predictedTick: number | undefined; state: RaceState }[] = [];
+    // Host time at which each tick's snapshot was encoded, and each view's interpolation age.
+    const sentAt = new Map<number, number>();
+    const views: { hostTick: number; predictedTick: number | undefined; state: RaceState; age: number }[] = [];
     // Run the host beyond the measured window so every leading local prediction
     // has an authoritative state at the same tick to compare after the loop.
-    for (let tick = 1; tick <= (prediction ? 630 : 600); tick++) {
+    for (let tick = 1; tick <= ticks + (prediction ? 30 : 0); tick++) {
       guest.tick(getAIInput(state, 1));
       network.advance(TICK_MS);
       const applied = state.karts.map(kart => host.inputSource(kart.id).sample(state, kart.id));
@@ -878,9 +897,16 @@ describe('HostSession integration', () => {
       stepRace(state, applied);
       history.set(state.tick, structuredClone(state));
       host.afterTick(state);
+      sentAt.set(state.tick, network.now);
       const view = guest.frame()!;
-      if (tick >= 30 && tick <= 600) views.push({ hostTick: tick, predictedTick: guest.predictedState?.tick, state: view.state });
+      // sample() clamps to its latest requested time and returns a clone of the newest snapshot.
+      const sampledAt = Math.max(...sample.mock.calls.map(([hostTime]) => hostTime));
+      const newestTick = sample.mock.results.at(-1)!.value!.tick;
+      sample.mockClear();
+      if (tick >= 30 && tick <= ticks) views.push({ hostTick: tick, predictedTick: guest.predictedState?.tick, state: view.state,
+        age: sampledAt - sentAt.get(newestTick)! });
     }
+    sample.mockRestore();
     for (const view of views) {
       for (const kart of view.state.karts) {
         const localPrediction = prediction && kart.id === 1;
@@ -893,12 +919,19 @@ describe('HostSession integration', () => {
         if (localPrediction) expect(error, at).toBeLessThanOrEqual(0.1);
         // M5-07 (a): extrapolation advances y along the last snapshot pair's slope. Measured max on
         // M5 MEADOW 0.4179 m (host tick 438, kart 2); with seed 92 the other tracks stay under 0.28 m.
-        else expect(error, at).toBeLessThan(0.5);
+        else if (seed === 92) expect(error, at).toBeLessThan(0.5);
+        // (a) A view at most MAX_EXTRAPOLATION_MS past its newest snapshot is interpolated or extrapolated.
+        else if (view.age <= MAX_EXTRAPOLATION_MS) expect(error, `${at}, age ${view.age}`).toBeLessThan(1.0);
+        // (b) Consecutive losses leave the view older than the cap. Extrapolation stops there on purpose
+        // (no overshoot into walls or past a turn), so the view trails by |v| x (age - 100 ms): seed 1234
+        // NEON t519 at age 200 ms measured 3.66 m = 36.6 m/s x 0.1 s.
+        else expect(error, `${at}, age ${view.age}`)
+          .toBeLessThanOrEqual(Math.abs(expected.speed) * (view.age - MAX_EXTRAPOLATION_MS) / 1000 + 1.0);
         comparisons++;
       }
     }
-    expect(comparisons).toBe(571 * 8);
-    expect(appliedGuestInput).toBeGreaterThan(550);
+    expect(comparisons).toBe((ticks - 29) * 8);
+    expect(appliedGuestInput).toBeGreaterThan(ticks - 50);
     // Drain the intentional interpolation delay to compare against the final live state.
     network.advance(100);
     const finalView = guest.frame()!;

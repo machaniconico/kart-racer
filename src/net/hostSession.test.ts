@@ -4,7 +4,8 @@ import { getAIInput } from '../sim/ai';
 import { stepRace } from '../sim/race';
 import type { InputFrame, InputSource, RaceEvent, RaceState } from '../sim/types';
 import { packPing, packPong, TICK_MS, unpackClock } from './clock';
-import { HostSession } from './hostSession';
+import { GuestSession } from './guestSession';
+import { HostSession, RendererRebuild } from './hostSession';
 import { NEUTRAL_INPUT, pack, quantizeInput } from './inputBuffer';
 import { MockTransport } from './mockTransport';
 import type { MockTransportOptions } from './mockTransport';
@@ -326,6 +327,87 @@ describe('HostSession lobby', () => {
     expect(host.phase).toBe('results');
     host.returnToLobby();
     expect(changed).toHaveBeenCalledTimes(3);
+    host.close();
+  });
+
+  // M6-07 (C-010): main.ts rebuilds the renderer on the frame after a course change; that rebuild
+  // blocks the host's main thread, so no message is handled and no PONG leaves until it ends.
+  // Measured in e2e C-010 (Chromium headless, host and guest sharing one SwiftShader GPU), longest
+  // gap between messages the host handled around the change: before M6-07 4548 / 5313 / 5194 ms
+  // (the guest also hit host_lost in 3 of 5 runs); after, 4264 / 4233 / 4035 / 4078 / 3889 ms.
+  // A host stall of 4.3 s keeps the guest; 5.6 s (beyond the 5 s budget) does not.
+  it.each([{ stallMs: 4300, phase: 'lobby' }, { stallMs: 5600, phase: 'closed' }])
+  ('puts a course change on the wire before listeners rebuild; host stall $stallMs ms leaves the guest $phase', async ({ stallMs, phase }) => {
+    const network = new MockTransport({ latencyMs: 30 });
+    const host = await HostSession.create(network, { roomCode: 'AB2X', now: () => network.now });
+    const join = vi.spyOn(network, 'join');
+    const guest = new GuestSession(network, { now: () => network.now, prediction: false });
+    await guest.join('AB2X');
+    // The host end of the guest's link: holding its deliveries models the blocked host thread.
+    const hostLink = (await join.mock.results[0].value as PeerLink & { other: PeerLink & { deliver: PeerLink['send'] } }).other;
+    const deliver = hostLink.deliver.bind(hostLink);
+    const held: Parameters<PeerLink['send']>[] = [];
+    let stallUntil = -Infinity;
+    hostLink.deliver = (kind, data) => { if (network.now < stallUntil) held.push([kind, data]); else deliver(kind, data); };
+    for (let i = 0; i < 100; i++) { host.frame(); guest.frame(); network.advance(10); }
+    expect(guest.phase).toBe('lobby');
+    network.flush();
+    let pendingAtRebuild = 0;
+    host.onChange(() => { pendingAtRebuild = network.pendingMessages; stallUntil = network.now + stallMs; });
+    expect(host.setCourse('neon')).toBe(true);
+    expect(pendingAtRebuild).toBe(1);
+    while (network.now < stallUntil + 1000 && guest.phase !== 'closed') {
+      if (network.now >= stallUntil) {
+        for (const [kind, data] of held.splice(0)) deliver(kind, data);
+        host.frame();
+      }
+      guest.frame();
+      network.advance(10);
+    }
+    expect(guest.course).toBe('neon');
+    expect(guest.phase).toBe(phase);
+    if (phase === 'closed') expect(guest.reason).toBe('host_lost');
+    host.close();
+  });
+
+  it('RendererRebuild rebuilds after the course change is sent and draws only once the GPU is done', async () => {
+    const network = new MockTransport({ latencyMs: 30 });
+    const host = await HostSession.create(network, { roomCode: 'AB2X', now: () => network.now });
+    const guest = new GuestSession(network, { now: () => network.now, prediction: false });
+    await guest.join('AB2X');
+    for (let i = 0; i < 100; i++) { host.frame(); guest.frame(); network.advance(10); }
+    network.flush();
+    const rebuild = new RendererRebuild();
+    const order: string[] = [];
+    host.onChange(() => { order.push(`change, ${network.pendingMessages} on the wire`); rebuild.request(); });
+    expect(host.setCourse('neon')).toBe(true);
+    expect(order).toEqual(['change, 1 on the wire']);
+    let gpuDoneAt = Infinity;
+    let draws = 0;
+    // One main.ts frame: network polling first, then the rebuild/draw decision.
+    const frame = () => {
+      host.frame();
+      guest.frame();
+      if (rebuild.frame(() => {
+        order.push('rebuild');
+        // Longer than the guest's 5 s host_lost budget: only a non-blocking wait survives it.
+        gpuDoneAt = network.now + 6000;
+        rebuild.waitFor(() => network.now >= gpuDoneAt);
+      })) draws++;
+      network.advance(16);
+    };
+    frame();
+    expect(order).toEqual(['change, 1 on the wire', 'rebuild']);
+    const doneAt = gpuDoneAt;
+    while (network.now < doneAt) {
+      frame();
+      expect(draws).toBe(0);
+    }
+    frame();
+    expect(draws).toBe(1);
+    expect(order).toHaveLength(2);
+    expect(guest.course).toBe('neon');
+    expect(guest.phase).toBe('lobby');
     host.close();
   });
 });
