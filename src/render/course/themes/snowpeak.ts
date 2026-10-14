@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { projectToTrack } from '../../../sim';
 import type { Track } from '../../../sim';
+import { widthAt } from '../../../sim/corridor';
 import type { SceneryBudget } from '../CourseTheme';
 import type { CourseTheme } from '../buildCourse';
 import { material, terrainHeight } from '../buildCourse';
@@ -21,8 +22,12 @@ export const snowpeak: CourseTheme = {
     hemisphere: { sky: 0xeaf5ff, ground: 0x889eae, intensity: 1.65 },
     sun: { color: 0xf6faff, intensity: 1.75, position: [65, 100, 35], offset: [55, 85, 35] },
   },
-  signFractions: [0.22, 0.32, 0.68, 0.84],
-  budget: { trees: 130, rocks: 56, flowers: 0 },
+  // Between the 24 gates: summit approach, ridge, descent, ice S and southern bank.
+  signFractions: [2.25 / 24, 5.25 / 24, 7.25 / 24, 10.25 / 24, 14.25 / 24, 18.25 / 24, 21.25 / 24],
+  // M5-00's 2042.8 m dry run: 84,914 GPU triangles, cap 152,566.
+  // This layout: 106,084 course triangles + 5,784 shadow triangles, cap 165,738.
+  // Moderate instanced growth leaves room for karts/items; M5-05 measures the GPU total.
+  budget: { trees: 240, rocks: 90, flowers: 0 },
   buildProps,
   buildLandmarks,
 };
@@ -37,13 +42,18 @@ function buildProps(track: Track, scene: THREE.Group, budget: SceneryBudget): vo
   const rocks = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1.6, 0), material(0xc0d0dc), budget.rocks);
   const rockSnow = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1.6, 0), material(0xf2f7fa), budget.rocks);
 
-  // Reject positions near any part of the road, including the opposite S-bend.
+  const minX = Math.min(...track.samples.map(point => point.x)) - 65;
+  const maxX = Math.max(...track.samples.map(point => point.x)) + 65;
+  const minZ = Math.min(...track.samples.map(point => point.z)) - 65;
+  const maxZ = Math.max(...track.samples.map(point => point.z)) + 65;
+  // Eight metres clears even the largest branch/rock and both walls of the narrow ridge.
+  // Projection checks the nearest road, including the opposite S-bend.
   const location = () => {
     for (let attempt = 0; attempt < 100; attempt++) {
-      const x = (random() - 0.5) * 380;
-      const z = (random() - 0.5) * 380;
+      const x = minX + random() * (maxX - minX);
+      const z = minZ + random() * (maxZ - minZ);
       const projection = projectToTrack(track, x, z);
-      if (Math.abs(projection.offset) > track.def.wallHalfWidth + 8) {
+      if (Math.abs(projection.offset) > widthAt(track, projection.distance).wallHalfWidth + 8) {
         return { x, y: terrainHeight(track, projection), z };
       }
     }

@@ -1,43 +1,68 @@
+import { buildTrack } from '../track';
 import type { TrackDef } from '../types';
 import { BASE_ROAD_HALF_WIDTH, BASE_WALL_HALF_WIDTH } from './widths';
 
-export const snowpeak: TrackDef = {
+const layout: TrackDef = {
   id: 'snowpeak',
   name: 'FROSTBITE PEAK',
-  layoutVersion: 3,
-  // A 19m alpine climb and descent; the final approach stays level for the starting grid.
+  layoutVersion: 4,
   controlPoints: [
-    [0, 1, 100], [48, 2, 90], [82, 10, 60], [88, 18, 15],
-    // The bend approaching [70, 19, -71] has the minimum radius (17.22 m, limit 16.15 m); keep it open.
-    [68, 20, -25], [70, 19, -71], [35, 14, -100],
-    [-10, 6, -100], [-55, 1, -90], [-88, 1, -55], [-85, 1, -10], [-60, 1, 25],
-    [-55, 1, 65], [-30, 1, 92],
+    // Climb from the level grid to the summit hairpin, then follow the high ridge west.
+    [0, 1, 0], [80, 1, 0], [160, 18, 0], [240, 37, 0], [283, 39, 0],
+    [310, 39, 0], [329.092, 39, 7.908], [337, 39, 27],
+    [329.092, 39, 46.092], [310, 39, 54], [283, 39, 54],
+    [240, 39, 54], [160, 39, 110], [80, 39, 145], [-30, 39, 160], [-130, 39, 150],
+    [-180, 39, 130], [-270, 28, 100], [-310, 9, 20], [-300, 1, -100],
+    [-250, 1, -180], [-220, 1, -210],
+    // The frozen valley alternates four bends before the southern compound corner.
+    [-160, 1, -210], [-110, 1, -220], [-60, 1, -210], [-10, 1, -220],
+    [50, 1, -210], [130, 1, -200], [190, 1, -150], [190, 1, -100],
+    [130, 1, -60], [40, 1, -80], [-13, 1, -80], [-40, 1, -80],
+    [-68.284, 1, -68.284], [-80, 1, -40], [-68.284, 1, -11.716],
+    [-40, 1, 0], [-13, 1, 0],
   ],
   scale: 1,
   samplesPerSegment: 32,
   roadHalfWidth: BASE_ROAD_HALF_WIDTH,
   wallHalfWidth: BASE_WALL_HALF_WIDTH,
-  checkpointCount: 12,
+  checkpointCount: 24,
   boxRows: [0.03, 0.16, 0.29, 0.42, 0.515, 0.61, 0.74, 0.87],
   boxLanes: [-5.33, 0, 5.33],
   racingLine: [],
-  // Full road width only; keep the tighter S-bends and starting grid on snow.
-  // 165m of ice across the 619m loop, with every icy radius above 33m.
   surfaces: [
-    { kind: 'ice', from: 30, to: 85 },
-    { kind: 'ice', from: 295, to: 350 },
-    { kind: 'ice', from: 405, to: 460 },
+    { kind: 'ice', from: 500, to: 640 },
+    { kind: 'ice', from: 780, to: 900 },
+    { kind: 'ice', from: 1410, to: 1615 },
+    { kind: 'jump', from: 286, to: 289 },
+    { kind: 'dirt', from: 1160, to: 1230 },
   ],
-  // Bank only the first icy sweeper (30–85m, radius >= 57m): its broad turn gives
-  // room to feel the bank while climbing. Negative roll lowers the inside edge;
-  // 20m entry/exit ramps keep twist at 0.015 rad/m, below the 0.02 limit.
-  bankKeys: [
-    { distance: 0, roll: 0 },
-    { distance: 30, roll: 0 },
-    { distance: 50, roll: -0.3 },
-    { distance: 65, roll: -0.3 },
-    { distance: 85, roll: 0 },
-    { distance: 619.022706055925, roll: 0 },
+  // One exposed ridge passage; 30 m tapers keep both walls continuous.
+  widthKeys: [
+    { distance: 675, roadHalfWidth: BASE_ROAD_HALF_WIDTH, wallHalfWidth: BASE_WALL_HALF_WIDTH },
+    { distance: 705, roadHalfWidth: BASE_ROAD_HALF_WIDTH * 0.55, wallHalfWidth: BASE_WALL_HALF_WIDTH * 0.55 },
+    { distance: 735, roadHalfWidth: BASE_ROAD_HALF_WIDTH * 0.55, wallHalfWidth: BASE_WALL_HALF_WIDTH * 0.55 },
+    { distance: 765, roadHalfWidth: BASE_ROAD_HALF_WIDTH, wallHalfWidth: BASE_WALL_HALF_WIDTH },
   ],
   themeId: 'snowpeak',
+};
+
+// Derive seam keys from the sampled geometry, never a copied length measurement.
+const { length } = buildTrack(layout);
+export const snowpeak: TrackDef = {
+  ...layout,
+  racingLine: [
+    { distance: 0, offset: 0 }, { distance: 260, offset: 0 },
+    { distance: 295, offset: 3 }, { distance: 352, offset: -3 },
+    { distance: 410, offset: 3 }, { distance: 470, offset: 0 },
+    { distance: length, offset: 0 },
+  ],
+  // Two broad corners, each with 20 m transitions (0.015 rad/m).
+  bankKeys: [
+    { distance: 0, roll: 0 },
+    { distance: 560, roll: 0 }, { distance: 580, roll: 0.3 },
+    { distance: 620, roll: 0.3 }, { distance: 640, roll: 0 },
+    { distance: 1740, roll: 0 }, { distance: 1760, roll: 0.3 },
+    { distance: 1810, roll: 0.3 }, { distance: 1830, roll: 0 },
+    { distance: length, roll: 0 },
+  ],
 };
