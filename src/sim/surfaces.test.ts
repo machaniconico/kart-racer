@@ -13,18 +13,18 @@ import type { InputFrame, RaceState, Track, TrackDef } from './types';
 // Long races amplify floating-point differences between architectures, so each
 // platform has its own column. darwin-arm64 was measured after M4.5-03 (protocol v14:
 // 24 boxes change CPU pickups and item use).
-// linux-x64 is 'pending-ci' until M4.5-08 pins it from a CI log.
+// linux-x64 was copied from the CI log of 7274f1c (run 38569286518).
 const MEADOW_FINAL_JSON = [
-  [1, '73cbd6aabce1cca523b9932846e035b54ae23b881d5ae5b2875f357f89eab63a', 'pending-ci'],
-  [2, 'e3c8d968b43b4531b6f777ca70df3ecb2ed8cb19bfaefd36f80ccd7fe61bbdee', 'pending-ci'],
-  [3, 'cc50e7f36883e416e0970d61e61905e27eb8d416b25c9ce0e7548183bb9fbced', 'pending-ci'],
-  [4, '63f91a98a5943680a5f816a8eb66d446dbb62ad81519c238a6f4ece77048866e', 'pending-ci'],
-  [5, 'b15df411f9542908c15bd4015111e5bf4fb3d577c2a7fb4eac1c586279c29cbd', 'pending-ci'],
-  [42, 'b78fee3b0831364001ec439e21d2bf1e08c1a50d53f425de8917f779a286973b', 'pending-ci'],
-  [123, 'b350bc68d43d3e3edbfadc69baafd684313cf34f55a702eb38ff1744bceef2d2', 'pending-ci'],
-  [999, 'f54e8aef4a122892e9d28cead2f6410b002e64a400562e4f105023da3035fff8', 'pending-ci'],
-  [12345, '3a2f11eda96b69f9db02cd4fb40899cec072f93a5adbe7913b5ea071f7fc7b3d', 'pending-ci'],
-  [98765, 'a3caa9307284eac6e5e64c3c01d3e4c307cf3680282614d76392c39e7581b7a9', 'pending-ci'],
+  [1, '73cbd6aabce1cca523b9932846e035b54ae23b881d5ae5b2875f357f89eab63a', '93652882b83f0a631541a6721332171eb2c1be7833fee276d287bdf3a85b67c9'],
+  [2, 'e3c8d968b43b4531b6f777ca70df3ecb2ed8cb19bfaefd36f80ccd7fe61bbdee', 'b0ab87b54508a66c37566d189b38f5359ba397a5c89ba2396866312257a0c28b'],
+  [3, 'cc50e7f36883e416e0970d61e61905e27eb8d416b25c9ce0e7548183bb9fbced', 'ce4d047554e3e758a789ffe03c4be539a4cd143b57d95694373d013fd71041b1'],
+  [4, '63f91a98a5943680a5f816a8eb66d446dbb62ad81519c238a6f4ece77048866e', 'a508f55832d511a6f96d23bfa3bdf163cdacb0f429d3d2c43f6bbb6427ce5cd3'],
+  [5, 'b15df411f9542908c15bd4015111e5bf4fb3d577c2a7fb4eac1c586279c29cbd', 'a88e32333d24231bf1432eb04bf59a5c5fa5980a9eaa009d27b24aa1aee365d1'],
+  [42, 'b78fee3b0831364001ec439e21d2bf1e08c1a50d53f425de8917f779a286973b', 'df60c05922411f0032db868ca031c4561b031607353a209d206969d864182777'],
+  [123, 'b350bc68d43d3e3edbfadc69baafd684313cf34f55a702eb38ff1744bceef2d2', 'c882a95ab6bdba276c3be8b44c81165709e82397d8ccd27771b74fc453596290'],
+  [999, 'f54e8aef4a122892e9d28cead2f6410b002e64a400562e4f105023da3035fff8', 'a99172986daf649ea2abcca057d31b1fd0daa39b83250cc6867fb30b76dd0573'],
+  [12345, '3a2f11eda96b69f9db02cd4fb40899cec072f93a5adbe7913b5ea071f7fc7b3d', 'b7efb6ffc058993dd27314c79143ef53dfe9f2aa9e1128a2b7c0f6a1d4f1c259'],
+  [98765, 'a3caa9307284eac6e5e64c3c01d3e4c307cf3680282614d76392c39e7581b7a9', '4883d5472d8d771cf092039bcea79e2847fd0d84a1aa416f1a19ca180d493400'],
 ] as const;
 // Before M4.5-00 (protocol v13):
 // // Final JSON after a full 8-CPU MEADOW race, pinned outside the test.
