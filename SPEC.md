@@ -466,3 +466,49 @@ Chromium 1280x720、DPR 1、seed 127、停止 10 フレーム。`e2e/courses.spe
 - **MEADOW の golden**（`surfaces.test.ts`、10 seed × 2 列）: darwin-arm64 列は MEADOW を変えた story が取り直した。linux-x64 列は一旦 `'pending-ci'`（テストは完走だけを検査してハッシュをログに出す）にし、CI のログの `MEADOW final hash (linux-x64) seed N: …` の 10 個を別 commit で置き換える（M2.5-05）。8024037 の CI（run 38098401104）のログから置き換え済みで、`'pending-ci'` は 0 個。
 - **後続のプロトコル番号が 1 つずれる**: M3 → v12、M4 → v13、M4.5 → v14、M5 → v15。上の見出しの番号は書き換えず、この節を正とする。
 - M5 / M6 の新コースは `widths.ts` の定数を基準にする（狭路は基準 × 0.55 前後で `MIN_PASSAGE` 2.55 m 以上、島のレーンは 11.7 m 前後）。
+
+## v6 M3（動く障害物・回転床、プロトコル v12）
+NEON NIGHTLINE に、動く帯（sweep / gate）2 本と回転床 1 つを足した。時刻はレース開始後の `racingTicks × FIXED_DT`（秒）で、カウントダウン中は 0。時刻だけで位置が決まるので、RaceState にバイトを足さない。
+
+### sweep / gate の式（`src/sim/corridor.ts`）
+- sweep（横中心が動く）: `center(t) = center + amplitude × sin(2π t / period + phase)`。
+- gate（半幅が開閉する。cos 形）: `halfWidth(t) = halfWidth − (halfWidth − minWidth) × (1 − cos(2π t / period + phase)) / 2`。`t = 0`・`phase = 0` では `halfWidth` に一致し、静的な帯と同じ形になる（sin 形だと t = 0 で閉じ側に偏るので cos 形にした）。
+- 縁速度の上限 **6 m/s**: sweep は `2π × amplitude / period`、gate は `π × (halfWidth − minWidth) / period`。根拠は、カートの最高速（約 30 m/s）に対して帯の縁が十分遅く、CPU の回避（先読み）とアシストが帯に追従できること。`validateTrackDef` が超過を `RangeError` で拒否する。
+- 他車は 100 ms の補間で描画されるため、動く帯に対して見かけの食い込みが出る。NEON の sweep で **≤ 0.42 m**。当たり判定は sim の値で行い、描画だけの見た目の差。
+
+### 回転床（spin）
+- 形は円盤（直径 `to − from`、`offsetMin` / `offsetMax` が直径に一致）。中心は区間の中央と横オフセットの中央。
+- 円盤の上にいる間（地上のみ。`airTime === 0`）、`heading += rate × FIXED_DT`（spinTime 中も回る）。位置は並進させない。
+- `|rate| ≤ 1.5` rad/s、直径 ≤ 30 m、曲率半径 200 m 以上の直線にだけ置ける。帯の排他領域とも重ならない。
+
+### validateTrackDef の時刻サンプリング
+動く帯どうしの干渉と通路幅は、各帯の `period / 32` 刻みの時刻でサンプリングして検査する（既存の位置サンプリングに時刻軸を足す）。帯どうしの周期が大きく違うとサンプル数が増える。
+
+### NEON の仕掛け（`layoutVersion: 3`）
+| 仕掛け | 位置（d） | 値 |
+| --- | --- | --- |
+| sweep（柱） | 176〜208 | center −2、halfWidth 1.2、taper 4、amplitude 4.0、period 6 s、phase 0（縁速度 4.19 m/s） |
+| gate（ブロック） | 340〜370 | center 0、halfWidth 3.6、taper 8、minWidth 1.2、period 5 s、phase 0（縁速度 1.51 m/s） |
+| spin（回転床） | 558〜570 | offset ±6、rate 1.0 rad/s |
+
+- `racingLine` は sweep と gate の手前で迂回する（176〜240 は +6.8、340〜400 は +5.2）。CPU の平均ラップは 18.44 s → **18.31 s**。
+- 動く帯コースでのアシスト: 周あたり壁ヒット 1〜2、帯ヒット 0。
+- ゲストの位置補正は最大約 0.0005 m（RTT 80±20 ms、`netMotion.test.ts`）。
+
+### 基準の更新
+| 項目 | 旧 → 新 |
+| --- | --- |
+| BASELINE neon（`handling.test.ts`） | v11（18.441 s）→ **v12（18.309 s）**。壁ヒット 0 → 0、帯ヒット 0 → 3（上限 4）。CANYON の帯ヒットは 4 で上限 4 と同値（余裕なし） |
+| E2E NEON（Chromium 1280x720、seed 127） | 125 draw / 62,748 tris → **126 draw / 62,812 tris** |
+| `layoutVersion` neon | 2 → **3**（他コースは M2.5 のまま） |
+
+ベストタイムは NEON だけが `layout` の不一致で自動的に無視される（リセットされる）。他 3 コースは引き継がれる。
+
+### プロトコル v12 と pin
+- `PROTOCOL_VERSION` は 12。v11 と v12 は部屋が分かれる。**対戦は両者とも新ページが必要**。
+- `LAYOUT_FINGERPRINT` は **`f7b2a1f2` のまま**（RaceState のバイト配置は不変、`12: 'f7b2a1f2'` を追記）。`COURSE_FINGERPRINT` の pin は `pinned[12] = 313875369`。v11 以前の行は書き換えない。
+- MEADOW の sim 経路は変わらないので、`surfaces.test.ts` の golden（darwin / linux 両列）は c345bd5 の値のまま。値の行に差分は無い。
+- **後続のプロトコル番号**: M4 → v13、M4.5 → v14、M5 → v15（M2.5 節の表記を正とする）。
+
+### pending-ci ガード（`surfaces.test.ts:43`）を撤去しない判断
+M4-01 が MEADOW golden を取り直し、linux 列を再び `'pending-ci'` にする運用でこのガードを使うため。代わりに「close 時に `'pending-ci'` の値が 0 個」を M4 以降の close story の受け入れに引き継ぐ。
