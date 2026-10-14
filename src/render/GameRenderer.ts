@@ -213,6 +213,7 @@ export class GameRenderer {
       throw new RangeError(`Renderer course ${this.track.def.id} does not match race course ${state.trackId}; recreate GameRenderer`);
     }
     this.elapsed += dt;
+    this.course.update(state.time);
     if (mode !== this.lastMode) { this.cameraReady = false; this.lastMode = mode; }
     for (const kart of state.karts) {
       const visual = this.kartVisuals[kart.id];

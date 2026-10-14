@@ -4,16 +4,19 @@ import { sampleTrack } from '../../sim';
 import type { Barrier, SurfaceZone, Track, TrackProjection, TrackSample } from '../../sim';
 import { widthAt } from '../../sim/corridor';
 import type { CourseTheme as BaseCourseTheme } from './CourseTheme';
+import { buildMotion } from './motion';
 
 // Keep compatibility with callers of the original theme contract.
 export interface CourseTheme extends BaseCourseTheme {
   readonly colors: BaseCourseTheme['colors'] & {
     readonly surfaces: Readonly<Partial<Record<SurfaceZone['kind'], number>>>;
     readonly barrier?: number;
+    readonly motionBarrier?: number;
+    readonly motionSpin?: number;
   };
 }
 
-const surfaceFallback = { dirt: 0x99683f, pit: 0x302724, spin: 0xb77ee0 };
+const surfaceFallback = { dirt: 0x99683f, pit: 0x302724 };
 type RibbonOffsets = (distance: number) => readonly [number, number];
 
 export function material(color: number): THREE.MeshLambertMaterial {
@@ -118,6 +121,7 @@ function ribbon(track: Track, scene: THREE.Group, offsets: RibbonOffsets, color:
 export interface Course {
   readonly group: THREE.Group;
   readonly sky: THREE.Mesh;
+  update(time: number): void;
   dispose(): void;
 }
 
@@ -133,8 +137,9 @@ export function buildCourse(track: Track, theme: CourseTheme): Course {
   }));
   group.add(sky);
   buildRoad(track, theme, group);
-  const surfaces = new Map<SurfaceZone['kind'], THREE.BufferGeometry[]>();
+  const surfaces = new Map<Exclude<SurfaceZone['kind'], 'spin'>, THREE.BufferGeometry[]>();
   for (const zone of track.def.surfaces) {
+    if (zone.kind === 'spin') continue;
     // Sampling beyond length also handles a single zone crossing the finish line.
     const to = zone.to < zone.from ? zone.to + track.length : zone.to;
     const geometry = ribbonGeometry(track, d => {
@@ -148,7 +153,7 @@ export function buildCourse(track: Track, theme: CourseTheme): Course {
   for (const [kind, parts] of surfaces) {
     const geometry = mergeGeometries(parts)!;
     parts.forEach(part => part.dispose());
-    const color = kind === 'dirt' || kind === 'pit' || kind === 'spin'
+    const color = kind === 'dirt' || kind === 'pit'
       ? theme.colors.surfaces[kind] ?? surfaceFallback[kind] : theme.colors.surfaces[kind];
     const mat = material(color);
     mat.side = THREE.DoubleSide;
@@ -163,7 +168,12 @@ export function buildCourse(track: Track, theme: CourseTheme): Course {
   buildBarriers(track, theme, group);
   buildIslands(track, theme, group);
   buildScenery(track, theme, group);
-  return { group, sky, dispose() { disposeObjectTree(group); group.removeFromParent(); } };
+  const motion = buildMotion(track, theme, group);
+  return {
+    group, sky,
+    update(time) { motion.update(time); },
+    dispose() { motion.dispose(); disposeObjectTree(group); group.removeFromParent(); },
+  };
 }
 
 export function buildScenery(track: Track, theme: CourseTheme, scene: THREE.Group): void {
@@ -174,6 +184,7 @@ export function buildScenery(track: Track, theme: CourseTheme, scene: THREE.Grou
 function buildBarriers(track: Track, theme: CourseTheme, group: THREE.Group): void {
   const batches = new Map<NonNullable<Barrier['scenery']>, Barrier[]>();
   for (const barrier of track.def.barriers ?? []) {
+    if (barrier.motion) continue;
     const scenery = barrier.scenery ?? 'block';
     if (scenery === 'rock' || scenery === 'building') continue;
     const batch = batches.get(scenery) ?? [];
@@ -239,7 +250,7 @@ function buildBarriers(track: Track, theme: CourseTheme, group: THREE.Group): vo
 }
 
 function buildIslands(track: Track, theme: CourseTheme, group: THREE.Group): void {
-  const islands = (track.def.barriers ?? []).filter(b => b.scenery === 'rock' || b.scenery === 'building');
+  const islands = (track.def.barriers ?? []).filter(b => !b.motion && (b.scenery === 'rock' || b.scenery === 'building'));
   if (!islands.length) return;
   const spanOf = (b: Barrier) => (b.to - b.from + track.length) % track.length;
   const halfAt = (b: Barrier, along: number) => b.halfWidth * Math.min(1,

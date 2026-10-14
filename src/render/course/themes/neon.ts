@@ -17,6 +17,7 @@ export const neon: CourseTheme = {
     checker: [0xd6fcff, 0x132333], signBackground: '#172337', signText: '#ff78c8',
     surfaces: { ice: 0x9deaff, boost: cyan, jump: 0xffc76b, dirt: 0x80543d, pit: 0x302724, spin: 0xb77ee0 },
     barrier: 0x725dc2,
+    motionBarrier: pink, motionSpin: cyan,
   },
   fog: { color: 0x27243e, near: 160, far: 450 },
   lighting: {

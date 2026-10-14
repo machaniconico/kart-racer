@@ -1,12 +1,15 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
+import { WebGLGeometries } from 'three/src/renderers/webgl/WebGLGeometries.js';
+import { WebGLInfo } from 'three/src/renderers/webgl/WebGLInfo.js';
 import { buildTrack, getTrack, sampleTrack } from '../../sim';
 import type { Barrier, RaceState, SurfaceZone, Track } from '../../sim';
 import * as trackRegistry from '../../sim/tracks';
 import { islandSplit } from '../../sim/tracks/features';
 import { GameUI } from '../../ui/GameUI';
-import { exclusionAt, KART_RADIUS, widthAt } from '../../sim/corridor';
+import { barrierCenterAt, barrierHalfWidthAt, exclusionAt, KART_RADIUS, widthAt } from '../../sim/corridor';
 import { buildCourse, type Course } from './buildCourse';
+import { buildMotion } from './motion';
 import { meadow } from './themes/meadow';
 import { canyon } from './themes/canyon';
 import { snowpeak } from './themes/snowpeak';
@@ -140,7 +143,6 @@ describe('track-driven surfaces', () => {
         { kind: 'jump', from: 240, to: 242.5, offsetMin: 0, offsetMax: 5 },
         { kind: 'dirt', from: 300, to: 325 },
         { kind: 'pit', from: 350, to: 355 },
-        { kind: 'spin', from: 400, to: 405 },
       ],
     });
     const { group } = build(track, meadow);
@@ -480,9 +482,160 @@ describe('variable widths and batched barriers', () => {
     ['meadow', meadow], ['canyon', canyon], ['snowpeak', snowpeak], ['neon', neon],
   ] as const)('%s stays within its measured mesh budget', (id, theme) => {
     const track = getTrack(id);
-    const hasIsland = track.def.barriers?.some(b => b.scenery === 'rock' || b.scenery === 'building');
-    // Retain the existing allowance: +2 per course, plus 5 for island courses.
-    expect(meshCount(build(track, theme).group)).toBeLessThanOrEqual(RENDER_BASELINE[id].meshes + 2 + (hasIsland ? 5 : 0));
+    // Old: baseline + 2 + (hasIsland ? 5 : 0), CANYON 40 + 2 + 5 = 47.
+    // New: baseline + 2, CANYON 40 + 2 = 42; its baseline already includes islands.
+    // NEON remains 30 + 2 until M3-05 changes its course data and budget together.
+    const course = build(track, theme);
+    expect(meshCount(course.group)).toBeLessThanOrEqual(RENDER_BASELINE[id].meshes + 2);
+    expect(meshCount(course.group)).toBe(RENDER_BASELINE[id].meshes);
+    expect(course.group.getObjectByName('motion')!.children).toHaveLength(0);
+  });
+});
+
+function motionTrack(rate = 0.75, phase = 0): Track {
+  return buildTrack({ ...islandTrack().def, widthKeys: undefined, splits: undefined, racingLine: [],
+    barriers: [
+      { from: 60, to: 80, center: -2, halfWidth: 2, taper: 4, scenery: 'block',
+        motion: { kind: 'sweep', amplitude: 3, period: 8, phase } },
+      { from: 110, to: 138, center: 3, halfWidth: 2, taper: 8, scenery: 'pillar',
+        motion: { kind: 'gate', amplitude: 0, period: 8, phase, minWidth: 0.5 } },
+    ], surfaces: [{ kind: 'spin', from: 180, to: 190, offsetMin: -2, offsetMax: 8, rate }],
+  });
+}
+
+describe('moving bands and spin floors', () => {
+  it.each([0.75, -0.75])('matches sim positions, widths and heading at each quarter cycle (rate %s)', rate => {
+    const track = motionTrack(rate);
+    const course = build(track, neon);
+    const motionGroup = course.group.getObjectByName('motion') as THREE.Group;
+    expect(motionGroup).toBeInstanceOf(THREE.Group);
+    expect(motionGroup.parent).toBe(course.group);
+    expect(motionGroup.children).toHaveLength(3);
+    expect(course.group.getObjectByName('barriers:block')).toBeUndefined();
+    expect(course.group.getObjectByName('barriers:pillar')).toBeUndefined();
+    expect(course.group.getObjectByName('surface:spin')).toBeUndefined();
+    const period = track.def.barriers![0].motion!.period;
+    // Seek backwards too: a predictor correction must not accumulate rotation.
+    for (const time of [0, period / 4, period / 2, period / 4, 0]) {
+      course.update(time);
+      track.def.barriers!.forEach((barrier, index) => {
+        const mesh = motionGroup.getObjectByName(`motion:barrier:${index}`) as THREE.Mesh;
+        const point = sampleTrack(track, (barrier.from + barrier.to) / 2);
+        const center = barrierCenterAt(barrier, time);
+        expect(mesh.position.x).toBeCloseTo(point.x + point.nx * center, 6);
+        expect(mesh.position.z).toBeCloseTo(point.z + point.nz * center, 6);
+        const lateral = (mesh.position.x - point.x) * point.nx + (mesh.position.z - point.z) * point.nz;
+        expect(lateral).toBeCloseTo(center, 6);
+        expect(mesh.scale.x).toBeCloseTo(barrierHalfWidthAt(barrier, time), 6);
+        expect(mesh.scale.y).toBe(1);
+        expect(mesh.scale.z).toBe(1);
+      });
+      const disc = motionGroup.getObjectByName('motion:spin:0') as THREE.Mesh<THREE.CircleGeometry>;
+      expect(disc.rotation.y).toBeCloseTo(rate * time, 6);
+      expect(disc.rotation.x).toBe(0);
+      expect(disc.rotation.z).toBe(0);
+      expect(disc.geometry.parameters.radius).toBe(5);
+      const point = sampleTrack(track, 185);
+      expect(disc.position.x).toBeCloseTo(point.x + point.nx * 3, 6);
+      expect(disc.position.z).toBeCloseTo(point.z + point.nz * 3, 6);
+      expect(disc.position.y).toBeCloseTo(point.y + 0.12, 6);
+    }
+  });
+
+  it('initializes nonzero phases and gives exactly three single-material draws without shadow passes', () => {
+    const track = motionTrack(0.75, Math.PI / 3);
+    const plain = build(buildTrack({ ...track.def, barriers: [], surfaces: [] }), meadow);
+    const course = build(track, meadow);
+    expect(meshCount(course.group) - meshCount(plain.group)).toBe(3);
+    const motionGroup = course.group.getObjectByName('motion')!;
+    motionGroup.children.forEach(object => {
+      expect(object).toBeInstanceOf(THREE.Mesh);
+      expect(object).not.toBeInstanceOf(THREE.InstancedMesh);
+      const mesh = object as THREE.Mesh<THREE.BufferGeometry, THREE.MeshLambertMaterial>;
+      expect(Array.isArray(mesh.material)).toBe(false);
+      expect(mesh.castShadow).toBe(false);
+      expect(mesh.material.emissiveIntensity).toBeGreaterThan(0);
+    });
+    track.def.barriers!.forEach((barrier, index) => {
+      const mesh = motionGroup.getObjectByName(`motion:barrier:${index}`) as THREE.Mesh;
+      const point = sampleTrack(track, (barrier.from + barrier.to) / 2);
+      expect(mesh.position.z).toBeCloseTo(point.z + point.nz * barrierCenterAt(barrier, 0), 6);
+      expect(mesh.scale.x).toBeCloseTo(barrierHalfWidthAt(barrier, 0), 6);
+      expect((mesh.material as THREE.MeshLambertMaterial).emissive.getHex()).toBe(meadow.colors.barrier ?? meadow.colors.post);
+    });
+    const disc = motionGroup.getObjectByName('motion:spin:0') as THREE.Mesh<THREE.CircleGeometry, THREE.MeshLambertMaterial>;
+    expect(disc.material.emissive.getHex()).toBe(meadow.colors.surfaces.spin);
+    expect(disc.material.map).toBeInstanceOf(THREE.DataTexture);
+    expect(disc.material.emissiveMap).toBe(disc.material.map);
+    const pixels = (disc.material.map as THREE.DataTexture).image.data!;
+    expect(new Set(pixels).size).toBeGreaterThan(1);
+  });
+
+  it('keeps static bands batched and uses NEON emissive colors only for motion', () => {
+    const base = motionTrack();
+    const track = buildTrack({ ...base.def, barriers: [...base.def.barriers!,
+      { from: 230, to: 250, center: 0, halfWidth: 2, scenery: 'block' },
+    ] });
+    const course = build(track, neon);
+    const batch = course.group.getObjectByName('barriers:block') as THREE.InstancedMesh;
+    expect(batch.count).toBe(1);
+    const band = course.group.getObjectByName('motion:barrier:0') as THREE.Mesh<THREE.BufferGeometry, THREE.MeshLambertMaterial>;
+    const disc = course.group.getObjectByName('motion:spin:0') as THREE.Mesh<THREE.BufferGeometry, THREE.MeshLambertMaterial>;
+    expect(band.material.emissive.getHex()).toBe(neon.colors.motionBarrier);
+    expect(disc.material.emissive.getHex()).toBe(neon.colors.motionSpin);
+  });
+
+  it('clears and detaches motion, returning renderer geometry memory to its pre-course value', () => {
+    // Use Three's real renderer memory accounting in Node. Only GPU buffer/VAO
+    // deletion is stubbed; WebGLGeometries owns increments and dispose listeners.
+    const gl = {} as WebGLRenderingContext;
+    const renderer = { info: new WebGLInfo(gl) };
+    // @types/three omits the fourth bindingStates argument present in r180.
+    const geometries = Reflect.construct(WebGLGeometries, [gl, { remove() {} }, renderer.info,
+      { releaseStatesOfGeometry() {} }]) as WebGLGeometries;
+    const existing = new THREE.Mesh(new THREE.BoxGeometry());
+    geometries.get(existing, existing.geometry);
+    const before = renderer.info.memory.geometries;
+    const course = build(motionTrack(), neon);
+    const motionGroup = course.group.getObjectByName('motion')!;
+    const resources = new Set<THREE.BufferGeometry | THREE.Material | THREE.Texture>();
+    course.group.traverse(object => {
+      if (object instanceof THREE.Mesh) geometries.get(object, object.geometry);
+    });
+    motionGroup.children.forEach(object => {
+      const mesh = object as THREE.Mesh<THREE.BufferGeometry, THREE.MeshLambertMaterial>;
+      resources.add(mesh.geometry).add(mesh.material);
+      if (mesh.material.map) resources.add(mesh.material.map);
+    });
+    const disposals = [...resources].map(resource => {
+      const disposed = vi.fn();
+      resource.addEventListener('dispose', disposed);
+      return disposed;
+    });
+    expect(renderer.info.memory.geometries).toBeGreaterThan(before + 3);
+    course.dispose();
+    course.dispose();
+    expect(motionGroup.children).toHaveLength(0);
+    expect(motionGroup.parent).toBeNull();
+    expect(course.group.children).not.toContain(motionGroup);
+    expect(course.group.getObjectByName('motion')).toBeUndefined();
+    expect(renderer.info.memory.geometries).toBe(before);
+    disposals.forEach(disposed => expect(disposed).toHaveBeenCalledOnce());
+    existing.geometry.dispose();
+    (existing.material as THREE.Material).dispose();
+  });
+
+  it('disposes the standalone motion owner without removing its parent or siblings', () => {
+    const parent = new THREE.Group();
+    const sibling = new THREE.Group();
+    parent.add(sibling);
+    const updater = buildMotion(motionTrack(), neon, parent);
+    const motionGroup = parent.getObjectByName('motion')!;
+    updater.update(2);
+    updater.dispose();
+    expect(motionGroup.children).toHaveLength(0);
+    expect(motionGroup.parent).toBeNull();
+    expect(parent.children).toEqual([sibling]);
   });
 });
 
