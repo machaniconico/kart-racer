@@ -3,12 +3,28 @@ import { corridorAt, KART_RADIUS, validateCoursePlayability, validateTrackDef, w
 import { buildTrack } from '../track';
 import { LEGACY_MEADOW } from './legacyMeadow.fixture';
 import { islandSplit } from './features';
+import { WIDTH_SCALE } from './widths';
 import type { TrackDef } from '../types';
 
 const options = { from: 140, to: 200, islandHalf: 6, laneWidth: 9,
   taper: 12, scenery: 'rock', risky: 'inner', bend: 1 } as const;
 
 describe('islandSplit', () => {
+  it('defaults both lanes to the scaled 9 m width, including throughout the tapers', () => {
+    const { laneWidth: _laneWidth, ...withoutWidth } = options;
+    const feature = islandSplit(withoutWidth);
+    const track = buildTrack({ ...LEGACY_MEADOW, ...feature });
+    expect(feature).toEqual(islandSplit({ ...options, laneWidth: 9 * WIDTH_SCALE }));
+    for (const lane of feature.splits[0]!.lanes) {
+      expect(lane.offsetMax - lane.offsetMin).toBeCloseTo(11.7, 10);
+    }
+    for (let d = options.from; d <= options.to; d += 0.25) {
+      const lanes = corridorAt(track, d, 0);
+      expect(lanes).toHaveLength(2);
+      for (const lane of lanes) expect(lane.max - lane.min).toBeGreaterThanOrEqual(11.7 - 1e-10);
+    }
+  });
+
   it('builds a valid JSON course with two full-width lanes, 20 m ramps and a clear approach', () => {
     const feature = islandSplit(options);
     const def = { ...LEGACY_MEADOW, checkpointCount: 1, boxRows: [0.4, 0.475, 0.55, 0.625, 0.7, 0.775, 0.85, 0.925], ...feature };

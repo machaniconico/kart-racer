@@ -38,13 +38,19 @@ import { skyline } from './themes/skyline';
 // M5-05 / v15: same seed-127 Chromium setup after all four layouts and shared followups.
 // Grid budgets include shadows; meshes include moving bands and spin discs.
 // Approach draw budgets are exercised alongside the grid in e2e/courses.spec.ts.
+// M6-09, Chromium headless on darwin, 1280x720 DPR 1, seed 127, all 10 grid frames:
+// canyon 138 / 124_808 / 42 -> 139 / 124_630 / 43; pit rim paint adds one mesh,
+// pit clipping removes degenerate road triangles, clips edge vertices and wall instances;
+// island clearance removes a rock.
+// neon 134 / 115_360 / 38 -> 134 / 115_336 / 38; two tapered building instances removed.
+// meadow 125 / 107_048 / 34 and snowpeak 129 / 112_768 / 36 are unchanged.
 type RenderBaseline = { drawCalls: number; triangles: number; meshes: number };
 // M6-00 / v16: the four new courses are pending (null) until M6-05 measures them.
 const RENDER_BASELINE: Record<TrackId, RenderBaseline | null> = {
   meadow: { drawCalls: 125, triangles: 107_048, meshes: 34 },
-  canyon: { drawCalls: 138, triangles: 124_808, meshes: 42 },
+  canyon: { drawCalls: 139, triangles: 124_630, meshes: 43 },
   snowpeak: { drawCalls: 129, triangles: 112_768, meshes: 36 },
-  neon: { drawCalls: 134, triangles: 115_360, meshes: 38 },
+  neon: { drawCalls: 134, triangles: 115_336, meshes: 38 },
   harbor: null,
   forest: null,
   volcano: null,
@@ -145,6 +151,32 @@ describe('banked roads and elevated decks', () => {
     };
     const before = meshes(build(original, themes[id]));
     const after = meshes(build(zeroBank, themes[id]));
+    const buffers: number[] = [];
+    for (const mesh of before) {
+      for (const name of ['position', 'normal', 'uv']) {
+        const attribute = mesh.geometry.getAttribute(name);
+        if (attribute) buffers.push(attribute.count, hash(Float32Array.from(attribute.array)));
+      }
+      const index = mesh.geometry.getIndex();
+      if (index) buffers.push(index.count, hash(Float32Array.from(index.array)));
+      if (mesh instanceof THREE.InstancedMesh) {
+        buffers.push(mesh.count, hash(mesh.instanceMatrix.array as Float32Array));
+        if (mesh.instanceColor) buffers.push(hash(mesh.instanceColor.array as Float32Array));
+      }
+    }
+    const signature = buffers.reduce((value, entry) => Math.imul(value ^ entry, 0x01000193) >>> 0, 0x811c9dc5);
+    // M6-09 strict buffers, absent bankKeys, rounded to 0.0001 m before hashing:
+    // canyon 1753623716 -> 623313950: rim paint follows lip Y + 0.075 (the floor
+    // remains Y - 0.24), road/line clipping removes hole vertices and zero-width
+    // triangles; rails/posts/curbs stop at the pit; scenery checks its full footprint.
+    // Road vertices/indices 3418/10068 -> 3362/9984; right line vertices 3374 -> 3404;
+    // pit-rims 0 -> 36 vertices/90 indices. Curbs/rails 1536 -> 1531 each,
+    // posts 1536 -> 1534; rock instances 15 -> 14 (matrix hash 3976052981 -> 2257795301).
+    // neon 438666310 -> 1415205385: only island building transforms/count change (11 -> 9).
+    // Building matrix hash 2707146 -> 1767788015; its road/wall buffers are unchanged.
+    // MEADOW 4166068202 and SNOWPEAK 940168198 stay unchanged. The direct array
+    // comparisons below also retain the absent-bank versus zero-bank contract.
+    expect(signature).toBe({ meadow: 4166068202, canyon: 623313950, snowpeak: 940168198, neon: 1415205385 }[id]);
     expect(after).toHaveLength(before.length);
     before.forEach((mesh, i) => {
       expect(after[i].geometry.getAttribute('position').array).toEqual(mesh.geometry.getAttribute('position').array);
@@ -974,8 +1006,92 @@ describe('moving bands and spin floors', () => {
   });
 });
 
+describe('M6-09 pit rims and island clearance on real courses', () => {
+  it.each([['volcano', volcano], ['skyline', skyline], ['canyon', canyon]] as const)(
+    '%s pit decals follow the rim road height within 0.05 m', (id, theme) => {
+      const track = getTrack(id);
+      const { group } = build(track, theme);
+      const pits = track.def.surfaces.filter(zone => zone.kind === 'pit');
+      expect(pits.length).toBeGreaterThan(0);
+      // The dark pit floor is recessed (and SKYLINE removes it for open air).
+      // Warning paint is a separate decal on surviving asphalt at the rim.
+      const vertices = (group.getObjectByName('pit-rims') as THREE.Mesh).geometry.getAttribute('position');
+      for (let i = 0; i < vertices.count; i++) {
+        const p = projectToTrack(track, vertices.getX(i), vertices.getZ(i), undefined, vertices.getY(i));
+        expect(Math.abs(vertices.getY(i) - surfaceHeightAt(track, p.distance, p.offset) - 0.06),
+          `${id} decal vertex ${i}`).toBeLessThanOrEqual(0.05);
+      }
+    });
+
+  it.each([['volcano', volcano], ['skyline', skyline], ['canyon', canyon]] as const)(
+    '%s has no wall or edge-ribbon vertices inside a pit', (id, theme) => {
+      const track = getTrack(id);
+      const { group } = build(track, theme);
+      const pits = track.def.surfaces.filter(zone => zone.kind === 'pit');
+      const matrix = new THREE.Matrix4(), point = new THREE.Vector3();
+      let checked = 0;
+      for (const name of ['rails', 'posts', 'curbs', 'line:-1', 'line:1', 'shoulder:-1', 'shoulder:1']) {
+        const mesh = group.getObjectByName(name) as THREE.Mesh;
+        const vertices = mesh.geometry.getAttribute('position');
+        const count = mesh instanceof THREE.InstancedMesh ? mesh.count : 1;
+        for (let instance = 0; instance < count; instance++) {
+          if (mesh instanceof THREE.InstancedMesh) mesh.getMatrixAt(instance, matrix);
+          else matrix.identity();
+          for (let i = 0; i < vertices.count; i++) {
+            point.fromBufferAttribute(vertices, i).applyMatrix4(matrix);
+            // Local pit projections avoid confusing SKYLINE's two crossing levels.
+            for (const pit of pits) {
+              const center = sampleTrack(track, (pit.from + pit.to) / 2);
+              if (Math.hypot(point.x - center.x, point.z - center.z) > 40) continue;
+              const p = projectToTrack(track, point.x, point.z, center.distance, point.y);
+              // sampleTrack interpolates normals, whereas projection uses the
+              // centreline chords: rim vertices differ by < 0.1 m on bends.
+              const lipTolerance = mesh instanceof THREE.InstancedMesh ? 0.02 : 0.1;
+              if (p.distance <= pit.from + lipTolerance || p.distance >= pit.to - lipTolerance) continue;
+              checked++;
+              const half = widthAt(track, p.distance).roadHalfWidth;
+              expect(p.offset > (pit.offsetMin ?? -half) + 0.01
+                && p.offset < (pit.offsetMax ?? half) - 0.01, `${id} ${name} at ${p.distance}/${p.offset}`).toBe(false);
+            }
+          }
+        }
+      }
+      expect(checked).toBeGreaterThan(0);
+    });
+
+  it.each([['harbor', harbor], ['skyline', skyline], ['canyon', canyon], ['neon', neon]] as const)(
+    '%s scatters no scenery in island sections narrower than 3 m', (id, theme) => {
+      const track = getTrack(id);
+      const { group } = build(track, theme);
+      const islands = track.def.barriers!.filter(b => b.scenery === 'rock' || b.scenery === 'building');
+      expect(islands.length).toBeGreaterThan(0);
+      const matrix = new THREE.Matrix4(), position = new THREE.Vector3(), scale = new THREE.Vector3();
+      for (const barrier of islands) {
+        const halfAt = (d: number) => barrier.halfWidth * Math.min(1,
+          (d - barrier.from) / barrier.taper!, (barrier.to - d) / barrier.taper!);
+        const props = group.getObjectByName(`island-scenery:${barrier.scenery}`) as THREE.InstancedMesh;
+        expect(props.count).toBeGreaterThan(0);
+        const candidates = Math.floor((barrier.to - barrier.from) / 6);
+        expect(props.count).toBeLessThan(candidates); // Both actual tapered noses reproduce the old needles.
+        for (let i = 0; i < props.count; i++) {
+          props.getMatrixAt(i, matrix);
+          position.setFromMatrixPosition(matrix);
+          scale.setFromMatrixScale(matrix);
+          const p = projectToTrack(track, position.x, position.z, undefined, position.y - scale.y / 2);
+          const half = halfAt(p.distance);
+          expect(2 * half, `${id} scenery at ${p.distance}`).toBeGreaterThanOrEqual(3 - 1e-4);
+          expect(scale.x).toBeGreaterThanOrEqual(2 - 1e-4);
+          // The complete footprint fits the tapered island, with 0.25 m on each side.
+          for (const d of [p.distance - scale.z / 2, p.distance + scale.z / 2]) {
+            expect(scale.x + 0.5).toBeLessThanOrEqual(2 * halfAt(d) + 1e-3);
+          }
+        }
+      }
+    });
+});
+
 describe('island splits', () => {
-  it.each(['rock', 'building'] as const)('draws the %s island body and one scenery instance every 6 m', scenery => {
+  it.each(['rock', 'building'] as const)('draws the %s island body and scenery every 6 m where its footprint clears the nose', scenery => {
     const track = islandTrack(scenery);
     const barrier = track.def.barriers![0];
     const { group } = build(track, canyon);
@@ -996,7 +1112,8 @@ describe('island splits', () => {
     expect(group.children.some(o => o.name === `barriers:${scenery}`)).toBe(false);
     const props = group.getObjectByName(`island-scenery:${scenery}`) as THREE.InstancedMesh;
     expect(props).toBeInstanceOf(THREE.InstancedMesh);
-    expect(props.count).toBeGreaterThanOrEqual(Math.floor((barrier.to - barrier.from) / 6));
+    expect(props.count).toBeGreaterThan(0);
+    expect(props.count).toBeLessThan(Math.floor((barrier.to - barrier.from) / 6));
     expect(props.geometry.type).toBe(scenery === 'rock' ? 'DodecahedronGeometry' : 'BoxGeometry');
     const matrix = new THREE.Matrix4();
     const heights: number[] = [];
@@ -1076,10 +1193,10 @@ describe('island splits', () => {
     expect(meshCount(build(track, theme).group)).toBe(meshCount(build(withoutIslands(track), theme).group) + 4);
   });
 
-  it.each(['rock', 'building'] as const)('adds four meshes plus the pit decal for a %s island', scenery => {
+  it.each(['rock', 'building'] as const)('adds four meshes plus the pit floor and rim decals for a %s island', scenery => {
     const track = islandTrack(scenery);
     const plain = buildTrack({ ...track.def, barriers: [], splits: [], surfaces: track.def.surfaces.filter(z => z.kind !== 'pit') });
-    expect(meshCount(build(track, canyon).group)).toBe(meshCount(build(plain, canyon).group) + islandBudget(track) + 1);
+    expect(meshCount(build(track, canyon).group)).toBe(meshCount(build(plain, canyon).group) + islandBudget(track) + 2);
   });
 
   it('adds one more batch when rock and building islands are mixed', () => {

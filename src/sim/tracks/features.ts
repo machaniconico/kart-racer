@@ -1,11 +1,13 @@
 import { KART_RADIUS } from '../corridor';
 import type { Barrier, SplitSection, WidthKey } from '../types';
+import { WIDTH_SCALE } from './widths';
 
 interface IslandSplitOptions {
   readonly from: number;
   readonly to: number;
   readonly islandHalf: number;
-  readonly laneWidth: number;
+  /** Defaults to the original 9 m lane after the shared width scale (11.7 m). */
+  readonly laneWidth?: number;
   readonly taper: number;
   readonly scenery: 'rock' | 'building';
   readonly risky: 'inner' | 'outer';
@@ -29,7 +31,7 @@ interface IslandSplitOptions {
 export function islandSplit(options: IslandSplitOptions): {
   widthKeys: WidthKey[]; barriers: Barrier[]; splits: SplitSection[];
 } {
-  const { from, to, islandHalf, laneWidth, scenery, risky, bend } = options;
+  const { from, to, islandHalf, laneWidth = 9 * WIDTH_SCALE, scenery, risky, bend } = options;
   for (const value of [from, to, islandHalf, laneWidth, options.taper]) {
     if (!Number.isFinite(value)) throw new RangeError('islandSplit dimensions must be finite');
   }
@@ -43,7 +45,7 @@ export function islandSplit(options: IslandSplitOptions): {
   const innerEdge = islandHalf + KART_RADIUS;
   const wide = innerEdge + laneWidth;
   // A 20 m ramp can change half-width by at most 7 m. Wider islands simply
-  // require a wider approach; no track-specific defaults enter this fragment.
+  // require a wider approach; the default lane width follows widths.ts.
   const approach = Math.max(3.6, wide - 7);
   const widthKey = (distance: number, half: number): WidthKey =>
     ({ distance, roadHalfWidth: half, wallHalfWidth: half });

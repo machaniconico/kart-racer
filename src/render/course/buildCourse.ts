@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { rollAt, sampleTrack, surfaceHeightAt, wrapDistance } from '../../sim';
+import { projectToTrack, rollAt, sampleTrack, surfaceHeightAt, wrapDistance } from '../../sim';
 import type { Barrier, SurfaceZone, Track, TrackProjection, TrackSample } from '../../sim';
 import { widthAt } from '../../sim/corridor';
 import type { CourseTheme as BaseCourseTheme } from './CourseTheme';
@@ -17,6 +17,10 @@ export interface CourseTheme extends BaseCourseTheme {
 }
 
 const surfaceFallback = { dirt: 0x99683f, pit: 0x302724 };
+// A prop must keep its complete footprint off the tapered nose. Narrowing a
+// 4–8 m tall prop into the remaining sliver produces the old needle silhouettes.
+const ISLAND_SCENERY_MIN_WIDTH = 3;
+const ISLAND_SCENERY_CLEARANCE = 0.25;
 type RibbonOffsets = (distance: number) => readonly [number, number];
 type Span = { readonly from: number; readonly to: number };
 
@@ -111,6 +115,7 @@ function ribbonGeometry(track: Track, offsets: RibbonOffsets, lift = 0, slope = 
   cutouts: readonly SurfaceZone[] = [], omitted: readonly Span[] = []): THREE.BufferGeometry {
   let positions: number[] = [];
   let indices: number[] = [];
+  let clipped = false;
   const footprints = slope && omitted.length ? deckFootprints(track) : [];
   const count = Math.max(1, Math.ceil(384 * (to - from) / track.length));
   // A variable-width edge must also follow the sampled centerline's corners;
@@ -126,7 +131,7 @@ function ribbonGeometry(track: Track, offsets: RibbonOffsets, lift = 0, slope = 
         p.z + p.nz * offset);
     }
   }
-  // Keep the road beside a lane-sized pit, leaving the lowered decal visible.
+  // Keep the road beside a lane-sized pit, leaving its recessed floor visible.
   for (let i = 0; i < distances.length - 1; i++) {
     const a = distances[i], b = distances[i + 1];
     const middle = (a + b) / 2 % track.length;
@@ -161,13 +166,16 @@ function ribbonGeometry(track: Track, offsets: RibbonOffsets, lift = 0, slope = 
       }
       continue;
     }
-    const holes = cutouts.filter(zone => zone.from <= zone.to
-      ? middle >= zone.from && middle < zone.to : middle >= zone.from || middle < zone.to);
+    const middleOffsets = offsets(middle);
+    const holes = cutouts.filter(zone => withinSpan(track, middle, zone)
+      && Math.min(...middleOffsets) < (zone.offsetMax ?? Infinity)
+      && Math.max(...middleOffsets) > (zone.offsetMin ?? -Infinity));
     if (!holes.length) {
       const n = i * 2;
       indices.push(n, n + 2, n + 1, n + 1, n + 2, n + 3);
       continue;
     }
+    clipped = true;
     let bands: [number, number][] = [[-Infinity, Infinity]];
     for (const hole of holes) {
       const left = hole.offsetMin ?? -Infinity, right = hole.offsetMax ?? Infinity;
@@ -180,18 +188,24 @@ function ribbonGeometry(track: Track, offsets: RibbonOffsets, lift = 0, slope = 
       });
     }
     for (const [lo, hi] of bands) {
+      // Negative-side ribbons run from right to left. Clip in lateral order,
+      // then restore their winding; never emit a zero-width wall at a hole edge.
+      if (Math.min(...middleOffsets) >= hi || Math.max(...middleOffsets) <= lo) continue;
       const n = positions.length / 3;
       for (const d of [a, b]) {
         const p = sampleTrack(track, d);
-        const [left, right] = offsets(d);
-        for (const offset of [Math.max(left, Math.min(right, lo)), Math.max(left, Math.min(right, hi))]) {
+        const original = offsets(d);
+        const left = Math.min(...original), right = Math.max(...original);
+        const clipped = [Math.max(left, Math.min(right, lo)), Math.max(left, Math.min(right, hi))];
+        if (original[0] > original[1]) clipped.reverse();
+        for (const offset of clipped) {
           positions.push(p.x + p.nx * offset, pointHeight(track, p, offset) + lift, p.z + p.nz * offset);
         }
       }
       indices.push(n, n + 2, n + 1, n + 1, n + 2, n + 3);
     }
   }
-  if (omitted.length) {
+  if (omitted.length || clipped) {
     // Compact away the original vertices replaced by clipped bank polygons.
     const compact: number[] = [];
     const remap = new Map<number, number>();
@@ -264,11 +278,13 @@ export function buildCourse(track: Track, theme: CourseTheme): Course {
     const geometry = ribbonGeometry(track, d => {
       const { roadHalfWidth } = widthAt(track, d);
       return [zone.offsetMin ?? -roadHalfWidth, zone.offsetMax ?? roadHalfWidth];
-    }, zone.kind === 'pit' ? 0.06 - 0.3 : 0.1, false, zone.from, to);
+    }, zone.kind === 'pit' ? 0.06 - 0.3 : 0.1, false, zone.from, to, [],
+    zone.kind === 'pit' ? [] : track.def.surfaces.filter(zone => zone.kind === 'pit'));
     const parts = surfaces.get(zone.kind) ?? [];
     parts.push(geometry);
     surfaces.set(zone.kind, parts);
   }
+  buildPitRims(track, theme, group);
   for (const [kind, parts] of surfaces) {
     const geometry = mergeGeometries(parts)!;
     parts.forEach(part => part.dispose());
@@ -293,6 +309,40 @@ export function buildCourse(track: Track, theme: CourseTheme): Course {
     update(time) { motion.update(time); },
     dispose() { motion.dispose(); disposeObjectTree(group); group.removeFromParent(); },
   };
+}
+
+/** Paint belongs on the lip, never suspended over the recessed floor/open air. */
+function buildPitRims(track: Track, theme: CourseTheme, group: THREE.Group): void {
+  const parts: THREE.BufferGeometry[] = [];
+  for (const pit of track.def.surfaces.filter(zone => zone.kind === 'pit')) {
+    const to = pit.to < pit.from ? pit.to + track.length : pit.to;
+    const edges = (d: number): readonly [number, number] => {
+      const half = widthAt(track, d).roadHalfWidth;
+      return [pit.offsetMin ?? -half, pit.offsetMax ?? half];
+    };
+    // End caps lie on the approach/landing road. Side paint stays on surviving
+    // asphalt only; there is no side stripe when the pit reaches the road edge.
+    for (const [from, end] of [[pit.from - 0.18, pit.from], [to, to + 0.18]]) {
+      parts.push(ribbonGeometry(track, edges, 0.075, false, from, end));
+    }
+    for (const side of [0, 1]) {
+      const middle = (pit.from + to) / 2;
+      if (Math.abs(edges(middle)[side]) >= widthAt(track, middle).roadHalfWidth) continue;
+      parts.push(ribbonGeometry(track, d => {
+        const edge = edges(d)[side];
+        return side === 0 ? [edge - 0.18, edge] : [edge, edge + 0.18];
+      }, 0.075, false, pit.from, to));
+    }
+  }
+  if (!parts.length) return;
+  const geometry = mergeGeometries(parts)!;
+  parts.forEach(part => part.dispose());
+  const paint = material(theme.colors.line);
+  paint.side = THREE.DoubleSide;
+  const mesh = new THREE.Mesh(geometry, paint);
+  mesh.name = 'pit-rims';
+  mesh.receiveShadow = true;
+  group.add(mesh);
 }
 
 export function buildScenery(track: Track, theme: CourseTheme, scene: THREE.Group): void {
@@ -564,15 +614,20 @@ function buildIslands(track: Track, theme: CourseTheme, group: THREE.Group): voi
         const along = (span - (count - 1) * 6) / 2 + i * 6;
         const point = sampleTrack(track, b.from + along);
         const height = scenery === 'rock' ? 4 - i % 3 : 4 + i % 5;
-        const width = Math.min(scenery === 'rock' ? height : 4, 2 * halfAt(b, along));
+        const depth = scenery === 'rock' ? height : 4;
+        const available = 2 * Math.min(halfAt(b, along - depth / 2), halfAt(b, along + depth / 2))
+          - 2 * ISLAND_SCENERY_CLEARANCE;
+        if (available < ISLAND_SCENERY_MIN_WIDTH) continue;
+        const width = Math.min(scenery === 'rock' ? height : 4, available);
         transform.position.set(point.x + point.nx * b.center, pointHeight(track, point, b.center) + 0.21 + height / 2,
           point.z + point.nz * b.center);
         transform.rotation.set(0, Math.atan2(point.tx, point.tz), 0);
-        transform.scale.set(width, height, scenery === 'rock' ? height : 4);
+        transform.scale.set(width, height, depth);
         transform.updateMatrix();
         props.setMatrixAt(index++, transform.matrix);
       }
     });
+    props.count = index;
     props.name = `island-scenery:${scenery}`;
     props.receiveShadow = true;
     // InstancedMesh has one shadow flag: the building batch includes heights > 4 m.
@@ -610,6 +665,7 @@ export function disposeObjectTree(root: THREE.Object3D): void {
 function buildRoad(track: Track, theme: CourseTheme, scene: THREE.Group): void {
   const transform = new THREE.Object3D();
   const colors = theme.colors;
+  const pits = track.def.surfaces.filter(zone => zone.kind === 'pit');
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(1800, 1800), material(colors.ground));
   ground.rotation.x = -Math.PI / 2;
   ground.position.y = -1.45;
@@ -618,12 +674,12 @@ function buildRoad(track: Track, theme: CourseTheme, scene: THREE.Group): void {
   ribbon(track, scene, d => {
     const { roadHalfWidth } = widthAt(track, d);
     return [-roadHalfWidth, roadHalfWidth];
-  }, colors.road, 0.06, false, track.def.surfaces.filter(zone => zone.kind === 'pit'), track.def.decks).name = 'road';
+  }, colors.road, 0.06, false, pits, track.def.decks).name = 'road';
   for (const side of [-1, 1]) {
     ribbon(track, scene, d => {
       const w = widthAt(track, d);
       return [side * w.roadHalfWidth, side * w.wallHalfWidth];
-    }, colors.shoulder, 0.01, false, [], track.def.decks).name = `shoulder:${side}`;
+    }, colors.shoulder, 0.01, false, pits, track.def.decks).name = `shoulder:${side}`;
     ribbon(track, scene, d => {
       const { wallHalfWidth } = widthAt(track, d);
       return [side * wallHalfWidth, side * (wallHalfWidth + 22)];
@@ -631,15 +687,40 @@ function buildRoad(track: Track, theme: CourseTheme, scene: THREE.Group): void {
     ribbon(track, scene, d => {
       const { roadHalfWidth } = widthAt(track, d);
       return [side * (roadHalfWidth - 0.16), side * (roadHalfWidth + 0.06)];
-    }, colors.line, 0.075).name = `line:${side}`;
+    }, colors.line, 0.075, false, pits).name = `line:${side}`;
   }
   buildDecks(track, theme, scene);
-  const distances = sectionDistances(track, Math.floor(track.length / 3));
+  const distances = sectionDistances(track, Math.floor(track.length / 3), 0, track.length,
+    pits.flatMap(pit => [pit.from, pit.to]));
   const count = distances.length - 1;
   const curb = new THREE.InstancedMesh(new THREE.BoxGeometry(0.65, 0.16, 1), material(0xffffff), count * 2);
   const rails = new THREE.InstancedMesh(new THREE.BoxGeometry(0.22, 0.54, 1), material(colors.rail), count * 2);
   const posts = new THREE.InstancedMesh(new THREE.BoxGeometry(0.22, 1.05, 0.22), material(colors.post), count * 2);
   const dashes = new THREE.InstancedMesh(new THREE.BoxGeometry(0.13, 0.025, 1.8), material(colors.dash), Math.floor(count / 3));
+  let curbCount = 0, railCount = 0, postCount = 0, dashCount = 0;
+  // Include the whole wall/curb footprint, rather than just its centre. The
+  // stations above split ribbons at the lips; the small margin covers curvature.
+  const touchesPit = (from: number, to: number, offset: number, half: number): boolean => pits.some(pit => {
+    const overlaps = [from, (from + to) / 2, to].some(d => withinSpan(track, d, pit));
+    const roadHalf = widthAt(track, (from + to) / 2).roadHalfWidth;
+    return overlaps && offset + half > (pit.offsetMin ?? -roadHalf)
+      && offset - half < (pit.offsetMax ?? roadHalf);
+  });
+  const vertex = new THREE.Vector3();
+  const crossesPitLip = (mesh: THREE.InstancedMesh, distance: number): boolean => pits.some(pit => {
+    // On bends a straight rail's corner can cross the lip even when its centre
+    // station does not. Project the actual footprint near either end of a pit.
+    if (![pit.from, pit.to].some(d => Math.abs((d - distance + track.length * 1.5) % track.length - track.length / 2) < 6)) return false;
+    const vertices = mesh.geometry.getAttribute('position');
+    for (let i = 0; i < vertices.count; i++) {
+      vertex.fromBufferAttribute(vertices, i).applyMatrix4(transform.matrix);
+      const p = projectToTrack(track, vertex.x, vertex.z, distance, vertex.y);
+      const half = widthAt(track, p.distance).roadHalfWidth;
+      if (withinSpan(track, p.distance, pit) && p.offset > (pit.offsetMin ?? -half)
+        && p.offset < (pit.offsetMax ?? half)) return true;
+    }
+    return false;
+  });
   for (let i = 0; i < count; i++) {
     const from = distances[i]!;
     const to = distances[i + 1]!;
@@ -655,22 +736,32 @@ function buildRoad(track: Track, theme: CourseTheme, scene: THREE.Group): void {
       transform.rotation.y += Math.atan(roadSlope);
       transform.scale.z = (length + (track.def.widthKeys?.length ? 0 : 0.1)) * Math.hypot(1, roadSlope);
       transform.updateMatrix();
-      curb.setMatrixAt(i * 2 + s, transform.matrix);
-      curb.setColorAt(i * 2 + s, new THREE.Color(i % 2 ? colors.curb[1] : colors.curb[0]));
+      if (!touchesPit(from - 0.2, to + 0.2, side * (roadHalfWidth + 0.32), 0.35) && !crossesPitLip(curb, p.distance)) {
+        curb.setMatrixAt(curbCount, transform.matrix);
+        curb.setColorAt(curbCount++, new THREE.Color(i % 2 ? colors.curb[1] : colors.curb[0]));
+      }
       place(track, transform, p, side * wallHalfWidth, 0.83);
       const wallSlope = side * (endWidth.wallHalfWidth - startWidth.wallHalfWidth) / length;
       transform.rotation.y += Math.atan(wallSlope);
       transform.scale.z = (length + (track.def.widthKeys?.length ? 0 : 0.18)) * Math.hypot(1, wallSlope);
       transform.updateMatrix();
-      rails.setMatrixAt(i * 2 + s, transform.matrix);
+      if (!touchesPit(from - 0.2, to + 0.2, side * wallHalfWidth, 0.14) && !crossesPitLip(rails, p.distance)) {
+        rails.setMatrixAt(railCount++, transform.matrix);
+      }
       place(track, transform, p, side * wallHalfWidth, 0.51);
-      posts.setMatrixAt(i * 2 + s, transform.matrix);
+      if (!touchesPit(p.distance - 0.2, p.distance + 0.2, side * wallHalfWidth, 0.14) && !crossesPitLip(posts, p.distance)) {
+        posts.setMatrixAt(postCount++, transform.matrix);
+      }
     }
     if (i % 3 === 0 && i / 3 < dashes.count) {
       place(track, transform, p, 0, 0.085);
-      dashes.setMatrixAt(i / 3, transform.matrix);
+      if (!touchesPit(p.distance - 0.9, p.distance + 0.9, 0, 0.065)) dashes.setMatrixAt(dashCount++, transform.matrix);
     }
   }
+  curb.count = curbCount;
+  rails.count = railCount;
+  posts.count = postCount;
+  dashes.count = dashCount;
   curb.name = 'curbs';
   rails.name = 'rails';
   posts.name = 'posts';

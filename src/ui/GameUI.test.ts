@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Track } from '../sim/types';
 
 const tracks = vi.hoisted(() => ({
@@ -20,6 +20,7 @@ import { sampleTrack } from '../sim/track';
 
 const courseNames = tracks.names!;
 tracks.names = null;
+afterEach(() => vi.unstubAllGlobals());
 
 const SAMPLES = 8;
 const RADIUS = 100;
@@ -39,6 +40,7 @@ class FakePath2D {
   readonly ops: string[] = [];
   moveTo(x: number, y: number): void { this.ops.push(`M${x.toFixed(3)},${y.toFixed(3)}`); }
   lineTo(x: number, y: number): void { this.ops.push(`L${x.toFixed(3)},${y.toFixed(3)}`); }
+  closePath(): void { this.ops.push('Z'); }
 }
 
 function fakeContext(): CanvasRenderingContext2D {
@@ -48,7 +50,7 @@ function fakeContext(): CanvasRenderingContext2D {
   const target: Record<string, unknown> = {};
   for (const name of ['setTransform', 'clearRect', 'beginPath', 'moveTo', 'lineTo', 'closePath', 'arc', 'save',
     'restore', 'translate', 'rotate', 'fill', 'stroke']) target[name] = record(name);
-  for (const name of ['strokeStyle', 'lineWidth', 'lineJoin', 'fillStyle']) {
+  for (const name of ['strokeStyle', 'lineWidth', 'lineJoin', 'lineCap', 'fillStyle']) {
     Object.defineProperty(target, name, { set: (value: unknown) => log.push(`${name}=${String(value)}`) });
   }
   return target as unknown as CanvasRenderingContext2D;
@@ -93,7 +95,71 @@ describe('GameUI title course options', () => {
   });
 });
 
+describe('GameUI title background resolution', () => {
+  // M6-09 ?perf=1, darwin Chromium headless, 1280x720 DPR 1, MEADOW:
+  // after frame > 20 then another 10 seconds, average 198.1 -> 142.3 ms
+  // (about 5.05 -> 7.03 fps), maximum 2983.2 -> 3149.9 ms including startup.
+  // Drawing buffer 1280x720 -> 640x360, displayed bounds stay 1280x720;
+  // start-race restores 1280x720 and clears the inline transform, with no page errors.
+  it('uses one quarter of the pixels only on the title and restores every other screen', () => {
+    const resize = vi.fn();
+    vi.stubGlobal('window', { dispatchEvent: resize });
+    const style = { width: '', height: '', transform: '', transformOrigin: '' };
+    const ui = Object.create(GameUI.prototype) as { canvas: unknown; setBackgroundResolution(screen: string): void };
+    ui.canvas = { style };
+    for (const next of ['race', 'lobby', 'results']) {
+      ui.setBackgroundResolution('title');
+      expect(style).toEqual({ width: '50%', height: '50%', transform: 'scale(2)', transformOrigin: 'top left' });
+      const calls = resize.mock.calls.length;
+      ui.setBackgroundResolution('title');
+      expect(resize).toHaveBeenCalledTimes(calls);
+      ui.setBackgroundResolution(next);
+      expect(style).toEqual({ width: '', height: '', transform: '', transformOrigin: '' });
+      expect(resize).toHaveBeenCalledTimes(calls + 1);
+      expect(resize.mock.lastCall![0].type).toBe('resize');
+    }
+  });
+});
+
 describe('GameUI minimap', () => {
+  it('closes the lap with identical first and last points and a joined stroke', () => {
+    vi.stubGlobal('Path2D', FakePath2D);
+    const path = drawMap(loopTrack()).find(entry => entry.startsWith('stroke(['))!;
+    const points = [...path.matchAll(/[ML](-?[\d.]+,-?[\d.]+)/g)].map(match => match[1]);
+    expect(points.at(-1)).toBe(points[0]);
+    expect(path).toContain(' Z]');
+  });
+
+  it.each(['harbor', 'skyline', 'canyon', 'neon'] as const)(
+    '%s draws each split lane as its own path, joined to both road endpoints', async id => {
+      vi.stubGlobal('Path2D', FakePath2D);
+      const { getTrack } = await vi.importActual<typeof import('../sim/tracks')>('../sim/tracks');
+      const track = getTrack(id);
+      const paths = drawMap(track).filter(entry => entry.startsWith('stroke(['));
+      // Base road outline/fill, then two outlines and two fills per split.
+      const lanes = paths.slice(2, 2 + 2 * track.def.splits!.length);
+      expect(lanes).toHaveLength(2 * track.def.splits!.length);
+      const unique = new Set(lanes);
+      expect(unique.size).toBe(lanes.length);
+      const roadPoints = [...paths[0].matchAll(/[ML](-?[\d.]+,-?[\d.]+)/g)].map(match => match[1]);
+      // These real courses have one split: the road runs continuously across
+      // distance length/0, and either lane completes exactly the same closed lap.
+      expect(paths[0].match(/M/g)).toHaveLength(1);
+      for (let i = 0; i < lanes.length; i += 2) {
+        const points = lanes.slice(i, i + 2).map(path => [...path.matchAll(/[ML](-?[\d.]+,-?[\d.]+)/g)]
+          .map(match => match[1]));
+        expect(lanes[i].match(/M/g)).toHaveLength(1);
+        expect(lanes[i + 1].match(/M/g)).toHaveLength(1);
+        expect(points[0][0]).toBe(points[1][0]);
+        expect(points[0].at(-1)).toBe(points[1].at(-1));
+        expect(points[0]).not.toEqual(points[1]);
+        expect(roadPoints.at(-1)).toBe(points[0][0]);
+        expect(points[0].at(-1)).toBe(roadPoints[0]);
+        // The approach/exit are explicit points of the road, not lateral gaps.
+        for (const endpoint of [points[0][0], points[0].at(-1)]) expect(paths[0]).toContain(endpoint);
+      }
+    });
+
   it('fits a wide 600 x 200 m boundary inside the 144 x 99 frame', () => {
     const scale = Math.min(144 / 600, 99 / 200);
     expect(600 * scale).toBeLessThanOrEqual(144);
@@ -107,24 +173,23 @@ describe('GameUI minimap', () => {
 
   beforeEach(() => { vi.stubGlobal('Path2D', FakePath2D); });
 
-  it('draws a course without decks exactly as before', () => {
+  it('draws a closed road without decks or empty lane strokes', () => {
     expect(drawMap(loopTrack())).toMatchInlineSnapshot(`
       [
         "setTransform(2.000,0.000,0.000,2.000,0.000,0.000)",
         "clearRect(0.000,0.000,180.000,128.000)",
         "lineJoin=round",
+        "lineCap=round",
         "strokeStyle=rgba(9, 39, 31, .9)",
         "lineWidth=11",
-        "stroke([M139.500,64.000 L125.002,99.002 L90.000,113.500 L54.998,99.002 L40.500,64.000 L54.998,28.998 L90.000,14.500 L125.002,28.998 L139.500,64.000])",
+        "stroke([M139.500,64.000 L125.002,99.002 L90.000,113.500 L54.998,99.002 L40.500,64.000 L54.998,28.998 L90.000,14.500 L125.002,28.998 L139.500,64.000 Z])",
         "strokeStyle=rgba(255, 255, 255, .7)",
         "lineWidth=5",
-        "stroke([M139.500,64.000 L125.002,99.002 L90.000,113.500 L54.998,99.002 L40.500,64.000 L54.998,28.998 L90.000,14.500 L125.002,28.998 L139.500,64.000])",
+        "stroke([M139.500,64.000 L125.002,99.002 L90.000,113.500 L54.998,99.002 L40.500,64.000 L54.998,28.998 L90.000,14.500 L125.002,28.998 L139.500,64.000 Z])",
         "strokeStyle=rgba(9, 39, 31, .9)",
         "lineWidth=8",
-        "stroke([])",
         "strokeStyle=rgba(255, 255, 255, .7)",
         "lineWidth=5",
-        "stroke([])",
         "beginPath()",
         "moveTo(134.500,64.000)",
         "lineTo(144.500,64.000)",

@@ -45,7 +45,7 @@ export class GameUI {
   private readonly map: HTMLCanvasElement;
   private readonly mapContext: CanvasRenderingContext2D | null;
   private trackPath = new Path2D();
-  private lanePath = new Path2D();
+  private lanePaths: Path2D[] = [];
   private deckPath = new Path2D();
   private laneWidth = 5;
   private mapTrack: Track | null = null;
@@ -157,6 +157,7 @@ export class GameUI {
     if (screen !== 'race') updateInkOverlay(0);
     this.screen = screen;
     this.root.dataset.screen = screen;
+    this.setBackgroundResolution(screen);
     this.title.hidden = screen !== 'title';
     this.lobby.hidden = screen !== 'lobby';
     this.race.hidden = screen !== 'race';
@@ -175,6 +176,21 @@ export class GameUI {
         }
       });
     }
+  }
+
+  /** GameRenderer sizes its drawing buffer from clientWidth/clientHeight.
+   * Upscale a half-size title canvas; all interactive screens retain full size.
+   * The DOM overlay stays at native resolution and the race renderer is unchanged. */
+  private setBackgroundResolution(screen: Screen): void {
+    const compact = screen === 'title';
+    const width = compact ? '50%' : '';
+    if (this.canvas.style.width === width) return;
+    this.canvas.style.width = width;
+    this.canvas.style.height = width;
+    this.canvas.style.transformOrigin = compact ? 'top left' : '';
+    this.canvas.style.transform = compact ? 'scale(2)' : '';
+    // Also covers return-to-title; subsequent browser resizes use the same CSS dimensions.
+    window.dispatchEvent(new Event('resize'));
   }
 
   /** Online play relabels pause as a leave confirmation and result actions as lobby/room actions. */
@@ -484,7 +500,7 @@ export class GameUI {
   private prepareMap(track: Track): void {
     this.mapTrack = track;
     this.trackPath = new Path2D();
-    this.lanePath = new Path2D();
+    this.lanePaths = [];
     this.deckPath = new Path2D();
     this.laneWidth = 5;
     if (track.samples.length === 0) return;
@@ -498,28 +514,51 @@ export class GameUI {
     const splits = track.def.splits ?? [];
     const boundaries = [...new Set([0, track.length, ...splits.flatMap(split => [split.from, split.to])])]
       .sort((a, b) => a - b);
-    for (let section = 0; section < boundaries.length - 1; section++) {
+    // Start immediately after a split so the last and first lap sections are
+    // consecutive lineTo calls, not two capped subpaths meeting at distance 0.
+    const startSection = Math.max(0, boundaries.indexOf(splits[0]?.to ?? 0));
+    const splitPaths = new Map<(typeof splits)[number], Path2D[]>();
+    let previousRoad = false;
+    for (let step = 0; step < boundaries.length - 1; step++) {
+      const section = (startSection + step) % (boundaries.length - 1);
       const from = boundaries[section], to = boundaries[section + 1];
       const middle = (from + to) / 2;
       const split = splits.find(s => s.from <= s.to ? middle >= s.from && middle < s.to
         : middle >= s.from || middle < s.to);
-      const path = split ? this.lanePath : this.trackPath;
-      const points = [sampleTrack(track, from), ...track.samples.filter(p => p.distance > from && p.distance < to),
-        sampleTrack(track, to)];
-      for (const offset of split ? split.lanes.map(lane => (lane.offsetMin + lane.offsetMax) / 2) : [0]) {
+      // Each lane gets its own path. Joining it to the centre line at both lips
+      // avoids the lateral gap made by a constant-offset lane beginning abruptly.
+      const span = split ? (split.to - split.from + track.length) % track.length : 0;
+      const taper = Math.min(12, span / 3);
+      const distances = [from, ...track.samples.map(p => p.distance).filter(d => d > from && d < to), to];
+      if (split) for (const d of [(split.from + taper) % track.length, (split.to - taper + track.length) % track.length]) {
+        if (d > from && d < to) distances.push(d);
+      }
+      const points = [...new Set(distances)].sort((a, b) => a - b).map(d => ({ ...sampleTrack(track, d), distance: d }));
+      const continuingSplit = split && splitPaths.has(split);
+      if (split && !continuingSplit) {
+        const paths = split.lanes.map(() => new Path2D());
+        splitPaths.set(split, paths);
+        this.lanePaths.push(...paths);
+      }
+      for (const [laneIndex, offset] of (split ? split.lanes.map(lane => (lane.offsetMin + lane.offsetMax) / 2) : [0]).entries()) {
+        const path = split ? splitPaths.get(split)![laneIndex] : this.trackPath;
         points.forEach((point, index) => {
-          const x = (point.x + point.nx * offset) * this.mapScale + this.mapOffsetX;
-          const y = (point.z + point.nz * offset) * this.mapScale + this.mapOffsetZ;
-          if (index === 0) path.moveTo(x, y);
+          const along = split ? (point.distance - split.from + track.length) % track.length : 0;
+          const lateral = offset * (split ? Math.min(1, along / taper, (span - along) / taper) : 1);
+          const x = (point.x + point.nx * lateral) * this.mapScale + this.mapOffsetX;
+          const y = (point.z + point.nz * lateral) * this.mapScale + this.mapOffsetZ;
+          if (index === 0 && (split ? !continuingSplit : !previousRoad)) path.moveTo(x, y);
           else path.lineTo(x, y);
         });
       }
+      previousRoad = !split;
       if (split) {
         // Scale both strokes to the lanes so their outlines cannot fill the island.
         this.laneWidth = Math.min(this.laneWidth,
           ...split.lanes.map(lane => (lane.offsetMax - lane.offsetMin) * this.mapScale * 0.5));
       }
     }
+    if (!splits.length) this.trackPath.closePath();
     this.prepareDecks(track);
   }
 
@@ -529,7 +568,7 @@ export class GameUI {
       const spans = deck.from <= deck.to ? [[deck.from, deck.to]] : [[deck.from, track.length], [0, deck.to]];
       for (const [from, to] of spans) {
         const points = [sampleTrack(track, from!), ...track.samples.filter(p => p.distance > from! && p.distance < to!),
-          sampleTrack(track, to! >= track.length ? track.length - 1e-6 : to!)];
+          sampleTrack(track, to!)];
         points.forEach((point, index) => {
           const x = point.x * this.mapScale + this.mapOffsetX;
           const y = point.z * this.mapScale + this.mapOffsetZ;
@@ -548,6 +587,7 @@ export class GameUI {
     context.setTransform(2, 0, 0, 2, 0, 0);
     context.clearRect(0, 0, 180, 128);
     context.lineJoin = 'round';
+    context.lineCap = 'round';
     context.strokeStyle = 'rgba(9, 39, 31, .9)';
     context.lineWidth = 11;
     context.stroke(this.trackPath);
@@ -556,10 +596,10 @@ export class GameUI {
     context.stroke(this.trackPath);
     context.strokeStyle = 'rgba(9, 39, 31, .9)';
     context.lineWidth = this.laneWidth * 1.6;
-    context.stroke(this.lanePath);
+    for (const path of this.lanePaths) context.stroke(path);
     context.strokeStyle = 'rgba(255, 255, 255, .7)';
     context.lineWidth = this.laneWidth;
-    context.stroke(this.lanePath);
+    for (const path of this.lanePaths) context.stroke(path);
     if (track.def.decks?.length) {
       context.strokeStyle = 'rgba(9, 39, 31, .95)';
       context.lineWidth = 13;
