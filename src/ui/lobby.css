@@ -73,7 +73,7 @@
 #lobby-screen .lobby-note { margin: 8px 0 0; font-size: 10px; color: #b8cfc4; text-align: right; }
 @media (max-width: 700px) and (orientation: portrait) {
   #lobby-screen .lobby-laps { margin-bottom: 6px; }
-  #online-entry { top: auto; bottom: 150px; left: 28px; right: 28px; width: auto; padding: 10px 12px; }
+  #online-entry { top: auto; bottom: 213px; left: 28px; right: 28px; width: auto; padding: 10px 12px; }
   #online-entry h2 { margin-bottom: 6px; font-size: 15px; }
   #online-entry .online-actions { gap: 10px; }
   #lobby-screen { padding: 16px; }
@@ -99,7 +99,7 @@
 @media (max-height: 700px) and (orientation: portrait) {
   #lobby-screen .lobby-laps { margin-bottom: 4px; }
   #lobby-screen .lobby-laps legend { margin-bottom: 2px; }
-  #online-entry { padding: 4px 8px; }
+  #online-entry { bottom: 207px; padding: 4px 8px; }
   #online-entry h2 { margin-bottom: 2px; font-size: 12px; line-height: 16px; }
   #online-entry .online-actions { gap: 6px; }
   #online-entry button { min-height: 34px; padding: 4px 8px; font-size: 12px; }

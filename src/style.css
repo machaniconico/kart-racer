@@ -78,7 +78,7 @@ h1 span { color: var(--lime); }
 .course-strip > div:first-child > span:last-child { display: flex; flex-direction: column; gap: 6px; }
 .course-strip small { font-size: 7px; font-weight: 650; letter-spacing: 1.4px; color: #ffffffb0; }
 .course-strip strong { font-size: 12px; font-weight: 750; letter-spacing: 1px; }
-.course-select { display: flex; gap: 6px; }
+.course-select { display: grid; grid-template-columns: repeat(8, 44px); gap: 6px; }
 .laps-select { min-width: 0; margin: 0; padding: 0; border: 0; }
 .laps-select legend { margin-bottom: 4px; font-size: 10px; font-weight: 700; }
 .laps-options { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -90,7 +90,7 @@ h1 span { color: var(--lime); }
 .laps-option input:focus-visible + span { outline: 3px solid var(--lime); outline-offset: 2px; }
 .course-option { position: relative; display: block; }
 .course-option input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
-.course-option span { display: grid; place-items: center; width: 44px; height: 32px; border: 1px solid #ffffff60; border-radius: 5px; background: #173d35a6; font-size: 12px; font-weight: 800; font-variant-numeric: tabular-nums; transition: background 150ms; }
+.course-option span { display: grid; place-items: center; width: 44px; height: 44px; border: 1px solid #ffffff60; border-radius: 5px; background: #173d35a6; font-size: 12px; font-weight: 800; font-variant-numeric: tabular-nums; transition: background 150ms; }
 .course-option input:hover + span { background: #326957; }
 .course-option input:checked + span { background: var(--lime); border-color: var(--lime); color: var(--ink); }
 .course-option input:focus-visible + span { outline: 3px solid var(--lime); outline-offset: 2px; }
@@ -256,7 +256,7 @@ h1 span { color: var(--lime); }
   .flag-mark { width: 23px; height: 23px; background-size: 11.5px 11.5px; }
   .sound-button { padding: 10px; }
   .sound-button > span { display: none; }
-  .title-screen { padding: 84px 28px 300px; align-items: flex-start; }
+  .title-screen { padding: 68px 28px 300px; align-items: flex-start; }
   .title-screen::before { background: linear-gradient(90deg, #103b2bd9, #103b2b55 95%), linear-gradient(0deg, #103b2be6 0%, #103b2b00 40%); }
   .title-content { width: 100%; max-width: none; padding-bottom: 0; }
   .title-content > .eyebrow { font-size: 8px; letter-spacing: 1.4px; }
@@ -276,8 +276,7 @@ h1 span { color: var(--lime); }
   .course-strip:has(.course-picker) { gap: 14px; padding-top: 14px; }
   .course-picker { margin-left: auto; }
   .course-picker small, .course-picker ~ div { display: none; }
-  .course-select { gap: 5px; }
-  .course-option span { width: 36px; height: 30px; }
+  .course-select { grid-template-columns: repeat(4, 44px); gap: 5px; }
   [data-screen="race"] .topbar { top: 18px; right: 16px; }
   .race-position { left: 17px; top: 21px; gap: 14px; }
   .position-group .hud-eyebrow, .lap-group .hud-eyebrow { font-size: 7px; }
@@ -362,7 +361,6 @@ h1 span { color: var(--lime); }
   .course-strip strong { font-size: 9px; }
   .course-strip > div, .course-strip > div:first-child > span:last-child { gap: 3px; }
   .course-picker small { display: none; }
-  .course-option span { width: 40px; height: 30px; }
   [data-screen="race"] .topbar { top: 13px; right: max(16px, env(safe-area-inset-right)); }
   .race-position { top: 15px; left: max(19px, env(safe-area-inset-left)); gap: 17px; }
   .hud-eyebrow { font-size: 7px; }
@@ -430,13 +428,18 @@ h1 span { color: var(--lime); }
   .pause-shortcut { margin-top: 13px; }
 }
 
+/* The two-row course picker needs the room the description would take (touch adds a sensitivity row). */
+@media (max-height: 860px) and (max-width: 700px) and (orientation: portrait) {
+  .title-description { display: none; }
+}
+
 @media (max-height: 740px) and (max-width: 700px) and (orientation: portrait) {
-  .title-screen { padding-top: 98px; padding-bottom: 174px; }
+  .title-screen { padding-top: 64px; padding-bottom: 174px; }
   h1 { font-size: 59px; margin: 17px 0; }
   .title-description { display: none; }
   .title-tagline { font-size: 20px; }
   .start-button { margin-top: 24px; }
-  .course-strip { bottom: 28px; }
+  .course-strip { bottom: 28px; padding-top: 8px; }
   .results-content { padding: 18px 19px; }
   .finish-summary { padding: 10px 0; margin-top: 10px; }
   .leaderboard { padding-top: 8px; }
@@ -497,13 +500,13 @@ h1 span { color: var(--lime); }
 }
 @media (max-height: 740px) and (max-width: 700px) and (orientation: portrait) {
   .title-content > .eyebrow, .title-tagline { display: none; }
-  .title-content h1 { font-size: 52px; margin: 12px 0; }
-  .title-content .start-button { margin-top: 16px; }
+  .title-content h1 { font-size: 52px; margin: 6px 0; }
+  .title-content .start-button { margin-top: 12px; }
   .title-content .sens-setting, .title-content .title-record { margin-top: 8px; }
 }
 
 @media (max-height: 480px) and (orientation: landscape) {
-  .title-screen { padding-top: 64px; padding-bottom: 130px; align-items: flex-start; }
+  .title-screen { padding-top: 56px; padding-bottom: 130px; align-items: flex-start; }
   .title-content > .eyebrow, .title-tagline { display: none; }
   .title-screen .title-content h1 { margin: 8px 0; font-size: 32px; white-space: nowrap; }
   .title-content h1 br { display: none; }

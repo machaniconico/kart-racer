@@ -26,7 +26,7 @@ export function courseNumber(trackId: string): string {
   return index < 0 ? '--' : String(index + 1).padStart(2, '0');
 }
 
-const courseOptions = TRACK_IDS.map((id, index) => `<label class="course-option"><input type="radio" name="course" value="${id}" aria-label="${courseNumber(id)} ${getTrack(id).def.name}"${index === 0 ? ' checked' : ''}><span aria-hidden="true">${courseNumber(id)}</span></label>`).join('');
+export const courseOptions = TRACK_IDS.map((id, index) => `<label class="course-option"><input type="radio" name="course" value="${id}" aria-label="${courseNumber(id)} ${getTrack(id).def.name}"${index === 0 ? ' checked' : ''}><span aria-hidden="true">${courseNumber(id)}</span></label>`).join('');
 
 export function formatResultTime(state: RaceState, kart: KartState): string {
   if (kart.finishTime !== null) return formatTime(kart.finishTime);

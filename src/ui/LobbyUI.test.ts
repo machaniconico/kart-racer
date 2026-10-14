@@ -307,6 +307,13 @@ describe('LobbyUI course view model', () => {
     expect(courseView(courses, id, 'guest')).toMatchObject({ index, label: `0${index + 1} ${getTrack(id).def.name}` });
   });
 
+  it('lists all 8 courses for the host select and shows the 8th by number and name to the guest', () => {
+    expect(courses).toHaveLength(8);
+    const last = courses[7];
+    expect(courseView(courses, last.id, 'guest')).toEqual({ editable: false, index: 7, label: `08 ${last.name}` });
+    expect(courseView(courses, last.id, 'host').label).toBe('08 STRATOS CITY');
+  });
+
   it.each(['', 'unknown', 'MEADOW', '__proto__'])('marks an unknown course %j without guessing one', id => {
     expect(courseView(courses, id, 'guest')).toEqual({ editable: false, index: -1, label: '不明なコース' });
     expect(courseView(courses, id, 'host')).toEqual({ editable: true, index: -1, label: '不明なコース' });

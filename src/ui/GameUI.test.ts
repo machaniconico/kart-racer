@@ -1,14 +1,25 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Track } from '../sim/types';
 
-const tracks = vi.hoisted(() => ({ current: { def: { name: 'Init' } } as unknown }));
-vi.mock('../sim/tracks', () => ({
-  TRACK_IDS: ['meadow'],
-  getTrack: () => tracks.current,
+const tracks = vi.hoisted(() => ({
+  current: { def: { name: 'Init' } } as unknown,
+  // While GameUI is imported, getTrack answers per course so the title's course options see 8 distinct names.
+  names: null as Record<string, string> | null,
 }));
+vi.mock('../sim/tracks', async importOriginal => {
+  const actual = await importOriginal<typeof import('../sim/tracks')>();
+  tracks.names = Object.fromEntries(actual.TRACK_IDS.map(id => [id, actual.getTrack(id).def.name]));
+  return {
+    TRACK_IDS: actual.TRACK_IDS,
+    getTrack: (id: string) => tracks.names ? { def: { name: tracks.names[id] } } : tracks.current,
+  };
+});
 
-import { GameUI } from './GameUI';
+import { courseNumber, courseOptions, GameUI } from './GameUI';
 import { sampleTrack } from '../sim/track';
+
+const courseNames = tracks.names!;
+tracks.names = null;
 
 const SAMPLES = 8;
 const RADIUS = 100;
@@ -71,7 +82,29 @@ function upperPaths(decks: Track['def']['decks']): string[] {
   return log.slice(flat, flat + 6).filter(entry => entry.startsWith('stroke('));
 }
 
+describe('GameUI title course options', () => {
+  it('renders all 8 courses labelled 01 to 08 with their definition names', () => {
+    const ids = Object.keys(courseNames);
+    expect(ids).toHaveLength(8);
+    const labels = [...courseOptions.matchAll(/aria-label="([^"]*)"/g)].map(match => match[1]);
+    expect(labels).toEqual(ids.map((id, index) => `${String(index + 1).padStart(2, '0')} ${courseNames[id]}`));
+    expect(labels[7]).toBe('08 STRATOS CITY');
+    expect(ids.map(courseNumber)).toEqual(['01', '02', '03', '04', '05', '06', '07', '08']);
+  });
+});
+
 describe('GameUI minimap', () => {
+  it('fits a wide 600 x 200 m boundary inside the 144 x 99 frame', () => {
+    const scale = Math.min(144 / 600, 99 / 200);
+    expect(600 * scale).toBeLessThanOrEqual(144);
+    expect(200 * scale).toBeLessThanOrEqual(99);
+    const track = loopTrack();
+    const ui = Object.create(GameUI.prototype) as unknown as { prepareMap(t: Track): void; mapScale: number };
+    const wide = { ...track, samples: [{ ...track.samples[0], x: -300, z: -100 }, { ...track.samples[0], x: 300, z: 100 }] } as Track;
+    ui.prepareMap(wide);
+    expect(ui.mapScale).toBeCloseTo(scale);
+  });
+
   beforeEach(() => { vi.stubGlobal('Path2D', FakePath2D); });
 
   it('draws a course without decks exactly as before', () => {

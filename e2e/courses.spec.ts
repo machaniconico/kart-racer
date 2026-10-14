@@ -178,7 +178,7 @@ test.describe('C-011 solo touch selection', () => {
   test('keeps course, laps and online entry usable in both phone orientations', async ({ page }, testInfo) => {
     await page.goto('./');
     await page.waitForFunction(() => !!window.__kartDebug);
-    for (const viewport of [{ width: 390, height: 844 }, { width: 844, height: 390 }]) {
+    for (const viewport of [{ width: 390, height: 844 }, { width: 844, height: 390 }, { width: 360, height: 640 }]) {
       await page.setViewportSize(viewport);
       await page.locator('#course-select input[value="meadow"]').tap();
       for (const laps of [1, 2, 3]) {
@@ -193,6 +193,13 @@ test.describe('C-011 solo touch selection', () => {
       }));
       expect(bounds.titleBottom).toBeLessThanOrEqual(viewport.width < viewport.height ? bounds.onlineTop : bounds.courseTop);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      const options = await page.locator('.course-option').all();
+      expect(options).toHaveLength(8);
+      for (const option of options) {
+        const box = await option.boundingBox();
+        expect(box!.width).toBeGreaterThanOrEqual(44);
+        expect(box!.height).toBeGreaterThanOrEqual(44);
+      }
       await testInfo.attach(`solo-touch-${viewport.width}x${viewport.height}`, { body: await page.screenshot(), contentType: 'image/png' });
     }
   });
