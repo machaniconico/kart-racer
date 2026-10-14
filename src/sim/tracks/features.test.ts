@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { corridorAt, KART_RADIUS, validateTrackDef, widthAt } from '../corridor';
+import { corridorAt, KART_RADIUS, validateCoursePlayability, validateTrackDef, widthAt } from '../corridor';
 import { buildTrack } from '../track';
-import { meadow } from './meadow';
+import { LEGACY_MEADOW } from './legacyMeadow.fixture';
 import { islandSplit } from './features';
+import type { TrackDef } from '../types';
 
 const options = { from: 140, to: 200, islandHalf: 6, laneWidth: 9,
   taper: 12, scenery: 'rock', risky: 'inner', bend: 1 } as const;
@@ -10,7 +11,7 @@ const options = { from: 140, to: 200, islandHalf: 6, laneWidth: 9,
 describe('islandSplit', () => {
   it('builds a valid JSON course with two full-width lanes, 20 m ramps and a clear approach', () => {
     const feature = islandSplit(options);
-    const def = { ...meadow, checkpointCount: 1, boxRows: [0.4, 0.475, 0.55, 0.625, 0.7, 0.775, 0.85, 0.925], ...feature };
+    const def = { ...LEGACY_MEADOW, checkpointCount: 1, boxRows: [0.4, 0.475, 0.55, 0.625, 0.7, 0.775, 0.85, 0.925], ...feature };
     const json = JSON.stringify(def);
     expect(() => validateTrackDef(def)).not.toThrow();
     expect(JSON.stringify(def)).toBe(json);
@@ -59,8 +60,20 @@ describe('islandSplit', () => {
     expect(feature.barriers[0]!.taper).toBe(20);
     expect(feature.widthKeys[1]!.wallHalfWidth - feature.widthKeys[0]!.wallHalfWidth).toBeLessThanOrEqual(7);
     expect(feature.splits[0]!.lanes[1]!.offsetMin).toBe(10 + KART_RADIUS);
-    expect(() => validateTrackDef({ ...meadow, checkpointCount: 1,
+    expect(() => validateTrackDef({ ...LEGACY_MEADOW, checkpointCount: 1,
       boxRows: [0.4, 0.475, 0.55, 0.625, 0.7, 0.775, 0.85, 0.925], ...feature })).not.toThrow();
+  });
+
+  it('lets validateCoursePlayability reject an island whose outer lane edge exceeds the curvature radius', () => {
+    // wide = islandHalf + R + laneWidth = 15.95 m beside the centre line on a circular course.
+    const feature = islandSplit({ ...options, from: 30, to: 70 });
+    const circle = (radius: number): TrackDef => ({ ...LEGACY_MEADOW, scale: 1, splits: feature.splits,
+      controlPoints: Array.from({ length: 24 }, (_, i) => [radius * Math.cos(i * Math.PI / 12), 0,
+        radius * Math.sin(i * Math.PI / 12)] as const) });
+    expect(() => validateCoursePlayability(circle(15))).toThrow(RangeError);
+    expect(() => validateCoursePlayability(circle(15)))
+      .toThrow('split outer lane half-width must not exceed the curvature radius');
+    expect(() => validateCoursePlayability(circle(17))).not.toThrow();
   });
 
   it('rejects dimensions that cannot produce the requested island', () => {

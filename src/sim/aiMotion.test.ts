@@ -5,6 +5,7 @@ import { validateTrackDef } from './corridor';
 import { createRace, stepRace } from './race';
 import { buildTrack } from './track';
 import * as tracks from './tracks';
+import { LEGACY_MEADOW } from './tracks/legacyMeadow.fixture';
 import type { Barrier, RaceState, Track, TrackDef } from './types';
 
 // One sweep band and one gate band on the first straight, with distance ranges that do not overlap.
@@ -16,7 +17,7 @@ const GATE_APPROACH = 30;
 
 function motionDef(): TrackDef {
   return {
-    ...tracks.TRACKS.meadow, scale: 1, checkpointCount: 2,
+    ...LEGACY_MEADOW, scale: 1, checkpointCount: 2,
     controlPoints: [
       [-150, 3, 0], [-100, 3, 0], [-50, 3, 0], [0, 3, 0],
       [50, 3, 0], [100, 3, 0], [150, 3, 0], [150, 3, 100], [-150, 3, 100],

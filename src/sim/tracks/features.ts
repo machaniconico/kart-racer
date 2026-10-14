@@ -17,6 +17,14 @@ interface IslandSplitOptions {
  * A JSON-only fragment to spread into a TrackDef. from/to include the expanded
  * noses; the 35 m lane-selection approach ends just before from. laneWidth is
  * the free width beside the full island body; the tapered ends leave more room.
+ *
+ * widthKeys composition rule: the four returned keys are the ramp (from - 20, from, to, to + 20)
+ * and carry the approach width at both ends, so spreading them alone leaves every distance
+ * outside the island at approach width as well (widths interpolate and wrap between keys).
+ * Bracket them with base-width keys before and after, and keep the wall at least at the base:
+ * `{ distance: from - 40, ...base }, ...island.widthKeys.map(key => ({ ...key,
+ * wallHalfWidth: Math.max(BASE_WALL_HALF_WIDTH, key.roadHalfWidth) })), { distance: to + 40, ...base }`
+ * (see canyon.ts, lines 33-41).
  */
 export function islandSplit(options: IslandSplitOptions): {
   widthKeys: WidthKey[]; barriers: Barrier[]; splits: SplitSection[];

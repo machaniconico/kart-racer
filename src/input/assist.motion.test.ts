@@ -5,6 +5,7 @@ import { DEFAULT_LAPS } from '../sim/laps';
 import { createRace, stepRace } from '../sim/race';
 import { buildTrack, sampleTrack } from '../sim/track';
 import * as tracks from '../sim/tracks';
+import { LEGACY_MEADOW } from '../sim/tracks/legacyMeadow.fixture';
 import type { InputFrame, TrackDef } from '../sim/types';
 import { applySteerAssist } from './assist';
 
@@ -20,7 +21,7 @@ const input: InputFrame = { steer: 0, throttle: 1, brake: false, drift: false, u
 
 // One sweep band and one gate band on the first straight, with distance ranges that do not overlap.
 const def: TrackDef = {
-  ...tracks.TRACKS.meadow, scale: 1, checkpointCount: 3,
+  ...LEGACY_MEADOW, scale: 1, checkpointCount: 3,
   controlPoints: [
     [-150, 3, 0], [-100, 3, 0], [-50, 3, 0], [0, 3, 0],
     [50, 3, 0], [100, 3, 0], [150, 3, 0], [150, 3, 100], [-150, 3, 100],

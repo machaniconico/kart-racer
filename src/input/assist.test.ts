@@ -3,6 +3,7 @@ import { createRace, stepRace } from '../sim/race';
 import { sampleTrack } from '../sim/track';
 import { buildTrack } from '../sim/track';
 import * as tracks from '../sim/tracks';
+import { LEGACY_MEADOW } from '../sim/tracks/legacyMeadow.fixture';
 import { getTrack, TRACK_IDS } from '../sim/tracks';
 import { corridorAt, exclusionAt, KART_RADIUS, validateTrackDef, widthAt } from '../sim/corridor';
 import type { InputFrame, RaceState, Track, TrackDef, TrackId } from '../sim/types';
@@ -234,7 +235,7 @@ describe('applySteerAssist', () => {
 
 // A straight (arc ~100 to ~330 m) with a centre pillar at 130-150 m, and the same road without it.
 const straightDef: TrackDef = {
-  ...tracks.TRACKS.meadow, scale: 1, roadHalfWidth: 8, wallHalfWidth: 10,
+  ...LEGACY_MEADOW, scale: 1, roadHalfWidth: 8, wallHalfWidth: 10,
   controlPoints: [[-200, 0, 0], [-100, 0, 0], [0, 0, 0], [100, 0, 0], [200, 0, 0], [260, 0, 60],
     [200, 0, 120], [100, 0, 120], [0, 0, 120], [-100, 0, 120], [-200, 0, 120], [-260, 0, 60]],
   surfaces: [], racingLine: [],

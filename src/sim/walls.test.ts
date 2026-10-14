@@ -2,12 +2,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRace, FIXED_DT, KART_RADIUS, NEUTRAL_INPUT, stepRace } from './race';
 import { buildTrack, insideBarrier, projectToTrack, sampleTrack } from './track';
 import * as tracks from './tracks';
+import { LEGACY_MEADOW } from './tracks/legacyMeadow.fixture';
 import type { RaceState } from './types';
 
 // The long straight makes incidence exact and keeps curvature, items and other
 // karts out of the speed comparison. The shoulder still applies its normal drag.
 const track = buildTrack({
-  ...tracks.TRACKS.meadow, scale: 1,
+  ...LEGACY_MEADOW, scale: 1,
   controlPoints: [[-1500, 0, 0], [-1000, 0, 0], [-500, 0, 0], [0, 0, 0],
     [500, 0, 0], [1000, 0, 0], [1500, 0, 0], [1500, 0, 1000], [-1500, 0, 1000]],
   surfaces: [], racingLine: [],
@@ -386,7 +387,7 @@ describe('collideCorridor: barrier bands and width profiles', () => {
   it('keeps the 70 m/s lateral push <= 0.59 m on a curve, including the swept nose residual (regression)', () => {
     // MEADOW bends here, so arc metres differ from world metres off the centre line. The swept
     // push must stay along its contact normal instead of leaving a residual for the sideways settle.
-    const plain = tracks.TRACKS.meadow;
+    const plain = LEGACY_MEADOW;
     // [from, centre, distance, offset, heading angle]; the first row is the reviewer's reproduction.
     const cases: [number, number, number, number, number][] = [[200, 6, 198.85, 6, 0]];
     for (const [from, center] of [[200, 6], [200, -6], [120, -6], [120, 6]] as const) {

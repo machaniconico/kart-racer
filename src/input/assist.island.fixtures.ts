@@ -2,6 +2,7 @@ import { vi } from 'vitest';
 import { createRace, stepRace } from '../sim/race';
 import { buildTrack, sampleTrack } from '../sim/track';
 import * as tracks from '../sim/tracks';
+import { LEGACY_MEADOW } from '../sim/tracks/legacyMeadow.fixture';
 import { KART_RADIUS, validateCoursePlayability, validateTrackDef, widthAt } from '../sim/corridor';
 import { islandSplit } from '../sim/tracks/features';
 import type { InputFrame, RaceState, Track, TrackDef } from '../sim/types';
@@ -17,7 +18,7 @@ export const input: InputFrame = { steer: 0, throttle: 1, brake: false, drift: f
 
 // The straight of assist.test.ts (arc ~100 to ~330 m).
 export const straightDef: TrackDef = {
-  ...tracks.TRACKS.meadow, scale: 1, roadHalfWidth: 8, wallHalfWidth: 10,
+  ...LEGACY_MEADOW, scale: 1, roadHalfWidth: 8, wallHalfWidth: 10,
   controlPoints: [[-200, 0, 0], [-100, 0, 0], [0, 0, 0], [100, 0, 0], [200, 0, 0], [260, 0, 60],
     [200, 0, 120], [100, 0, 120], [0, 0, 120], [-100, 0, 120], [-200, 0, 120], [-260, 0, 60]],
   surfaces: [], racingLine: [],

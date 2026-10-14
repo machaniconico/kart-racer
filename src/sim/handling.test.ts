@@ -3,6 +3,7 @@ import { getAIInput } from './ai';
 import { createRace, DRIFT_BLUE_TIME, DRIFT_ORANGE_TIME, FIXED_DT, KART_RADIUS, NEUTRAL_INPUT, stepRace } from './race';
 import { buildTrack, sampleTrack } from './track';
 import * as tracks from './tracks';
+import { LEGACY_MEADOW } from './tracks/legacyMeadow.fixture';
 import { corridorAt, exclusionAt, widthAt } from './corridor';
 import { applySteerAssist } from '../input/assist';
 import { getAiLineOffset } from './itemAi';
@@ -13,7 +14,7 @@ afterEach(() => vi.restoreAllMocks());
 
 // A wide straight isolates turning from walls, grass, items and other karts.
 const handlingTrack = buildTrack({
-  ...tracks.TRACKS.meadow, scale: 1, roadHalfWidth: 300, wallHalfWidth: 400,
+  ...LEGACY_MEADOW, scale: 1, roadHalfWidth: 300, wallHalfWidth: 400,
   controlPoints: [[-1500, 0, 0], [-1000, 0, 0], [-500, 0, 0], [0, 0, 0],
     [500, 0, 0], [1000, 0, 0], [1500, 0, 0], [1500, 0, 1000], [-1500, 0, 1000]],
   surfaces: [], racingLine: [],
@@ -291,7 +292,7 @@ describe('H1 CPU balance: absolute range and recorded baseline', () => {
 // A stadium loop whose first straight (arc ~100 to ~330 m) carries three centre pillars.
 const pillar = (from: number): Barrier => ({ from, to: from + 20, center: 0, halfWidth: 1.2, taper: 4, scenery: 'pillar' });
 const pillarTrack = buildTrack({
-  ...tracks.TRACKS.meadow, scale: 1, roadHalfWidth: 8, wallHalfWidth: 10,
+  ...LEGACY_MEADOW, scale: 1, roadHalfWidth: 8, wallHalfWidth: 10,
   controlPoints: [[-200, 0, 0], [-100, 0, 0], [0, 0, 0], [100, 0, 0], [200, 0, 0], [260, 0, 60],
     [200, 0, 120], [100, 0, 120], [0, 0, 120], [-100, 0, 120], [-200, 0, 120], [-260, 0, 60]],
   // The added 0.24 row would sit inside the third pillar; put it beyond the passage.
@@ -361,7 +362,7 @@ describe('M1-03 passages around centre pillars', () => {
 const island = islandSplit({ from: 160, to: 230, islandHalf: 6, laneWidth: 9, taper: 10,
   scenery: 'rock', risky: 'inner', bend: 1 });
 const islandTrack = buildTrack({
-  ...tracks.TRACKS.meadow, scale: 1, roadHalfWidth: 8, wallHalfWidth: 10,
+  ...LEGACY_MEADOW, scale: 1, roadHalfWidth: 8, wallHalfWidth: 10,
   controlPoints: pillarTrack.def.controlPoints,
   surfaces: [], racingLine: [], ...island,
 });

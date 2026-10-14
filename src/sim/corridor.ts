@@ -673,4 +673,24 @@ export function validateCoursePlayability(def: TrackDef): void {
       }
     }
   }
+  const { samples } = track;
+  for (const split of def.splits ?? []) {
+    const span = wrap(split.to - split.from, length);
+    // Lap changes at distance 0; a split across it could swap the chosen lane mid-passage.
+    const toStart = wrap(-split.from, length);
+    if (toStart > EPSILON && toStart < span - EPSILON) throw new RangeError('split must not cross the start line');
+    // An offset curve beyond the curvature radius folds over itself on the inside of the bend.
+    const outerHalf = Math.max(...split.lanes.flatMap(lane => [Math.abs(lane.offsetMin), Math.abs(lane.offsetMax)]));
+    for (let i = 0; i < samples.length; i++) {
+      if (wrap(samples[i]!.distance - split.from, length) > span + EPSILON) continue;
+      const a = samples[(i + samples.length - 1) % samples.length]!;
+      const b = samples[i]!;
+      const c = samples[(i + 1) % samples.length]!;
+      const cross = (b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x);
+      const product = Math.hypot(b.x - a.x, b.z - a.z) * Math.hypot(c.x - b.x, c.z - b.z) * Math.hypot(c.x - a.x, c.z - a.z);
+      if (outerHalf * 2 * Math.abs(cross) > product) {
+        throw new RangeError('split outer lane half-width must not exceed the curvature radius');
+      }
+    }
+  }
 }

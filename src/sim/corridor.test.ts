@@ -5,14 +5,16 @@ import { KART_RADIUS as RACE_RADIUS } from './race';
 import { buildTrack, rollAt, slopeAt } from './track';
 import { bankCourse, figureEightCourse, figureEightCrossings, slopeCourse } from './elevation.fixture';
 import { getTrack, TRACK_IDS, TRACKS } from './tracks';
+import { LEGACY_MEADOW } from './tracks/legacyMeadow.fixture';
 import type { Barrier, BarrierMotion, SurfaceZone, TrackDef } from './types';
 
 // Synthetic corridor cases keep their original dimensions, independent of MEADOW's layout.
-const base: TrackDef = { ...TRACKS.meadow, roadHalfWidth: 7.2, wallHalfWidth: 10.5, boxLanes: [-4.1, 0, 4.1],
+const base: TrackDef = { ...LEGACY_MEADOW, roadHalfWidth: 7.2, wallHalfWidth: 10.5, boxLanes: [-4.1, 0, 4.1],
   // Corridor-only fixtures have flat landings; the real course is tested separately.
-  controlPoints: TRACKS.meadow.controlPoints.map(([x, , z]) => [x, 0, z]),
+  controlPoints: LEGACY_MEADOW.controlPoints.map(([x, , z]) => [x, 0, z]),
 };
-const length = getTrack('meadow').length;
+const legacyMeadow = buildTrack(LEGACY_MEADOW);
+const length = legacyMeadow.length;
 const band: Barrier = { from: 25, to: 40, center: 0, halfWidth: 2, taper: 4 };
 const fixture = (overrides: Partial<TrackDef> = {}): TrackDef => ({ ...base, ...overrides });
 const syntheticDef = (overrides: Partial<TrackDef> = {}): TrackDef => ({
@@ -66,7 +68,7 @@ describe('widthAt', () => {
 });
 
 describe('exclusionAt', () => {
-  const track = getTrack('meadow');
+  const track = legacyMeadow;
 
   it('uses the simulation kart radius', () => { expect(KART_RADIUS).toBe(RACE_RADIUS); });
 
@@ -437,8 +439,7 @@ describe('validateTrackDef', () => {
     const before = JSON.stringify(def);
     expect(() => validateTrackDef(def)).not.toThrow();
     expect(JSON.stringify(def)).toBe(before);
-    // M2.5-01 widens three courses; NEON (M3-05) and SNOWPEAK (M4-05) are at layout 3, CANYON at 4.
-    expect(def.layoutVersion ?? 1).toBe(id === 'canyon' ? 4 : id === 'neon' || id === 'snowpeak' ? 3 : 2);
+    // layoutVersion is pinned by each course's own test file (meadow/canyon/neon/snowpeak.test.ts).
   });
 
   it('accepts a safe band and leaves mutable input unchanged', () => {
@@ -894,7 +895,9 @@ describe('validateTrackDef elevation', () => {
     for (const def of [original, { ...original, barriers: original.barriers?.map(({ motion: _motion, ...barrier }) => barrier) }]) {
       const before = JSON.stringify(def);
       expect(() => validateTrackDef(def)).not.toThrow();
-      expect(() => validateTrackDef({ ...def, bankKeys: [], decks: [] })).not.toThrow();
+      // A course with decks needs them to separate its crossing levels, so stripping them is not
+      // a valid variant there; only deck-free courses must stay valid without banks and decks.
+      if (!def.decks?.length) expect(() => validateTrackDef({ ...def, bankKeys: [], decks: [] })).not.toThrow();
       expect(JSON.stringify(def)).toBe(before);
     }
   });
@@ -952,6 +955,15 @@ describe('validateCoursePlayability', () => {
     expect(() => validateTrackDef(def)).not.toThrow();
     expect(() => validateCoursePlayability(def)).not.toThrow();
     expect(JSON.stringify(def)).toBe(before);
+  });
+
+  it('rejects a split that crosses the start line and accepts one that ends on it', () => {
+    const lanes = [{ offsetMin: -7, offsetMax: -3, risk: 0 }, { offsetMin: 3, offsetMax: 7, risk: 0 }] as const;
+    const across = fixture({ splits: [{ from: length - 30, to: 30, lanes }] });
+    expect(() => validateCoursePlayability(across)).toThrow(RangeError);
+    expect(() => validateCoursePlayability(across)).toThrow('split must not cross the start line');
+    expect(() => validateCoursePlayability(fixture({ splits: [{ from: length - 60, to: 0, lanes }] }))).not.toThrow();
+    expect(() => validateCoursePlayability(fixture({ splits: [{ from: 0, to: 60, lanes }] }))).not.toThrow();
   });
 
   it('rejects a wrapped band across the protected start even when both noses clear the gates', () => {

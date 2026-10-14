@@ -6,6 +6,7 @@ import { buildTrack, getTrack, projectToTrack, rollAt, sampleTrack, surfaceHeigh
 import type { Barrier, RaceState, SurfaceZone, Track } from '../../sim';
 import * as trackRegistry from '../../sim/tracks';
 import { islandSplit } from '../../sim/tracks/features';
+import { LEGACY_MEADOW } from '../../sim/tracks/legacyMeadow.fixture';
 import { GameUI } from '../../ui/GameUI';
 import { barrierCenterAt, barrierHalfWidthAt, exclusionAt, KART_RADIUS, widthAt } from '../../sim/corridor';
 import { bankCourse, figureEightCourse, figureEightCrossings, stadiumSections } from '../../sim/elevation.fixture';
@@ -58,7 +59,7 @@ function build(...args: Parameters<typeof buildCourse>): Course {
 afterEach(() => { courses.splice(0).forEach(course => course.dispose()); });
 
 function islandTrack(scenery: 'rock' | 'building' = 'rock'): Track {
-  return buildTrack({ ...getTrack('meadow').def, scale: 1, controlPoints: [
+  return buildTrack({ ...LEGACY_MEADOW, scale: 1, controlPoints: [
     [0, 0, 0], [100, 0, 0], [200, 0, 0], [300, 0, 0], [400, 0, 0],
     [400, 0, 200], [0, 0, 200], [-100, 0, 200], [-100, 0, 0],
   ], ...islandSplit({ from: 100.37, to: 180.83, islandHalf: 6, laneWidth: 9, taper: 12,
@@ -525,7 +526,7 @@ describe('variable widths and batched barriers', () => {
   // The first 300 m run along +X, so world X measures arc distance and -Z is
   // lateral offset. Cross sections below inspect mesh edges, not sampled widths.
   function straightTrack() {
-    return buildTrack({ ...getTrack('meadow').def, scale: 1, controlPoints: [
+    return buildTrack({ ...LEGACY_MEADOW, scale: 1, controlPoints: [
       [0, 0, 0], [100, 0, 0], [200, 0, 0], [300, 0, 0], [400, 0, 0],
       [400, 0, 200], [0, 0, 200], [-100, 0, 200], [-100, 0, 0],
     ], widthKeys: [

@@ -3,6 +3,7 @@ import { corridorAt, exclusionAt, validateTrackDef } from '../sim/corridor';
 import * as race from '../sim/race';
 import { buildTrack, sampleTrack } from '../sim/track';
 import * as tracks from '../sim/tracks';
+import { LEGACY_MEADOW } from '../sim/tracks/legacyMeadow.fixture';
 import type { Barrier, InputFrame, RaceState, TrackDef } from '../sim/types';
 import { TICK_MS } from './clock';
 import { GuestSession } from './guestSession';
@@ -31,7 +32,7 @@ const FULL: InputFrame = { ...NEUTRAL_INPUT, throttle: 1 };
 
 function motionDef(): TrackDef {
   return {
-    ...tracks.TRACKS.meadow, scale: 1, checkpointCount: 2,
+    ...LEGACY_MEADOW, scale: 1, checkpointCount: 2,
     controlPoints: [
       [-1500, 3, 0], [-1000, 3, 0], [-500, 3, 0], [0, 3, 0],
       [500, 3, 0], [1000, 3, 0], [1500, 3, 0], [1500, 3, 1000], [-1500, 3, 1000],
