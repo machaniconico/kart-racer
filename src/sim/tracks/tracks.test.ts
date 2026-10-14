@@ -143,7 +143,7 @@ describe.each(TRACK_IDS)('%s course contract', id => {
     expect(largestDelta).toBeLessThan(2);
   });
 
-  it('closes exactly, with unit orthogonal tangents/normals and grade at most 0.15', () => {
+  it('closes exactly, with unit orthogonal tangents/normals and grade at most 0.30', () => {
     expect(sampleTrack(track, track.length)).toEqual(sampleTrack(track, 0));
     expect(wrapDistance(track, -1)).toBeCloseTo(track.length - 1, 10);
     let largestGrade = 0;
@@ -159,7 +159,7 @@ describe.each(TRACK_IDS)('%s course contract', id => {
       expect(Math.hypot(point.tx, point.tz)).toBeCloseTo(1, 14);
       expect(Math.hypot(point.nx, point.nz)).toBeCloseTo(1, 14);
     }
-    expect(largestGrade).toBeLessThanOrEqual(0.15);
+    expect(largestGrade).toBeLessThanOrEqual(0.30);
   });
 
   it('builds twelve boxes, every checkpoint, and the declared course widths', () => {

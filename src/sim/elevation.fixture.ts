@@ -26,7 +26,8 @@ const STRAIGHT_HALF = 150;
 const STRAIGHT_STEP = 5;
 const CORNER_RADIUS = 50;
 const CORNER_STEPS = 32;
-const STADIUM_SAMPLES = 4;
+/** One sample per control point: sample grades are then chord grades and never exceed the ramp. */
+const STADIUM_SAMPLES = 1;
 /** Each straight keeps its last 10 m at the end heights, so the corners stay exactly flat. */
 const RAMP_HALF = 140;
 /** Quadratic easing at each end of the ramp keeps the grade continuous (no spline overshoot). */
@@ -129,42 +130,51 @@ export function bankCourse(roll: number): TrackDef {
   };
 }
 
-/** Lobe radius of the figure eight; each lobe is a 270° arc tangent to both diagonals. */
-const LOBE_RADIUS = 40;
+/**
+ * Lobe radius of the figure eight; each lobe is a 270° arc tangent to both diagonals, so the
+ * diagonals run R = 60 m from the crossing to each lobe. That keeps more than 31.8 m of straight
+ * beyond each deck end, where validateTrackDef pairs deck samples with same-height road nearby.
+ */
+const LOBE_RADIUS = 60;
+/** Seven steps keep the 26-point loop (upper pass at index 3, lower at 16) that corridor.test.ts rotates. */
+const LOBE_STEPS = 7;
 /** Height of the second (upper) pass over the XZ origin. */
 export const FIGURE_EIGHT_UPPER_Y = 12.5;
-/** Control point indices of the lower and upper passes over the XZ origin. */
-const LOWER_PASS = 16;
-const UPPER_PASS = 3;
+/** Loop index where the course starts, and control point indices of the two passes. */
+const START = 10;
+const UPPER_PASS = 13 - START;
+const LOWER_PASS = 26 - START;
 
 /**
  * Figure eight crossing itself at the XZ origin at 90°: the first pass (along +x+z) at
- * y = 0 and the second (along −x+z) at y = 12.5. The diagonals are flat for 40 m on each
+ * y = 0 and the second (along −x+z) at y = 12.5. The diagonals are flat for 60 m on each
  * side of the crossing; each lobe changes height with a half-cosine profile
- * (max grade ≈ 12.5 × π / 2 / 188 ≈ 0.10). The start sits in the right lobe so every gate
+ * (max grade ≈ 12.5 × π / 2 / 283 ≈ 0.07). The start sits in the right lobe so every gate
  * stays more than 25 m from both crossings. decks covers ±20 m of the upper pass.
  */
 export function figureEightCourse(): TrackDef {
   const r = LOBE_RADIUS;
   const diagonal = Math.SQRT1_2;
   const lobe = (cx: number, start: number, direction: number, from: number, to: number): Point[] =>
-    Array.from({ length: 10 }, (_, k) => {
-      const angle = (start + direction * 30 * k) * Math.PI / 180;
-      const y = from + (to - from) * (1 - Math.cos(Math.PI * k / 9)) / 2;
+    Array.from({ length: LOBE_STEPS + 1 }, (_, k) => {
+      const angle = (start + direction * 270 / LOBE_STEPS * k) * Math.PI / 180;
+      const y = from + (to - from) * (1 - Math.cos(Math.PI * k / LOBE_STEPS)) / 2;
       return [cx + r * Math.cos(angle), y, r * Math.sin(angle)] as const;
     });
   const along = (s: number, dx: number, y: number): Point => [s * diagonal * dx, y, s * diagonal];
+  const upperY = FIGURE_EIGHT_UPPER_Y;
   // Right lobe clockwise from its +x+z tangent point (135°) to its +x−z tangent point (−135°).
-  const right = lobe(r * Math.SQRT2, 135, -1, 0, FIGURE_EIGHT_UPPER_Y);
+  const right = lobe(r * Math.SQRT2, 135, -1, 0, upperY);
   // Left lobe counter-clockwise from its −x+z tangent point (45°) to its −x−z tangent point (315°).
-  const left = lobe(-r * Math.SQRT2, 45, 1, FIGURE_EIGHT_UPPER_Y, 0);
+  const left = lobe(-r * Math.SQRT2, 45, 1, upperY, 0);
+  // Loop indices: lower pass 0, right lobe 3–10, upper pass 13, left lobe 16–23.
   const loop: Point[] = [
-    along(0, 1, 0), along(20, 1, 0), ...right,
-    along(-20, -1, FIGURE_EIGHT_UPPER_Y), along(0, -1, FIGURE_EIGHT_UPPER_Y), along(20, -1, FIGURE_EIGHT_UPPER_Y),
-    ...left, along(-20, 1, 0),
+    along(0, 1, 0), along(20, 1, 0), along(40, 1, 0), ...right,
+    along(-40, -1, upperY), along(-20, -1, upperY), along(0, -1, upperY), along(20, -1, upperY), along(40, -1, upperY),
+    ...left, along(-40, 1, 0), along(-20, 1, 0),
   ];
-  // Start one control point before the end of the right lobe (loop index 10).
-  const controlPoints = [...loop.slice(10), ...loop.slice(0, 10)];
+  // Start where the right lobe ends, 60 m before the upper pass (about length / 13).
+  const controlPoints = [...loop.slice(START), ...loop.slice(0, START)];
   const base = course('FIGURE EIGHT', controlPoints);
   const upper = buildTrack(base).samples[UPPER_PASS * SAMPLES_PER_SEGMENT]!.distance;
   return { ...base, decks: [{ from: upper - 20, to: upper + 20 }] };

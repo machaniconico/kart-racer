@@ -1,4 +1,4 @@
-import { buildTrack } from './track';
+import { buildTrack, rollAt, slopeAt } from './track';
 import { racingLineOffset } from './surfaces';
 import type { Barrier, SurfaceZone, Track, TrackDef } from './types';
 
@@ -208,6 +208,102 @@ function barrierSampleTimes(barriers: readonly Barrier[]): number[] {
   return [...times].sort((a, b) => a - b);
 }
 
+/** Closed forward arcs include wrapped decks and the zero/length seam. */
+function onDeck(track: Track, distance: number): boolean {
+  return (track.def.decks ?? []).some(deck =>
+    arcsOverlap(deck.from, deck.to === track.length && deck.from === 0 ? track.length :
+      wrap(deck.to - deck.from, track.length), distance, 0, track.length));
+}
+
+function validateCrossings(track: Track, slopes: readonly number[]): void {
+  const { samples, length, def } = track;
+  const bankKeys = def.bankKeys;
+  const checkApproach = (distance: number): void => {
+    const from = wrap(distance - 20, length);
+    const to = wrap(distance + 20, length);
+    if (Math.abs(slopeAt(track, from)) > 0.10 + EPSILON || Math.abs(slopeAt(track, to)) > 0.10 + EPSILON ||
+      samples.some((sample, i) => wrap(sample.distance - from, length) <= 40 + EPSILON &&
+        Math.abs(slopes[i]!) > 0.10 + EPSILON)) {
+      throw new RangeError('crossing slope within 20 m must not exceed 0.10');
+    }
+    if (bankKeys?.length && (Math.abs(rollAt(track, from)) > 0.10 + EPSILON ||
+      Math.abs(rollAt(track, to)) > 0.10 + EPSILON || bankKeys.some(key =>
+        wrap(key.distance - from, length) <= 40 + EPSILON && Math.abs(key.roll) > 0.10 + EPSILON))) {
+      throw new RangeError('crossing roll within 20 m must not exceed 0.10');
+    }
+    if (track.checkpointDistances.some(gate => {
+      const gap = wrap(gate - distance, length);
+      return Math.min(gap, length - gap) <= 25 + EPSILON;
+    })) throw new RangeError('checkpoint gate is within 25 m of a crossing');
+  };
+
+  // Sweep X bounds before testing pairs (O(n²) worst case). Ordinary courses
+  // avoid the full pair scan; undeclared crossings still cannot escape validation.
+  const segments = samples.map((a, index) => {
+    const b = samples[(index + 1) % samples.length]!;
+    return { a, b, index, minX: Math.min(a.x, b.x), maxX: Math.max(a.x, b.x),
+      minZ: Math.min(a.z, b.z), maxZ: Math.max(a.z, b.z) };
+  }).sort((a, b) => a.minX - b.minX || a.index - b.index);
+  for (let i = 0; i < segments.length; i++) {
+    const first = segments[i]!;
+    const { a, b } = first;
+    const dx = b.x - a.x;
+    const dz = b.z - a.z;
+    for (let j = i + 1; j < segments.length; j++) {
+      const second = segments[j]!;
+      if (second.minX > first.maxX + EPSILON) break;
+      const apart = Math.abs(first.index - second.index);
+      if (apart === 1 || apart === samples.length - 1 ||
+        first.maxZ < second.minZ - EPSILON || second.maxZ < first.minZ - EPSILON) continue;
+      const { a: c, b: d } = second;
+      const ex = d.x - c.x;
+      const ez = d.z - c.z;
+      const qx = c.x - a.x;
+      const qz = c.z - a.z;
+      const cross = dx * ez - dz * ex;
+      if (Math.abs(cross) <= EPSILON) {
+        if (Math.abs(qx * dz - qz * dx) <= EPSILON) {
+          throw new RangeError('crossing angle must be at least 45 degrees');
+        }
+        continue;
+      }
+      const t = (qx * ez - qz * ex) / cross;
+      const u = (qx * dz - qz * dx) / cross;
+      if (t < -EPSILON || t > 1 + EPSILON || u < -EPSILON || u > 1 + EPSILON) continue;
+      const ay = a.y + (b.y - a.y) * t;
+      const cy = c.y + (d.y - c.y) * u;
+      if (Math.abs(ay - cy) < 12 - EPSILON) {
+        throw new RangeError('crossing centreline height difference must be at least 12 m');
+      }
+      if (Math.abs(dx * ex + dz * ez) > Math.SQRT1_2 * Math.hypot(dx, dz) * Math.hypot(ex, ez) + EPSILON) {
+        throw new RangeError('crossing angle must be at least 45 degrees');
+      }
+      const ad = wrap(a.distance + (first.index + 1 === samples.length ? length - a.distance : b.distance - a.distance) * t, length);
+      const cd = wrap(c.distance + (second.index + 1 === samples.length ? length - c.distance : d.distance - c.distance) * u, length);
+      if (!onDeck(track, ay > cy ? ad : cd)) {
+        throw new RangeError('upper crossing must be within a deck');
+      }
+      checkApproach(ad);
+      checkApproach(cd);
+    }
+  }
+
+  if (def.decks?.length) {
+    // 2 × maximum wall half-width (13.65) + explosion radius (4.5).
+    const reach = 31.8;
+    const deckSamples = samples.filter(sample => onDeck(track, sample.distance));
+    const outsideSamples = samples.filter(sample => !onDeck(track, sample.distance));
+    for (const a of deckSamples) for (const b of outsideSamples) {
+      const gap = Math.abs(a.distance - b.distance);
+      if (Math.min(gap, length - gap) <= reach) continue;
+      if ((a.x - b.x) ** 2 + (a.z - b.z) ** 2 <= reach ** 2 + EPSILON && Math.abs(a.y - b.y) < 8 - EPSILON) {
+        // LEVEL_GAP (6.0) + maximum jump height (2.0); no dependency on race state.
+        throw new RangeError('deck surface height difference must be at least 8 m within 31.8 m');
+      }
+    }
+  }
+}
+
 /** Throws on unsafe geometry without changing the source definition or its JSON. */
 export function validateTrackDef(def: TrackDef): void {
   validateWidths(def.roadHalfWidth, def.wallHalfWidth);
@@ -247,6 +343,45 @@ export function validateTrackDef(def: TrackDef): void {
     }
     addDistance(key.distance);
   }
+
+  const slopes = track.samples.map(sample => slopeAt(track, sample.distance));
+  if (slopes.some(slope => !Number.isFinite(slope) || Math.abs(slope) > 0.30 + EPSILON)) {
+    throw new RangeError('Track slope must not exceed 0.30');
+  }
+  const bankKeys = def.bankKeys;
+  if (bankKeys?.length) for (let i = 0; i < bankKeys.length; i++) {
+    const key = bankKeys[i]!;
+    checkDistance(key.distance, 'bankKeys distance');
+    requireFinite(key.roll, 'bankKeys roll');
+    if (Math.abs(key.roll) > 0.35) throw new RangeError('bankKeys roll must not exceed 0.35');
+    if (i > 0 && key.distance <= bankKeys[i - 1]!.distance) {
+      throw new RangeError('bankKeys distances must be strictly increasing');
+    }
+  }
+  if (bankKeys?.length) for (let i = 0; i < bankKeys.length; i++) {
+    const key = bankKeys[i]!;
+    const next = bankKeys[(i + 1) % bankKeys.length]!;
+    const span = next.distance - key.distance + (i === bankKeys.length - 1 ? length : 0);
+    if (span === 0 && next.roll !== key.roll) throw new RangeError('bankKeys at zero and length must match');
+    if (Math.abs(next.roll - key.roll) > 0.02 * span + EPSILON) {
+      throw new RangeError('bankKeys twist must not exceed 0.02 rad/m (including the seam)');
+    }
+  }
+  const decks = def.decks;
+  if (decks?.length) for (let i = 0; i < decks.length; i++) {
+    const deck = decks[i]!;
+    checkDistance(deck.from, 'deck from');
+    checkDistance(deck.to, 'deck to');
+    const span = deck.to === length && deck.from === 0 ? length : wrap(deck.to - deck.from, length);
+    for (let j = 0; j < i; j++) {
+      const previous = decks[j]!;
+      const previousSpan = previous.to === length && previous.from === 0 ? length : wrap(previous.to - previous.from, length);
+      if (arcsOverlap(deck.from, span, previous.from, previousSpan, length)) {
+        throw new RangeError('deck distance ranges must not overlap');
+      }
+    }
+  }
+  validateCrossings(track, slopes);
 
   const barriers = def.barriers ?? [];
   for (const barrier of barriers) {
@@ -370,6 +505,18 @@ export function validateTrackDef(def: TrackDef): void {
     }
   }
   const jumps = zones.filter(zone => zone.kind === 'jump');
+  for (const jump of jumps) {
+    const takeoff = slopeAt(track, jump.to);
+    // slopeAt is constant until the next sample; include every change in (to, to + 40].
+    let landing = Math.min(takeoff, slopeAt(track, jump.to + 40));
+    for (let i = 0; i < track.samples.length; i++) {
+      const gap = wrap(track.samples[i]!.distance - jump.to, length);
+      if (gap > 0 && gap <= 40 + EPSILON) landing = Math.min(landing, slopes[i]!);
+    }
+    if (landing < takeoff - 0.05 - EPSILON) {
+      throw new RangeError('jump landing slope must be at least takeoff slope minus 0.05');
+    }
+  }
 
   // Include exact feature boundaries as well as the shared geometry samples.
   const sectionDistances = (from: number, to: number): number[] => {

@@ -2,12 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { barrierCenterAt, barrierHalfWidthAt, corridorAt, exclusionAt, freeIntervalFor, KART_RADIUS,
   validateCoursePlayability, validateTrackDef, widthAt } from './corridor';
 import { KART_RADIUS as RACE_RADIUS } from './race';
-import { buildTrack } from './track';
+import { buildTrack, rollAt, slopeAt } from './track';
+import { bankCourse, figureEightCourse, figureEightCrossings, slopeCourse } from './elevation.fixture';
 import { getTrack, TRACK_IDS, TRACKS } from './tracks';
 import type { Barrier, BarrierMotion, SurfaceZone, TrackDef } from './types';
 
 // Synthetic corridor cases keep their original dimensions, independent of MEADOW's layout.
-const base: TrackDef = { ...TRACKS.meadow, roadHalfWidth: 7.2, wallHalfWidth: 10.5, boxLanes: [-4.1, 0, 4.1] };
+const base: TrackDef = { ...TRACKS.meadow, roadHalfWidth: 7.2, wallHalfWidth: 10.5, boxLanes: [-4.1, 0, 4.1],
+  // Corridor-only fixtures have flat landings; the real course is tested separately.
+  controlPoints: TRACKS.meadow.controlPoints.map(([x, , z]) => [x, 0, z]),
+};
 const length = getTrack('meadow').length;
 const band: Barrier = { from: 25, to: 40, center: 0, halfWidth: 2, taper: 4 };
 const fixture = (overrides: Partial<TrackDef> = {}): TrackDef => ({ ...base, ...overrides });
@@ -720,6 +724,201 @@ describe('validateTrackDef', () => {
     ] }))).toThrow(/strictly increasing/);
     expect(() => validateTrackDef(fixture({ wallHalfWidth: 7 }))).toThrow(/wallHalfWidth/);
     expect(() => validateTrackDef(fixture({ barriers: [{ ...band, to: band.from }] }))).toThrow(/endpoints/);
+  });
+});
+
+describe('validateTrackDef elevation', () => {
+  const eight = figureEightCourse();
+  const crossing = figureEightCrossings(eight);
+  const flat = slopeCourse(0);
+  const flatLength = buildTrack(flat).length;
+  const reject = (def: TrackDef, message: RegExp): void => {
+    expect(() => validateTrackDef(def)).toThrow(RangeError);
+    expect(() => validateTrackDef(def)).toThrow(message);
+  };
+  // Only XZ geometry changes arc lengths; keep the upper deck centred on its pass.
+  const crossingGeometry = (controlPoints: TrackDef['controlPoints']): TrackDef => {
+    const def = { ...eight, controlPoints };
+    const { upper } = figureEightCrossings(def);
+    return { ...def, decks: [{ from: upper - 20, to: upper + 20 }] };
+  };
+  const nearbyDeck = (height: number): TrackDef => syntheticDef({
+    samplesPerSegment: 1, decks: [{ from: 80, to: 120 }],
+    controlPoints: [
+      [-100, height, 0], [0, height, 0], [100, height, 0], [150, height, 0],
+      [180, height / 2, 15], [150, 0, 30], [100, 0, 30], [0, 0, 30],
+      [-100, 0, 30], [-150, 0, 30], [-180, height / 2, 15], [-150, height, 0],
+    ],
+  });
+  const landingCourse = (grade: number): TrackDef => syntheticDef({
+    samplesPerSegment: 1, surfaces: [{ kind: 'jump', from: 38, to: 40 }],
+    controlPoints: [
+      [0, 0, 0], [40, -0.8, 0], [60, -1.2, 0], [70, -1.2 + 10 * grade, 0],
+      [100, -1.2 + 10 * grade, 0], [150, 0, 50], [100, 0, 100], [0, 0, 100],
+    ],
+  });
+
+  it.each([
+    ['figure eight', eight], ['bank 0.3', bankCourse(0.3)], ['slope 0.3', slopeCourse(0.3)],
+  ] as const)('accepts %s and its JSON round trip without mutation', (_name, def) => {
+    const before = JSON.stringify(def);
+    expect(() => validateTrackDef(def)).not.toThrow();
+    expect(() => validateTrackDef(JSON.parse(before))).not.toThrow();
+    expect(JSON.stringify(def)).toBe(before);
+  });
+
+  it('accepts exact 0.30 slopes and 12 m / 45 degree crossings in sampled polylines', () => {
+    // One sample per control point isolates the exact bounds from spline overshoot.
+    expect(() => validateTrackDef({ ...slopeCourse(0.3), samplesPerSegment: 1 })).not.toThrow();
+    for (const angle of [45, 90]) {
+      const def = { ...eight, samplesPerSegment: 1, controlPoints: eight.controlPoints.map(([x, y, z]) =>
+        [x / Math.tan(angle * Math.PI / 360), y * 12 / 12.5, z] as const) };
+      const upper = buildTrack(def).samples.find(sample => sample.x === 0 && sample.z === 0 && sample.y === 12)!.distance;
+      expect(() => validateTrackDef({ ...def, decks: [{ from: upper - 20, to: upper + 20 }] })).not.toThrow();
+    }
+  });
+
+  it('rejects a slope of 0.35', () => {
+    reject(slopeCourse(0.35), /slope.*0.30/);
+    reject(slopeCourse(-0.35), /slope.*0.30/);
+  });
+
+  it('rejects a roll of 0.40', () => {
+    reject(bankCourse(0.40), /roll.*0.35/);
+    reject(bankCourse(-0.40), /roll.*0.35/);
+  });
+
+  it('rejects twist of 0.03 rad/m between keys and across the seam', () => {
+    reject({ ...flat, bankKeys: [{ distance: 0, roll: 0 }, { distance: 10, roll: 0.3 }] }, /twist/);
+    reject({ ...flat, bankKeys: [{ distance: 5, roll: 0 }, { distance: flatLength - 5, roll: 0.3 }] }, /twist/);
+  });
+
+  it('rejects mismatching rolls at zero and length', () => {
+    reject({ ...flat, bankKeys: [{ distance: 0, roll: 0 }, { distance: flatLength, roll: 0.1 }] }, /must match/);
+  });
+
+  it('rejects a crossing centreline height difference of 11 m', () => {
+    reject(crossingGeometry(eight.controlPoints.map(([x, y, z]) => [x, y * 11 / 12.5, z])), /height.*12 m/);
+  });
+
+  it('rejects deck/outside samples 30 m apart with a 7.9 m height difference, without a crossing', () => {
+    const def = nearbyDeck(7.9);
+    const track = buildTrack(def);
+    const upper = track.samples[1]!;
+    const lower = track.samples[7]!;
+    expect(Math.hypot(upper.x - lower.x, upper.z - lower.z)).toBe(30);
+    expect(upper.y - lower.y).toBe(7.9);
+    expect(Math.min(lower.distance - upper.distance, track.length - lower.distance + upper.distance)).toBeGreaterThan(31.8);
+    reject(def, /deck surface height.*8 m/);
+    expect(() => validateTrackDef(nearbyDeck(8))).not.toThrow();
+  });
+
+  it('rejects a crossing angle of 30 degrees', () => {
+    const xScale = 1 / Math.tan(Math.PI / 12);
+    reject(crossingGeometry(eight.controlPoints.map(([x, y, z]) => [x * xScale, y, z])), /angle.*45/);
+  });
+
+  it('rejects a lower crossing approach slope of 0.15', () => {
+    const def = crossingGeometry(eight.controlPoints.map(([x, y, z]) =>
+      [x, y === 0 && Math.abs(x) <= 15 && Math.abs(z) <= 15 ? 0.15 * (x + z) * Math.SQRT1_2 : y, z]));
+    expect(slopeAt(buildTrack(def), crossing.lower)).toBeGreaterThan(0.10);
+    reject(def, /crossing slope/);
+  });
+
+  it('rejects roll 0.2 on the upper crossing approach, including a peak between samples', () => {
+    const peak = crossing.upper + 0.3;
+    const def = { ...eight, bankKeys: [
+      { distance: peak - 10, roll: 0 }, { distance: peak, roll: 0.2 }, { distance: peak + 10, roll: 0 },
+    ] };
+    expect(rollAt(buildTrack(def), peak)).toBeCloseTo(0.2, 12);
+    reject(def, /crossing roll/);
+  });
+
+  it('rejects a checkpoint gate 20 m from either crossing pass', () => {
+    for (const start of [2, 15]) {
+      const controlPoints = [...eight.controlPoints.slice(start), ...eight.controlPoints.slice(0, start)];
+      const def = { ...eight, checkpointCount: 1, controlPoints };
+      const track = buildTrack(def);
+      const upperIndex = (3 - start + controlPoints.length) % controlPoints.length;
+      const upper = track.samples[upperIndex * def.samplesPerSegment]!.distance;
+      reject({ ...def, decks: [{ from: upper - 20, to: upper + 20 }] }, /checkpoint gate.*25 m/);
+    }
+  });
+
+  it('rejects an upper crossing pass without a declared deck', () => {
+    reject({ ...eight, decks: undefined }, /upper crossing.*deck/);
+    reject({ ...eight, decks: [] }, /upper crossing.*deck/);
+  });
+
+  it('rejects overlapping decks, including across the seam', () => {
+    reject({ ...eight, decks: [...eight.decks!, { from: crossing.upper, to: crossing.upper + 30 }] }, /deck.*overlap/);
+    reject({ ...flat, decks: [{ from: flatLength - 10, to: 10 }, { from: 5, to: 15 }] }, /deck.*overlap/);
+    reject({ ...flat, decks: [{ from: 0, to: flatLength }, { from: 50, to: 60 }] }, /deck.*overlap/);
+  });
+
+  it('rejects takeoff -0.02 followed by landing -0.10 and accepts the -0.05 difference boundary', () => {
+    const def = landingCourse(-0.10);
+    const track = buildTrack(def);
+    expect(slopeAt(track, 40)).toBeCloseTo(-0.02, 12);
+    expect(slopeAt(track, 60)).toBeCloseTo(-0.10, 12);
+    reject(def, /jump landing slope/);
+    expect(() => validateTrackDef(landingCourse(-0.07))).not.toThrow();
+  });
+
+  it('checks landing slopes across the lap seam', () => {
+    const original = landingCourse(-0.10);
+    const controlPoints = [...original.controlPoints.slice(3), ...original.controlPoints.slice(0, 3)];
+    const def = { ...original, controlPoints };
+    const to = buildTrack(def).samples[controlPoints.length - 2]!.distance;
+    reject({ ...def, surfaces: [{ kind: 'jump', from: to - 2, to }] }, /jump landing slope/);
+  });
+
+  it('accepts all three CANYON jumps with downhill takeoffs', () => {
+    const track = getTrack('canyon');
+    const jumps = track.def.surfaces.filter(zone => zone.kind === 'jump');
+    expect(jumps).toHaveLength(3);
+    for (const jump of jumps) {
+      const takeoff = slopeAt(track, jump.to);
+      expect(takeoff).toBeLessThan(0);
+      for (const sample of track.samples) {
+        const gap = (sample.distance - jump.to + track.length) % track.length;
+        if (gap > 0 && gap <= 40) expect(slopeAt(track, sample.distance)).toBeGreaterThanOrEqual(takeoff - 0.05);
+      }
+      expect(slopeAt(track, jump.to + 40)).toBeGreaterThanOrEqual(takeoff - 0.05);
+    }
+    expect(() => validateTrackDef(track.def)).not.toThrow();
+  });
+
+  it.each(TRACK_IDS)('preserves %s validation with original motions and with motions removed', id => {
+    const original = TRACKS[id];
+    for (const def of [original, { ...original, barriers: original.barriers?.map(({ motion: _motion, ...barrier }) => barrier) }]) {
+      const before = JSON.stringify(def);
+      expect(() => validateTrackDef(def)).not.toThrow();
+      expect(() => validateTrackDef({ ...def, bankKeys: [], decks: [] })).not.toThrow();
+      expect(JSON.stringify(def)).toBe(before);
+    }
+  });
+
+  it('accepts the roll and twist limits, matching seam keys, and a single constant bank key', () => {
+    expect(() => validateTrackDef(bankCourse(0.35))).not.toThrow();
+    expect(() => validateTrackDef({ ...flat, bankKeys: [{ distance: 0, roll: -0.35 }] })).not.toThrow();
+    expect(() => validateTrackDef({ ...flat, bankKeys: [
+      { distance: 5, roll: 0 }, { distance: flatLength - 5, roll: 0.2 },
+    ] })).not.toThrow();
+  });
+
+  it.each([NaN, Infinity, -Infinity, -1, flatLength + 1])('rejects invalid bank/deck distances (%s)', distance => {
+    reject({ ...flat, bankKeys: [{ distance, roll: 0 }] }, /bankKeys distance/);
+    reject({ ...flat, decks: [{ from: distance, to: 10 }] }, /deck from/);
+    reject({ ...flat, decks: [{ from: 10, to: distance }] }, /deck to/);
+  });
+
+  it.each([NaN, Infinity, -Infinity])('rejects non-finite roll (%s) before JSON restoration', roll => {
+    reject({ ...flat, bankKeys: [{ distance: 0, roll }] }, /bankKeys roll/);
+  });
+
+  it.each([10, 9])('rejects duplicate or decreasing bank distances (%s)', distance => {
+    reject({ ...flat, bankKeys: [{ distance: 10, roll: 0 }, { distance, roll: 0 }] }, /strictly increasing/);
   });
 });
 

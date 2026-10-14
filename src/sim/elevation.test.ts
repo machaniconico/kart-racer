@@ -10,9 +10,9 @@ import type { InputFrame, RaceState, Track } from './types';
 
 afterEach(() => vi.restoreAllMocks());
 
-// sha256 of the final JSON after 2000 AI ticks on slopeCourse(0), measured on HEAD aa3c203
-// (protocol v13: HEAD's race.ts, before the M4-01 slope/bank physics) with this same fixture and procedure.
-const FLAT_COURSE_PIN = 'bff8b0cca5bbf31ab44360e6ea48234dcab12506d20a6ef423ea9e68a5a24455';
+// sha256 of the final JSON after 2000 AI ticks on slopeCourse(0); aa3c203's race.ts (before M4-01)
+// and HEAD's race.ts (5800fc4) both give this value with this same fixture and procedure.
+const FLAT_COURSE_PIN = '4e48385419ddf18007f71f58761bb09b5cb935a10a1abc029fbf102adce00dba';
 
 function soloRace(track: Track, distance: number, speed = 0, offset = 0): RaceState {
   vi.spyOn(tracks, 'getTrack').mockReturnValue(track);
@@ -173,7 +173,7 @@ describe('elevation fixtures', () => {
       banked++;
       expect(radiusAt(track, i), `distance ${sample.distance}`).toBeGreaterThanOrEqual(40);
     });
-    expect(banked).toBeGreaterThan(100);
+    expect(banked).toBeGreaterThan(30);
   });
 
   it('keeps slopeCourse corners exactly flat at their end heights', () => {
@@ -187,9 +187,9 @@ describe('elevation fixtures', () => {
           expect(slopeAt(track, sample.distance)).toBe(0);
         }
       }
-      // The uniform spline overshoots the eased ramp by < 3% where the easing meets the linear part.
+      // One sample per control point, so sample grades are chord grades and never overshoot.
       for (const sample of track.samples) {
-        expect(Math.abs(slopeAt(track, sample.distance))).toBeLessThanOrEqual(Math.abs(grade) * 1.03 + 1e-12);
+        expect(Math.abs(slopeAt(track, sample.distance))).toBeLessThanOrEqual(Math.abs(grade) + 1e-12);
       }
     }
   });
