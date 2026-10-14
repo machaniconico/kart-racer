@@ -16,7 +16,7 @@ export const DRIFT_ORANGE_TIME = 1.5;
 export const NEUTRAL_INPUT: Readonly<InputFrame> = Object.freeze({ steer: 0, throttle: 0, brake: false, drift: false, useItem: false });
 export { BOX_RESPAWN_TIME } from './items';
 export const KART_RADIUS = 0.95;
-export const RACE_FINISH_TIMEOUT = 45;
+export const RACE_FINISH_TIMEOUT = 90;
 const COLORS = [0xffbf38, 0xff5f80, 0x56d9c1, 0x8c7bff, 0x4dc6ff, 0xff854f, 0xf04a4a, 0xf4f4f0];
 const NAMES = ['YOU', 'PIP', 'NOVA', 'MOSS', 'ZIPP', 'ROCO', 'LUNE', 'TAFF'];
 

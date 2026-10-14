@@ -109,8 +109,8 @@ describe('control protocol', () => {
   });
 
   it('isolates protocol v14 rooms from earlier versions', () => {
-    expect(PROTOCOL_VERSION).toBe(14);
-    expect(ROOM_PREFIX).toBe('pcircuit-v14-');
+    expect(PROTOCOL_VERSION).toBe(15);
+    expect(ROOM_PREFIX).toBe('pcircuit-v15-');
     expect(fromPeerId('pcircuit-v13-AB2X')).toBeNull();
     expect(fromPeerId('pcircuit-v12-AB2X')).toBeNull();
     expect(fromPeerId('pcircuit-v9-AB2X')).toBeNull();
@@ -292,7 +292,7 @@ describe('control protocol', () => {
       held ||= state.karts.some(kart => kart.effects.holding === 1);
       for (const entity of [...state.projectiles, ...state.traps]) kinds.add(entity.kind);
     };
-    for (let tick = 0; tick < 60 * 180 && state.phase !== 'finished'; tick++) {
+    for (let tick = 0; tick < 60 * 420 && state.phase !== 'finished'; tick++) {
       if (state.phase === 'racing' && state.racingTicks === 0) {
         const items = ['seeker', 'skycomet', 'bomb', 'decoy', 'bolt', 'trap', 'ink', 'autopilot'] as const;
         items.forEach((item, id) => {
@@ -317,7 +317,7 @@ describe('control protocol', () => {
     }
     expect(parseControlMessage(encodeControlMessage({ type: 'race_end', raceId: 1, finalState: state })))
       .toEqual({ type: 'race_end', raceId: 1, finalState: state });
-  }, 20_000);
+  }, 120_000);
 });
 
 describe('MockTransport', () => {

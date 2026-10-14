@@ -234,7 +234,7 @@ test('C-011: host laps 1 reaches the guest within one second and finishes in one
     expect(await page.evaluate(() => window.__kartDebug.state.laps)).toBe(1);
     await expect(page.locator('#lap-total')).toHaveText('/ 1');
   }
-  for (let seconds = 0; seconds < 180; seconds++) {
+  for (let seconds = 0; seconds < 420; seconds++) {
     const finished = await host.evaluate(() => {
       window.__kartDebug.advance(60, true);
       return window.__kartDebug.state.phase === 'finished';
@@ -291,7 +291,7 @@ test('§8.2 6: lobby and eight-row results at mobile sizes', async ({ page: host
   await startRace(host, guest);
   // Advance only the authoritative host. Yield between batches so real data
   // channels and guest heartbeats keep running while the simulation fast-forwards.
-  for (let seconds = 0; seconds < 400; seconds++) {
+  for (let seconds = 0; seconds < 600; seconds++) {
     const finished = await host.evaluate(() => {
       window.__kartDebug.advance(60, true);
       return window.__kartDebug.state.phase === 'finished';

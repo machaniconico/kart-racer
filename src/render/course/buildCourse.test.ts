@@ -31,12 +31,17 @@ import { neon } from './themes/neon';
 // neon 125 / 66_080 / 30 -> 125 / 62_748 / 30 (layout 2).
 // M4-05, same Chromium setup and all 10 frames: snowpeak layout 2 -> 3,
 // 125 / 41_952 / 31 -> 125 / 42_296 / 31 (bank boundaries add ribbon triangles).
-const RENDER_BASELINE = {
-  meadow: { drawCalls: 123, triangles: 41_530, meshes: 29 },
-  canyon: { drawCalls: 129, triangles: 54_564, meshes: 40 },
-  snowpeak: { drawCalls: 125, triangles: 42_296, meshes: 31 },
-  neon: { drawCalls: 125, triangles: 62_748, meshes: 30 },
-} as const;
+// M5-00: every course is rebuilt in M5, so each baseline is null (pending) until M5-05
+// re-measures it. Last values: meadow 123 / 41_530 / 29, canyon 129 / 54_564 / 40,
+// snowpeak 125 / 42_296 / 31, neon 125 / 62_748 / 30. Triangle and draw-call budgets live
+// in e2e/courses.spec.ts (node cannot render); null here skips only the mesh pin.
+type RenderBaseline = { drawCalls: number; triangles: number; meshes: number } | null;
+const RENDER_BASELINE: Record<'meadow' | 'canyon' | 'snowpeak' | 'neon', RenderBaseline> = {
+  meadow: null,
+  canyon: null,
+  snowpeak: null,
+  neon: null,
+};
 
 // Only the browser's text drawing context is supplied. All three objects and
 // their dispose events are real; these tests run in Vitest's node environment.
@@ -722,8 +727,11 @@ describe('variable widths and batched barriers', () => {
     // M3-05 NEON: old limit 30 + 2; add two moving bands and one spin disc (30 + 2 + 3).
     const motionMeshes = id === 'neon' ? 3 : 0;
     const course = build(track, theme);
-    expect(meshCount(course.group)).toBeLessThanOrEqual(RENDER_BASELINE[id].meshes + 2 + motionMeshes);
-    expect(meshCount(course.group)).toBe(RENDER_BASELINE[id].meshes + motionMeshes);
+    const baseline = RENDER_BASELINE[id];
+    if (baseline) {
+      expect(meshCount(course.group)).toBeLessThanOrEqual(baseline.meshes + 2 + motionMeshes);
+      expect(meshCount(course.group)).toBe(baseline.meshes + motionMeshes);
+    }
     expect(course.group.getObjectByName('motion')!.children).toHaveLength(motionMeshes);
   });
 });

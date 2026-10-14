@@ -9,7 +9,7 @@ export default defineConfig({
   retries: 0,
   // Locally a pass that needed a retry still fails, so flakiness is not hidden behind "3 green runs".
   failOnFlakyTests: !process.env.CI,
-  timeout: 120_000,
+  timeout: 300_000,
   expect: { timeout: 10_000 },
   outputDir: 'test-results',
   reporter: [['list'], ['html', { open: 'never' }]],

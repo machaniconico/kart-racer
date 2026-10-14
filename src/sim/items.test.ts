@@ -542,7 +542,7 @@ describe('effect snapshot compatibility and deterministic replay', () => {
       hash = Math.imul(hash ^ character.charCodeAt(0), 0x01000193) >>> 0;
     }
     expect(hash.toString(16).padStart(8, '0')).toBe(LAYOUT_FINGERPRINT);
-    expect(PROTOCOL_VERSION).toBe(14);
+    expect(PROTOCOL_VERSION).toBe(15);
     const state = race();
     state.karts[0]!.item = 'rapidDash';
     press(state, state.karts[0]!);

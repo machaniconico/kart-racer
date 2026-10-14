@@ -50,7 +50,7 @@ afterEach(() => vi.restoreAllMocks());
 
 it.each(MEADOW_FINAL_JSON)('pins MEADOW final JSON (seed %i)', (seed, ...hashes) => {
   const state = createRace(seed, { racers: [] });
-  for (let tick = 0; tick < 60 * 180 && state.phase !== 'finished'; tick++) {
+  for (let tick = 0; tick < 60 * 420 && state.phase !== 'finished'; tick++) {
     stepRace(state, state.karts.map(kart => getAIInput(state, kart.id)));
   }
   expect(state.phase).toBe('finished');
@@ -60,7 +60,7 @@ it.each(MEADOW_FINAL_JSON)('pins MEADOW final JSON (seed %i)', (seed, ...hashes)
   const pinned: string | undefined = column ? hashes[column - 1] : undefined;
   if (pinned && pinned !== 'pending-ci') expect(digest).toBe(pinned);
   else console.info(`MEADOW final hash (${process.platform}-${process.arch}) seed ${seed}: ${digest}`);
-}, 30_000);
+}, 120_000);
 
 function syntheticTrack(overrides: Partial<TrackDef> = {}): Track {
   return buildTrack({

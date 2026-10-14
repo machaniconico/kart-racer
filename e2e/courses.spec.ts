@@ -16,13 +16,24 @@ const courses = [
   // M3-08 re-measured 2026-10-14, same setup: NEON layout 2 -> 3:
   // drawCalls / triangles: 125 / 62_748 -> 126 / 62_812; retain the old budget baseline.
   // M4-06: SNOWPEAK layout 3 retains the layout-2 budget for the elevated/banked road.
-  { id: 'meadow', name: 'MEADOW LOOP', layout: 2, drawCalls: 123, triangles: 41_530 },
-  { id: 'canyon', name: 'SUNSCAR CANYON', layout: 4, drawCalls: 129, triangles: 54_564 },
-  { id: 'snowpeak', name: 'FROSTBITE PEAK', layout: 3, drawCalls: 125, triangles: 41_952 },
-  { id: 'neon', name: 'NEON NIGHTLINE', layout: 3, drawCalls: 125, triangles: 62_748 },
-] as const;
+  // M5-00: every course is rebuilt in M5; baselines are null (pending) until M5-05 re-measures.
+  // Last values: meadow 123 / 41_530, canyon 129 / 54_564, snowpeak 125 / 41_952, neon 125 / 62_748.
+  { id: 'meadow', name: 'MEADOW LOOP', drawCalls: null, triangles: null },
+  { id: 'canyon', name: 'SUNSCAR CANYON', drawCalls: null, triangles: null },
+  { id: 'snowpeak', name: 'FROSTBITE PEAK', drawCalls: null, triangles: null },
+  { id: 'neon', name: 'NEON NIGHTLINE', drawCalls: null, triangles: null },
+] as const satisfies readonly {
+  id: string; name: string; drawCalls: number | null; triangles: number | null;
+}[];
 
-for (const { id, name, layout, drawCalls: baselineDrawCalls, triangles: baselineTriangles } of courses) {
+// Triangle cap by course length: 60 triangles per metre (ribbon, walls, decks) + 30k for scenery.
+function trianglesCap(length: number): number {
+  return 60 * length + 30_000;
+}
+
+for (const { id, name, drawCalls: baselineDrawCalls, triangles: baselineTriangles } of courses) {
+  // Read from the def so a course story's layoutVersion bump needs no edit here.
+  const layout = getTrack(id).def.layoutVersion ?? 1;
   test(`C-010: ${name} selection, three laps, isolated best and draw budget`, async ({ page }, testInfo) => {
     await page.goto('./');
     await expect(page.locator('#title-screen')).toBeVisible();
@@ -63,9 +74,10 @@ for (const { id, name, layout, drawCalls: baselineDrawCalls, triangles: baseline
     for (const { drawCalls, triangles } of renderSamples) {
       expect(drawCalls).toBeGreaterThan(0);
       expect(drawCalls).toBeLessThanOrEqual(200);
-      expect(drawCalls).toBeLessThanOrEqual(baselineDrawCalls + 20);
       expect(triangles).toBeGreaterThan(0);
-      expect(triangles).toBeLessThanOrEqual(baselineTriangles + 15_000);
+      expect(triangles).toBeLessThanOrEqual(trianglesCap(getTrack(id).length));
+      if (baselineDrawCalls !== null) expect(drawCalls).toBeLessThanOrEqual(baselineDrawCalls + 20);
+      if (baselineTriangles !== null) expect(triangles).toBeLessThanOrEqual(baselineTriangles + 15_000);
     }
     await testInfo.attach('draw-calls', {
       body: JSON.stringify({ id, layout, baselineDrawCalls, baselineTriangles, meshes, renderSamples }), contentType: 'application/json',
@@ -75,7 +87,7 @@ for (const { id, name, layout, drawCalls: baselineDrawCalls, triangles: baseline
     await expect.poll(() => page.evaluate(() => window.__kartDebug.state.phase)).toBe('racing');
     await page.evaluate(() => {
       const debug = window.__kartDebug;
-      for (let second = 0; second < 200 && debug.state.phase !== 'finished'; second++) {
+      for (let second = 0; second < 420 && debug.state.phase !== 'finished'; second++) {
         debug.clearItems();
         debug.advance(60, true);
       }
@@ -157,7 +169,7 @@ for (const laps of [1, 2]) {
     await expect(page.locator('#lap-total')).toHaveText(`/ ${laps}`);
     expect(await page.evaluate(() => window.__kartDebug.state.laps)).toBe(laps);
     await page.evaluate(() => {
-      for (let second = 0; second < 200 && window.__kartDebug.state.phase !== 'finished'; second++) {
+      for (let second = 0; second < 420 && window.__kartDebug.state.phase !== 'finished'; second++) {
         window.__kartDebug.clearItems();
         window.__kartDebug.advance(60, true);
       }
@@ -209,7 +221,7 @@ test('M3-08: NEON eight CPUs finish three laps and mechanisms keep animating', a
     Object.assign(debug.state, createRace(127, { trackId: 'neon', racers: debug.state.karts.map(kart => ({
       name: kart.name, color: kart.color, human: false,
     })) }));
-    for (let second = 0; second < 240 && debug.state.phase !== 'finished'; second++) {
+    for (let second = 0; second < 420 && debug.state.phase !== 'finished'; second++) {
       debug.clearItems();
       debug.advance(60, true);
     }
@@ -302,7 +314,7 @@ for (const human of [true, false]) {
       render(0);
       const samples: { tick: number; d: number; lap: number; cameraPosition: { x: number; y: number; z: number };
         cameraGroundY: number; clearance: number; playerRoll: number }[] = [];
-      for (let tick = 0; tick < 60 * 240 && debug.state.phase !== 'finished'; tick += 10) {
+      for (let tick = 0; tick < 60 * 420 && debug.state.phase !== 'finished'; tick += 10) {
         debug.clearItems();
         // The human uses Controls (ArrowUp + assist), never AI autopilot.
         debug.advance(10, !human);
