@@ -512,3 +512,80 @@ NEON NIGHTLINE に、動く帯（sweep / gate）2 本と回転床 1 つを足し
 
 ### pending-ci ガード（`surfaces.test.ts:43`）を撤去しない判断
 M4-01 が MEADOW golden を取り直し、linux 列を再び `'pending-ci'` にする運用でこのガードを使うため。代わりに「close 時に `'pending-ci'` の値が 0 個」を M4 以降の close story の受け入れに引き継ぐ。
+
+## v6 M4（高低差: 勾配・バンク・立体交差の基盤、プロトコル v13）
+sim に勾配とバンクの物理、立体交差を壊さない判定、`validateTrackDef` の高低差規則、バンクと高架デッキの描画を足した。公開コースで立体交差を使うのは M5 で、M4 の時点では SNOWPEAK の起伏とバンクだけが見える。RaceState にバイトは足さない（`kart.y` は以前から float で送られている）。
+
+### 坂の式（`src/sim/race.ts` の `advanceKart`）
+- `g = slopeAt(track, d) × (sin(heading) × tx + cos(heading) × tz)`（`tx` / `tz` は中心線の接線。上りで正）。`g = 0` では下の係数も重力項も実行せず、平坦コース（NEON）と勾配 0 の合成コースは M4 前とビット一致する。
+- `maxSpeed *= clamp(1 − 0.5 g, 0.80, 1.15)`（boost の乗算の後、草・土の上限の前）。
+- 加速度が 0 でないとき `acceleration *= clamp(1 − 0.8 g, 0.5, 1.3)`。
+- 重力項は惰性（スロットル 0）かブレーキ中だけ: `speed = min(maxSpeed, max(0, speed − 9.8 × 0.6 × g × FIXED_DT))`。下りの惰性で `maxSpeed` を超えない。
+- **静止摩擦**: `|speed| < 0.5 m/s` で、無スロットルまたはブレーキ中は重力項を掛けない。スタートの並びやブレーキ停止で坂を這い出さないための条件（M4-01 で仕様に足した）。
+- 定常速度（全開）は、`maxSpeed` 超過の緩和（`speed > maxSpeed` で `maxSpeed` へ寄せる処理）込みで、勾配 0.3 の直線で平坦の **上り 0.83539×、下り 1.16461×**。計画の 1.05〜1.15 は使わず、`elevation.test.ts` は 0.80〜0.90 / 1.10〜1.20 を検査する。
+
+### `slopeAt` が区分定数である理由
+`slopeAt(track, d)` は d を含むサンプル区間の `(b.y − a.y) / (b.distance − a.distance)`（継ぎ目は最後のサンプルから先頭へ）。`sampleTrack` の y の線形補間と整合し、`TrackSample` にフィールドを足さずに済む。`tracks.test.ts` が `fnv1a32(track.samples)` で MEADOW の全サンプルを pin しているので、`TrackSample` を変えると golden が全て動く。範囲内の distance では `wrapDistance` を通さない（`(d + length) % length` が、ちょうどサンプルの距離を前の区間に丸めうるため）。
+
+### バンク（`rollAt` / `surfaceHeightAt`）
+- `rollAt` は `def.bankKeys` の線形補間（`widthKeys` と同じく継ぎ目で wrap。キー無しは 0）。roll > 0 で +offset 側が高い。
+- `surfaceHeightAt(track, d, offset) = sampleTrack(d).y + sin(roll) × offset`。カートは射影の直後に `roll ≠ 0` のときだけ `y += sin(roll) × lateralOffset` を足す。描画は同じ関数を使い、式を複製しない。
+- 旋回係数: 舵が低い側（`−sign(roll)` 側）へ向くとき `turnRate × (1 + 0.3 × |roll| / 0.35)`。高い側では等倍。`roll = 0` では乗算しない。
+
+### 立体交差の判定（`track.ts` / `laps.ts` / `items.ts`）
+- **同レベル閾値 `LEVEL_GAP = 6.0`**（計画は 4.0）。同じデッキで XZ 距離 r 以内の 2 体の最大 Δy は `r × sin(0.35) + 0.30 r + ジャンプ 2.0` で、最大の判定半径は爆発の 4.5 m なので **4.9 m**。4.0 では同デッキの爆発を取りこぼす。カート同士の衝突、爆発、ボックス、周回盾、トラップ、ターゲティング（45 m）、弾に `sameLevel` を要求する。所有者から離れたかどうかの判定（owner-cleared）だけは距離の測定なので入れない。
+- **交差点の高低差 ≥ 12**（計画は 9）。別デッキの最小 Δy は `12 − 13.65 × sin(0.10) − 0.10 × 4.5 × 2 − 2.0 = 7.7 m`（交差 ±20 m を勾配 ≤ 0.10・roll ≤ 0.10 に制限した場合）で、6.0 を上回る。
+- **デッキ対の路面高度差 ≥ 8.0** = `LEVEL_GAP + JUMP_HEIGHT`（6.0 + 2.0）。デッキ内のサンプルとデッキ外のサンプル（弧長差 > 31.8 m）の対で、XZ ≤ **31.8 m**（= 2 × 最大壁半幅 13.65 + 爆発半径 4.5）なら必須。交差点だけの検査では足りない: **45° で交わると重なりは交差点から約 33 m まで広がる**（critic の反証）。90° でも勾配・バンク・ジャンプを足すと余裕は 4.5 m。
+- `projectToTrack(track, x, z, previousDistance?, yHint?)`: ±20 m の窓が使えない**全域探索のときだけ** `yHint`（路面高さ。ジャンプの放物線を含めない）を使い、両端が `LEVEL_GAP` 超離れたセグメントを飛ばす。候補が 0 なら飛ばさずに再探索する。窓の経路は変えないので通常走行はビット一致。既存 4 コースの全域探索は、路面高さを与えても結果が変わらない（`crossing.test.ts`）。
+- 周回ゲートは XZ の判定に加え、**弧長 ±40 m** 以内のときだけ通過とする。別デッキがゲートの XZ を踏んでも `nextCheckpoint` は進まない。
+
+### validateTrackDef の高低差規則（`corridor.ts`、すべて `RangeError`）
+| 規則 | 値 |
+| --- | --- |
+| 全サンプル区間の `|slopeAt|` | ≤ 0.30 |
+| `bankKeys` | distance は [0, length] で狭義単調増加、`|roll|` ≤ 0.35、隣接キー間と継ぎ目の twist ≤ 0.02 rad/m、0 と length の両方にキーがあれば roll が一致 |
+| `decks` | from / to が [0, length]、区間どうしが重ならない |
+| デッキ対の高度差 | XZ ≤ 31.8 m のデッキ内 × デッキ外（弧長差 > 31.8 m）のサンプル対で ≥ 8.0 |
+| 中心線の自己交差 | 隣接以外の全区間対で検出。交差点の中心線 |Δy| ≥ 12、交差角 ≥ 45° |
+| 交差 ±20 m | 両デッキとも `|slopeAt|` ≤ 0.10 かつ `|rollAt|` ≤ 0.10（40 m 内のサンプルと bankKey も検査） |
+| ゲート | 交差から弧長 25 m 以内に置けない |
+| 上側の通過点 | `decks` のいずれかの区間に含まれる |
+| ジャンプ台 | 着地勾配 ≥ 踏切勾配 − 0.05 |
+
+- **ジャンプの規則を計画から変えた理由**: 計画の「上り→平坦」は使わない。CANYON の 3 つのジャンプは踏切が下り（−0.084 / −0.069 / −0.018）で、`canyon.test.ts` が下りを要求する。踏切勾配は `slopeAt(to)`、着地勾配は (to, to + 40 m] の `slopeAt` の最小値。
+- 交差・`bankKeys`・`decks` の無いコースは追加の計算を踏まない（4 コースの検証結果は不変）。自己交差の検出は x でソートした掃引で、交差のないコースは全対を走査しない。
+
+### 描画（`buildCourse.ts` / `kartRoll.ts`）
+- 路面リボン・縁石・レール・ポスト・景物の y は `surfaceHeightAt`。roll = 0 のコースは今の値とビット一致（`buildCourse.test.ts` の MEADOW 外観回帰が不変）。
+- `decks` の区間は地面リボン（土手）を出さず、路面を別メッシュ（側板と裏面つき、厚さ 0.6 m、影を落とす・受ける）にし、支柱を `InstancedMesh` 1 つで立てる（間隔 ≤ 20 m、下端は下側路面か −1.35 m の低い方）。下側路面の XZ 範囲には景物を置かない。
+- カートは `kartRotationZ` でバンクに合わせて傾く（`body.rotation.z` の舵の傾きとは別）。`GameRenderer.getCameraPosition()` を足した（E2E が使う）。
+
+### SNOWPEAK v3（`layoutVersion: 3`）
+| 項目 | 値 |
+| --- | --- |
+| 高低差 | **19.43 m**（旧 約 6.3 m） |
+| 最大勾配 | **0.2011**（下限 0.20 に 0.0011 の差。上限 0.30 には余裕） |
+| バンク | 30–85 m の最初の氷のスイーパー、roll **−0.3**（50〜65 m が最大。入口 30→50 と出口 65→85 は 20 m の傾斜で twist 0.015 rad/m） |
+| スタート | 最終進入は平坦（グリッドが這い出さない） |
+
+ベストタイムは SNOWPEAK だけが `layout` の不一致でリセットされる（他 3 コースは引き継がれる）。
+
+### 基準の更新
+| 項目 | 旧 → 新 |
+| --- | --- |
+| BASELINE meadow（`handling.test.ts`） | v11（18.5373 s）→ **v13（18.8544 s）**（M4-01、×1.017） |
+| BASELINE canyon | v11（19.6748 s）→ **v13（19.7634 s）**（M4-01、×1.005。bandHits は上限 4 のまま、実測 0） |
+| BASELINE snowpeak | v11（17.9398 s）→ M4-01 の 17.8699 s（×0.996）→ **M4-05 の 17.7273 s**（×0.992、壁ヒット 0、帯ヒット 0）。M4-05 の比は M4-01 の値を基準に 0.95〜1.10 を検査する |
+| BASELINE neon | 変更なし（平坦でビット一致） |
+| `guestSession.test.ts` の非ローカル誤差上限（RTT 120 ms / 損失 10%） | 0.5 m → **0.55 m**。実測最大 0.5425 m。**原因は `interpolation.ts` の外挿が y を進めないこと**（x / z は heading × speed で進むが高さが遅れる。MEADOW の勾配 最大 0.139 上でスナップショットが欠けると出る）。勾配物理を無効にした同条件では 0.3855。ゲストのローカル予測（≤ 0.1）は通っており、非決定性ではない。外挿で y も進めたら 0.5 に戻す（M4.5） |
+| E2E SNOWPEAK（Chromium） | カメラの最低クリアランス **2.962 m**、最大ロール **0.3 rad**（バンクの roll に一致） |
+
+### プロトコル v13 と pin
+- `PROTOCOL_VERSION` は 13、`ROOM_PREFIX` は `pcircuit-v13-`。v12 と v13 は部屋が分かれる。**対戦は両者とも新ページが必要**。
+- `LAYOUT_FINGERPRINT` は **`f7b2a1f2` のまま**（`13: 'f7b2a1f2'` を追記）。`COURSE_FINGERPRINT` の pin は `pinned[13] = 2812341565`（SNOWPEAK のデータを変えた M4-05 で更新。v12 の 313875369 から変わった）。v12 以前の行は書き換えない。
+- MEADOW の golden（`surfaces.test.ts`）は M4-01 で darwin-arm64 列を取り直した。linux-x64 列は一旦 `'pending-ci'` にし、公開 commit の CI ログ（`MEADOW final hash (linux-x64)`）から別 commit で置き換える（運用は M2.5-05 と同じ。close 時に `'pending-ci'` が 0 個であること）。`surfaces.test.ts:43` のガードは M5 以降も同じ運用のため撤去しない。
+- **後続のプロトコル番号**: M4.5 → v14、M5 → v15。
+
+### M5 に送ったもの
+- **ミニマップの交差描画**: 立体交差でどちらのデッキか区別して描く処理は M4 では入れない（M4 は立体交差を持つ公開コースが無い）。
+- **立体交差の公開コース**: M4 は基盤（物理・判定・検証・描画・fixture）だけで、立体交差を使う公開コースは M5。同レベル閾値 6.0 の再検討は、ジャンプ高の実測後に行う。
