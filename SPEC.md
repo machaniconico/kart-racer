@@ -589,3 +589,79 @@ sim に勾配とバンクの物理、立体交差を壊さない判定、`valida
 ### M5 に送ったもの
 - **ミニマップの交差描画**: 立体交差でどちらのデッキか区別して描く処理は M4 では入れない（M4 は立体交差を持つ公開コースが無い）。
 - **立体交差の公開コース**: M4 は基盤（物理・判定・検証・描画・fixture）だけで、立体交差を使う公開コースは M5。同レベル閾値 6.0 の再検討は、ジャンプ高の実測後に行う。
+
+## v6 M4.5（周回数設定・アイテムボックス 24・プロトコル v14）
+周回数を 1〜3 から選べるようにし、アイテムボックスを 12 個から 24 個に増やした。M1-02 の hit 区別（最後に当たった帯）を RaceState に足したので、レイアウトが初めて変わった（M3 の「0 B」の前提は M4.5 で外れた）。
+
+### 周回数（`src/sim/laps.ts`）
+- `RaceOptions.laps` と `RaceState.laps`。有効な値は整数 1〜3（`isLapCount`、`LAP_CHOICES = [1, 2, 3]`、`DEFAULT_LAPS = MAX_LAPS = 3`）。`TOTAL_LAPS` は廃止し、完走の判定は `kart.lap === state.laps`。
+- **選ぶのはホストだけ**。ソロはタイトル画面のセレクタ、オンラインはロビー（ホストのみ操作、ゲストは読み取り専用）。`HostSession.setLaps(n)` はロビー中かつ `isLapCount(n)` のときだけ受け付け、`course` で配信する。
+- `welcome` / `course` / `race_start` に `laps`（整数 1〜3）を足した。パーサは範囲外を拒否する。**ゲストの無視規則**: ロビーで受けた `race_start` の `laps` が、直前の `welcome` / `course` で受けた値と違えば無視する（警告を出す）。コースの不一致と同じ扱いで、ゲストは自分で `laps` を決めない。
+- 結果画面とレース中の表示は選んだ周回数（「N LAPS」）を出す。
+
+### ベストタイム（storage v4）
+- キーは `pocket-circuit.best.v4`、形は `{ [trackId]: { [laps]: { time, layout } } }`。周回数ごとに別の記録を持つ（1 周の記録が 3 周の記録を上書きしない）。
+- v3 は v4 が無い最初の1回だけ **laps 3 として取り込む**。v3 の `layout` 不一致の規則（`layoutVersion` が違えばリセット）は v4 でも同じ。
+
+### スナップショットのバイト
+| 項目 | 値 |
+| --- | --- |
+| ヘッダ | **29 B**（byte 28 = `laps`。旧 28 B） |
+| カート | **59 B**（offset 58 = `lastBand + 1`。旧 58 B） |
+| エンティティ | 25 B（不変） |
+| 箱 | **24 個**（旧 12） |
+| `BASE_BYTES` | **525 B** |
+| 27 体（`MAX_SNAPSHOT_ENTITIES`） | **1200 B ちょうど**（予算の余裕 0 B） |
+| 2 体 | **575 B** |
+
+**注意**: 予算の余裕が 0 B なので、M5 以降でカートにバイトを足すなら `MAX_SNAPSHOT_ENTITIES` を 26 に下げる。`lastBand` は `-1`（なし）を 0 に符号化する。補間（`interpolation.ts`）は離散値として `lastBand` をそのまま写す。
+
+### hit の区別（M1-02、`src/sim/race.ts`）
+- `KartState.lastBand`: 最後に当たった帯の `track.def.barriers` の添字（`-1` = なし）。
+- **同じ帯への再接触は、その帯の span（半径で広げた端を含む、継ぎ目をまたぐ区間も `exclusionAt` が扱う）を出るまで hit を 1 回だけにする**。同じ帯に当たっている間は速度が高くても再報告せず、レールの cooldown 0.7 s だけ維持する。span を出たら `-1` に戻り、次の接触は新しい hit になる。
+- 内向き速度がほぼ 0 の接触でも cooldown を更新するので、その間のレール hit が抑制されうる（仕様どおり）。
+
+### 箱 24 個（8 列 × 3 レーン）
+`buildTrack` は `boxRows.length === 8` かつ `boxLanes.length === 3` を要求する（満たさなければ `RangeError`）。**元の4列は fraction を保ったまま**、間に 4 列を足した（`layoutVersion` は上げない。走行面も帯も変えず、ベストタイムの互換を保つため）。
+
+| コース | `boxRows`（fraction） |
+| --- | --- |
+| MEADOW | 0.02, 0.12, 0.24, 0.36, 0.47, 0.58, 0.695, 0.81 |
+| CANYON | 0.04, 0.19, 0.29, 0.4, 0.52, 0.69, 0.84, 0.9 |
+| SNOWPEAK | 0.03, 0.16, 0.29, 0.42, 0.515, 0.61, 0.74, 0.87 |
+| NEON | 0.02, 0.12, 0.20, 0.36, 0.43, 0.58, 0.695, 0.81 |
+
+NEON は当初の追加列（約 158 / 309 m）が動く帯の進入に入り帯ヒット 5 になったため、約 132 / 283 m（0.20 / 0.43）に動かした。`handling.test.ts` の pillarTrack は 0.24 の列が 3 本目の柱に入るので 0.30 に置く。
+
+### プロトコル v14 と pin
+- `PROTOCOL_VERSION` は 14、`ROOM_PREFIX` は `pcircuit-v14-`。**対戦は両者とも新ページが必要**。
+- `LAYOUT_FINGERPRINT` は **`aa03c454`**（`14: 'aa03c454'`）。**v14 で初めて変わった**（v6 の `f7b2a1f2` 以来）。理由は、カートの `lastBand`、ヘッダの `laps`、箱 24 個。`headerBytes` と `boxCount` を指紋の入力に含めたので、バイト数だけが変わる変更も指紋に出る。
+- `COURSE_FINGERPRINT` の pin は `pinned[14] = 4027931737`（`boxRows` を変えた M4.5-03 で確定）。v13 以前の行は書き換えない。
+- **後続のプロトコル番号**: M5 → v15。
+
+### golden を 2 回取り直した
+`surfaces.test.ts` の MEADOW golden（darwin-arm64 列）は 2 回取り直した。1 回目は M4.5-00（JSON の形、`laps` / `lastBand` が状態に入った）、2 回目は M4.5-03（箱 24 個で CPU のアイテム取得と使用が変わった）。linux-x64 列は `'pending-ci'` のままで、公開 commit の CI ログ（`MEADOW final hash (linux-x64)`）からコーディネーターが pin する（この story の範囲外）。`surfaces.test.ts:43` のガードは撤去しない。
+
+### 基準の更新
+| 項目 | 旧 → 新 |
+| --- | --- |
+| BASELINE meadow（`handling.test.ts`） | v13（18.8544 s）→ **v14（19.1056 s）**（×1.0133）。bandHits 0 |
+| BASELINE canyon | v13（19.7634 s）→ **v14（20.3940 s）**（×1.0319）。bandHits **4 → 1** |
+| BASELINE snowpeak | v13（17.7273 s）→ **v14（18.9225 s）**（×1.0674）。bandHits 0 |
+| BASELINE neon | v12（18.3088 s）→ **v14（19.1676 s）**（×1.0469）。bandHits **3 → 2** |
+
+計測は darwin-arm64、CPU 8 台 × seed [1, 42, 98765] × 3 周（コースごと 72 周）。壁ヒットは全コースで 0。
+
+### アシスト（`src/input/assist.ts`）
+舵を保持しているときは、島の実形状で経路を選ぶ（外寄り開始＋島側ステア保持で島へ引き込まれるケース、カーブのファズ i=77）。i=77 の固定テストは M4.5-04 の時点で既に 0/500 で、修正の効果を示すのは dense の i=153。
+
+### 落下音（M4.5-07）
+落とし穴の hit（value 2）は、帯・レールの hit とは別の専用の落下音を鳴らす（`itemSounds.ts`）。画面演出は M5。
+
+### E2E がビルド成果物で動く（M4.5-06）
+- `npm run e2e` は `vite build --mode e2e` のあと `vite preview --config e2e/vite.e2e.config.ts --port 4174 --strictPort` で動く。**本番 mode のビルド**で検証し、開発サーバー専用ではなくなった。
+- デバッグフックは `VITE_KART_DEBUG` で有効にする（mode e2e のビルドだけ。`__kartDebug`）。`e2e/*.spec.ts` は `tsconfig.e2e.json` で型検査する（`npm run typecheck`）。`courseGroup` は公開 getter。gate のスクショは開と閉の 2 枚。
+- 24 件すべて通過した。**並行して build が走り `dist` が上書きされると 7 件が落ちる**ので、静かな作業ツリーで流す。
+
+### M5 に送ったもの
+島の寸法（半幅 6、レーン幅 9）と pit のクリア速度 22 の見直し、落下ペナルティ `spinTime` 1.6〜2.0 s、hit value 2 の画面演出。実測と理由は `.omc/followups.md` の「v6 M4.5 後回し一覧」。
