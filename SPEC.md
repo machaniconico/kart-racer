@@ -665,3 +665,137 @@ NEON は当初の追加列（約 158 / 309 m）が動く帯の進入に入り帯
 
 ### M5 に送ったもの
 島の寸法（半幅 6、レーン幅 9）と pit のクリア速度 22 の見直し、落下ペナルティ `spinTime` 1.6〜2.0 s、hit value 2 の画面演出。実測と理由は `.omc/followups.md` の「v6 M4.5 後回し一覧」。
+
+## v6 M5（4 コースを約 2.3 km に作り直し・プロトコル v15）
+4 コースをすべて 2.26〜2.29 km で作り直した（旧 MEADOW は 651.39 m）。各コースにゲート 24 個とアイテムボックス 8 列（24 個）を置く。通信の版は v15 に上がった。数値はコードと `git log d782ec1~1..HEAD` のコミットメッセージから取った。計測は darwin-arm64。
+
+### プロトコル v15 と pin
+- `PROTOCOL_VERSION` は 15、`ROOM_PREFIX` は `pcircuit-v15-`（`src/net/protocol.ts`）。**対戦は両者とも新ページが必要**。
+- `LAYOUT_FINGERPRINT` は **`aa03c454` のまま**（`snapshotCodec.test.ts` に `15: 'aa03c454'`）。スナップショットのバイトは変えていない（`MAX_SNAPSHOT_ENTITIES` の余裕 0 B も v14 のまま）。
+- `COURSE_FINGERPRINT` の pin は `pinned[15] = 642527371`（M5-05 で確定。4 コースの定義がすべて変わったため。`snapshotCodec.test.ts`）。v14 以前の行は書き換えない。
+- **後続のプロトコル番号**: M6 → v16。
+
+### 終了のタイムアウトと tick 上限
+- `RACE_FINISH_TIMEOUT` は **45 s → 90 s**（`src/sim/race.ts`、M5-00）。最初の完走から 90 s で打ち切る。コースが約 3.5 倍に長くなったため。
+- テストの tick 上限は `60 * 180` から **`60 * 420`**（420 s）に延ばした（`sim.test.ts`、`handling.test.ts`、`net-core.test.ts`、`surfaces.test.ts`、各コースのテストなど）。E2E の待ちも 420 s。`tracks.test.ts` の決定性テストはタイムアウトも 30 s → 120 s にした。
+
+### メッシュ予算式
+コース全体の三角形数（影の描画を含む。視錐台カリングなし）に、レーサー分の 20,000 を足した値の上限は次のとおり。
+
+`triangles + 20_000 ≤ 60 × track.length + 30_000`（`canyon.test.ts`。右辺は長さで決まる）
+
+| コース | 実測の三角形数 | 上限（右辺） |
+| --- | --- | --- |
+| MEADOW | 100,312 + 影 7,704 | 167,181.21 |
+| SNOWPEAK | 106,084 + 影 5,784 = 111,868 | 165,738.34 |
+| NEON | 影を含め 108,730 | 166,975.88 |
+
+CANYON も同じ式で `canyon.test.ts` が検査する。島ごとの式（島 1 つ +5、2 split 以上や rock と building の混在で +7）は M6 に送った。
+
+### 4 コース（layoutVersion と実測）
+各コースに**ゲート 24 個**（`checkpointCount: 24`）、箱 8 列（24 個）。CPU の平均ラップは 8 CPU × seeds [1, 42, 98765] × 3 周（コースごと 72 周）の `handling.test.ts` の BASELINE（v15）。壁ヒットは全コースで 0。
+
+| コース | layout | 長さ (m) | おもな要素 | CPU 平均ラップ (s) | bandHits |
+| --- | --- | --- | --- | --- | --- |
+| MEADOW | 3 | 2286.35 | ヘアピン、S 字（交互のカーブ）、複合コーナー、ダート 2、尾根のジャンプ、牧草の狭路、バンク | 68.5012 | 0 |
+| CANYON | 5 | 2274.65 | 90 度の立体交差（高低差 20 m、デッキ 40 m）、島の近道、下りジャンプ 2、幅 55% の狭路、砂利のヘアピン、S 字、複合コーナー | 68.4958 | 0 |
+| SNOWPEAK | 4 | 2262.31 | 山頂のヘアピン、凍結した S 字、複合コーナー、バンク 2（0.3 rad）、幅 55% の尾根、上りから平坦への頂上ジャンプ、ダート | 67.8912 | 0 |
+| NEON | 4 | 2282.93 | 高架（直交する立体交差が 80 m のブーストトンネルの上、18 m）、sweep / gate / spin、ビルの島、狭い街路、ヘアピン、シケイン、複合コーナー | 64.3294 | 1 |
+
+| コース | 最小曲率半径 (m) | 最大勾配 | 高低差 (m) |
+| --- | --- | --- | --- |
+| MEADOW | 18.1156 | 0.1052 | 8.64 |
+| CANYON | 17.5868 | 0.2576 | — |
+| SNOWPEAK | 18.1156 | 0.2542 | 40.07 |
+| NEON | 17.3499 | 0.1729 | — |
+
+- CANYON の近道（島）: 内側 4.400 s、外側 4.900 s、落ちた場合 6.650 s。**得 0.500 s、落とし穴のコスト 1.750 s**。必要な余裕は 0.100 s（得）と 0.250 s（落下）で、得の余裕はちょうど 0.100 s（1 tick 失えば落ちる。決定的なので flaky ではない）。停止状態から入る近道の fixture は、ブーストありで越え、なしで落ちる。島は 816〜911 m、`islandHalf` 6.9、`laneWidth` 11.7。
+- NEON: 島は 1380〜1450 m、`islandHalf` 4、`laneWidth` 11.7。直線の開始 100 m は平坦（平坦勾配の検査は合成 fixture に移した）。
+- CANYON の旧設計値（`islandHalf` 6 / `laneWidth` 9）は採らなかった。決めた値は上のとおり。
+- 4 コースとも長さは 2100〜2400 m に収める（`meadow.test.ts` など）。
+
+### 新しい検証規則
+`validateTrackDef` は従来どおり。M5-0V（`63251c2`）で `validateCoursePlayability`（`src/sim/corridor.ts`）に split の規則を 2 つ足した。どちらも `RangeError`。
+
+| 規則 | 内容 |
+| --- | --- |
+| スタートラインをまたがない | split の区間がスタートライン（距離 0）をまたぐ配置は拒否する。`to` がちょうど 0 で終わる配置と、`from` が 0 で始まる配置は通す。メッセージは `split must not cross the start line` |
+| 島の曲率 | split 区間の各サンプルで、外側レーンの半幅（`offsetMin` / `offsetMax` の絶対値の最大）が曲率半径を超えると拒否する（内側のオフセット曲線が自己交差するため）。メッセージは `split outer lane half-width must not exceed the curvature radius` |
+
+従来からある規則: split のレーン幅は `MIN_PASSAGE + 1`（= 2R + 0.6 + 1.0 = 3.5 m）以上。**レーン幅 6 m 未満の島を拒否する規則はまだ無い**（M6 に送った）。
+
+曲率と道幅は各コースのテストが検査する。
+
+- 曲率半径は壁の半幅 + 2.5 m 以上（継ぎ目を含む全サンプル、`tracks.test.ts`）。MEADOW と SNOWPEAK のテストは、さらに 0.8 m の余裕を要求する。
+- MEADOW の最小曲率半径は 17 m 以上（`meadow.test.ts`）。
+- 狭路の通路幅は 2.55 m 以上（`corridorAt` の `max - min`）。
+- 景物は壁との局所的なクリアランスを持って置く（SNOWPEAK、`buildCourse.ts`）。
+
+### shapeMetrics の定義（`src/sim/tracks/shapeMetrics.ts`）
+コース設計の検査用で、シミュレーションは使わない。長さはサンプルした中心線に沿った m、角度は rad。曲率は隣り合う 3 サンプルの外接円から符号付きで求め、継ぎ目をまたいで巡回する。
+
+| 名前 | 定義 |
+| --- | --- |
+| ヘアピン（`findHairpins`） | 120 m 以内で 150° 以上曲がる区間。その区間の最小半径が、その地点の壁の半幅 + 2.5 m 以上、+ 8 m 以下 |
+| S 字（`findSCurves`） | 300 m 以内で曲率の符号が 3 回以上反転し、すべてのカーブの最小半径が 70 m 以下の区間。カーブは \|κ\| ≥ 1/200 の同符号の連なりで、それ未満（不感帯、`S_CURVE_DEADBAND`）の直線は反転に数えない。重なる候補は 1 区間にまとめる |
+| 複合コーナー（`findCompoundCorners`） | 同符号で 90° 以上曲がる区間に、曲率の極大が 2 つあり、半径の比が 1.25 倍以上（広い方 ≥ 1.25 × 狭い方）。極大は \|κ\| ≥ 1/200 の局所最大（平らな頂は末端で 1 回と数える） |
+| `minCurvatureRadius` / `elevationRange` / `maxSlope` | 最小曲率半径、高さの最小・最大・差、隣り合うサンプル間の \|Δy / Δdistance\| の最大（継ぎ目を含む） |
+
+shapeMetrics は M5-0V で入り、Codex のレビューに 3 回 FAIL したあと（合成コースでの取りこぼし）、コーディネーターが仕様どおりの直接判定に直して回帰テスト 6 件を足した。
+
+### 島の規約
+- **widthKeys の合成**: `islandSplit` が返す 4 個のキー（`from - 20`、`from`、`to`、`to + 20`）は島の両端で進入幅を持つ。そのまま展開すると、島の外もすべて進入幅になる（幅は補間され、継ぎ目で巡回する）。**島の前後を基準幅のキーで挟み**、壁の半幅は基準以上に保つ。
+
+  ```ts
+  { distance: from - 40, ...base },
+  ...island.widthKeys.map(key => ({ ...key, wallHalfWidth: Math.max(BASE_WALL_HALF_WIDTH, key.roadHalfWidth) })),
+  { distance: to + 40, ...base },
+  ```
+  CANYON と NEON が同じ形で使う（`features.ts` のコメントが正本）。
+- `from` / `to` は拡張した鼻を含む。レーン選択の進入（35 m）は `from` の直前で終わる。
+- レーン幅は 11.7 m 前後（CANYON、NEON）。新コースの幅は `widths.ts` を基準にし、狭路は基準 × 0.55 前後。
+- split はスタートラインをまたがず、外側レーンの半幅を曲率半径以下にする（上の検証規則）。
+
+### LEGACY_MEADOW の位置づけ（fixture）
+`src/sim/tracks/legacyMeadow.fixture.ts` の `LEGACY_MEADOW` は、プロトコル v14 時点の MEADOW（`layoutVersion: 2`、651.39 m、ゲート 12）を固定した**テスト専用の fixture**。実コースの MEADOW とは無関係で、M5 で実コースを作り直しても、そこから合成コースを作る共有テスト（assist、corridor、walls、netMotion、aiMotion など）の数値が変わらないようにする。**本番コードは import しない**。M5-01 で、全コースが幅キーを持つようになったため、plain-road のアシスト検査も fixture に切り替えた。
+
+### 基準の更新
+| 項目 | 旧 → 新 |
+| --- | --- |
+| BASELINE meadow（`handling.test.ts`） | v14（19.1056 s）→ **v15（68.5012 s）**。bandHits 0 |
+| BASELINE canyon | v14（20.3940 s）→ **v15（68.4958 s）**。bandHits 1 → 0 |
+| BASELINE snowpeak | v14（18.9225 s）→ **v15（67.8912 s）**。bandHits 0 |
+| BASELINE neon | v14（19.1676 s）→ **v15（64.3294 s）**。bandHits 2 → 1 |
+| `pinned[15]`（コース指紋） | **642527371**（v14 は 4027931737） |
+| `RACE_FINISH_TIMEOUT` | 45 s → **90 s** |
+
+MEADOW の golden（`surfaces.test.ts`）は darwin-arm64 列を新コースで取り直した（10 seed）。linux-x64 列は `'pending-ci'` で、公開 commit の CI ログから別 commit で置き換える。`surfaces.test.ts:43` のガードは撤去しない。
+
+### M5-05 の性能表（a82b5d6）
+ヘッドレス Chromium の `?perf=1`（FPS / ドロー数 / 三角形数。最初のフレームを含む）。視点は、スタートグリッドと、コースごとの特徴の手前。
+
+| コース | 視点 | FPS | ドロー | 三角形 |
+| --- | --- | --- | --- | --- |
+| MEADOW | grid | 8.7 | 125 | 107,048 |
+| MEADOW | narrow | 10.3 | 35 | 100,764 |
+| CANYON | grid | 8.3 | 138 | 124,808 |
+| CANYON | island | 10.3 | 44 | 118,234 |
+| SNOWPEAK | grid | 7.8 | 129 | 112,768 |
+| SNOWPEAK | narrow | 8.9 | 38 | 106,714 |
+| NEON | grid | 7.4 | 134 | 115,360 |
+| NEON | overpass | 7.6 | 38 | 108,988 |
+
+grid の ドロー数 / 三角形数は `buildCourse.test.ts` の `RENDER_BASELINE`（meadow 125 / 107,048、canyon 138 / 124,808、snowpeak 129 / 112,768、neon 134 / 115,360）と一致する。FPS はヘッドレスの値で、実機の性能ではない。E2E は静かな作業ツリーで 24/24、`npm test` は 1523 件。
+
+### E2E で見つけた回帰（M5-05）
+- M1-06 のアシスト走行は、各地形の前後 ±60 m に限った（走行範囲が S 字まで伸びていた）。
+- H6（reduced-motion）の前に、最初のレースを `about:blank` で止める（描画が重くなり、2 つ目のコンテキストの sim が遅れた）。
+- ゲストの 5 秒の welcome タイマーを、参加ボタンの押下ではなく**接続確立後**から数える（`213fb99` 以降、ヘッドレスの遅いフレームで PeerJS の参加が 5 s を超えた回帰）。
+
+### M5 の他の変更
+- ミニマップは立体交差のデッキを上に描く（M5-08）。
+- デッキの支柱は下側の道に立てない。デッキ下の地面の切り抜きはデッキの足跡だけに絞る（M5-09）。
+- 他車の外挿は高さも進める。ゲストの非ローカル誤差の上限は 0.5 m に戻した（M5-07。seed 92: MEADOW 0.418、CANYON 0.203、SNOWPEAK 0.257、NEON 0.278）。
+
+### M6 に送ったもの
+`.omc/followups.md` の「v6 M5 後回し一覧」のとおり。

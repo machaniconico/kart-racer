@@ -716,7 +716,6 @@ describe('driving and items', () => {
   });
 });
 
-const ITEM_COVERAGE_PENDING = true;
 
 describe('CPU race integration', () => {
   it.each(TRACK_IDS.flatMap(trackId => [1, 42, 98765].map(seed => ({ trackId, seed }))))(
@@ -781,15 +780,7 @@ describe('CPU race integration', () => {
     expect([...orbitKinds].sort()).toEqual([1, 2]);
     const allItems = ['dash', 'trap', 'bolt', 'seeker', 'skycomet', 'tripleDash',
       'rapidDash', 'aura', 'storm', 'ink', 'decoy', 'bomb', 'autopilot', 'barrier'];
-    // M5-00: rare items (1-2 rolls in these 10 races) depend on MEADOW's box rows, which M5-01
-    // rebuilds, so full coverage is pending until M5-05 sets ITEM_COVERAGE_PENDING back to false.
-    if (ITEM_COVERAGE_PENDING) {
-      expect(allItems).toEqual(expect.arrayContaining([...uses]));
-      expect(uses.size).toBeGreaterThanOrEqual(12);
-      console.info(`item coverage (pending): missing ${allItems.filter(item => !uses.has(item)).join(', ') || 'none'}`);
-    } else {
-      expect([...uses].sort()).toEqual(allItems.sort());
-    }
+    expect([...uses].sort()).toEqual(allItems.sort());
   }, 120_000);
 
   it('drives all eight input sources around the course and completes a three lap race', () => {
