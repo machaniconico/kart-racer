@@ -90,10 +90,10 @@ describe('room codes', () => {
 });
 
 describe('control protocol', () => {
-  it('isolates protocol v11 rooms from earlier versions', () => {
-    expect(PROTOCOL_VERSION).toBe(11);
-    expect(ROOM_PREFIX).toBe('pcircuit-v11-');
-    expect(fromPeerId('pcircuit-v10-AB2X')).toBeNull();
+  it('isolates protocol v12 rooms from earlier versions', () => {
+    expect(PROTOCOL_VERSION).toBe(12);
+    expect(ROOM_PREFIX).toBe('pcircuit-v12-');
+    expect(fromPeerId('pcircuit-v11-AB2X')).toBeNull();
     expect(fromPeerId('pcircuit-v9-AB2X')).toBeNull();
     expect(fromPeerId('pcircuit-v8-AB2X')).toBeNull();
     expect(fromPeerId('pcircuit-v7-AB2X')).toBeNull();
