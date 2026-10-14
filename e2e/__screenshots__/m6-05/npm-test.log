@@ -1,0 +1,16 @@
+
+> kart-racer@1.0.0 test
+> vitest run
+
+
+ RUN  v4.1.11 /Users/macha/kart-racer
+
+
+ Test Files  45 passed (45)
+      Tests  1772 passed (1772)
+   Start at  05:04:18
+   Duration  98.45s (transform 2.34s, setup 0ms, import 6.52s, tests 509.55s, environment 4ms)
+
+real 98.72
+user 531.68
+sys 5.81

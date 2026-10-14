@@ -1,0 +1,14 @@
+{
+  "platform": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+  "buildCommand": "VITE_KART_DEBUG=1 npm run build",
+  "buildCount": 1,
+  "files": {
+    "dist/assets/bundler-daK32bjV.js": "7079f9ac39fa1b7423e780e15f424a336ed68b2984106767873f79a645812138",
+    "dist/assets/index-CfFH_629.css": "2c7794f9a7a9e0f1ba74efaf60bcd6e43d47c826f628e8e2ca1a44b53b617701",
+    "dist/assets/index-ChlbQkWO.js": "033b1b7fa01eb6b869efeef7ad01bc82252efd10a2a409fa4d8eed6705e0fa81",
+    "dist/assets/peerjsTransport-D1VvZSiL.js": "ac11fa961c8d4ae117766a44572ef1b8ce1eb8a920eaaa955c69538b5b792463",
+    "dist/assets/three-core-C2Pi58s_.js": "f7fd61f42b6669b86dc9715f7778b13f2599450bbb7f4e92dfedbc70ebfa9095",
+    "dist/assets/three-renderer-DgMyjtEO.js": "76c10e31be168ceca8886283be174238a3030e2fcaa13607b6a1298a7238006e",
+    "dist/index.html": "9383eb269c360de8b027d496da79c81c76f2c629004010746e67441817497a3a"
+  }
+}

@@ -184,20 +184,18 @@ describe('H1 handling', () => {
 // | snowpeak | 18.92245370370371  | 67.89120370370368  | 0 / 0        | 0 / 0        |
 // | neon     | 19.16759259259259  | 64.32939814814814  | 0 / 0        | 2 / 1        |
 // All values match the M5-01–04 reports (rounding only); NEON's band hit is seed 1.
-type Baseline = { version: 'v15'; meanLap: number; wallHits: number; bandHits: number };
-// M6-00 / v16: the four new courses are MEADOW scaffolds until M6-01–04; M6-05 measures them.
-// A pending row checks only the absolute range: 72 laps, wallHits ≤ 6, bandHits ≤ 6, meanLap ∈ [L/40, L/20].
-type Pending = { version: 'v16-pending'; meanLap: null; wallHits: null; bandHits: null };
-const PENDING: Pending = { version: 'v16-pending', meanLap: null, wallHits: null, bandHits: null };
-const BASELINE: Record<(typeof tracks.TRACK_IDS)[number], Baseline | Pending> = {
+// M6-05 / v16, darwin-arm64: 8 CPUs × seeds [1, 42, 98765] × 3 laps (72 per course).
+// Original four values re-measured identically to M5-05; M6-09 changes rendering only.
+type Baseline = { version: 'v15' | 'v16'; meanLap: number; wallHits: number; bandHits: number };
+const BASELINE: Record<(typeof tracks.TRACK_IDS)[number], Baseline> = {
   meadow: { version: 'v15', meanLap: 68.5011574074074, wallHits: 0, bandHits: 0 },
   canyon: { version: 'v15', meanLap: 68.49583333333334, wallHits: 0, bandHits: 0 },
   snowpeak: { version: 'v15', meanLap: 67.89120370370368, wallHits: 0, bandHits: 0 },
   neon: { version: 'v15', meanLap: 64.32939814814814, wallHits: 0, bandHits: 1 },
-  harbor: PENDING,
-  forest: PENDING,
-  volcano: PENDING,
-  skyline: PENDING,
+  harbor: { version: 'v16', meanLap: 69.73750000000001, wallHits: 0, bandHits: 0 },
+  forest: { version: 'v16', meanLap: 70.53587962962962, wallHits: 0, bandHits: 0 },
+  volcano: { version: 'v16', meanLap: 67.82407407407408, wallHits: 0, bandHits: 0 },
+  skyline: { version: 'v16', meanLap: 67.35324074074076, wallHits: 0, bandHits: 1 },
 };
 const SEEDS = [1, 42, 98765];
 
@@ -282,11 +280,6 @@ describe('H1 CPU balance: absolute range and recorded baseline', () => {
     // Stage 1: absolute range, an average pace of 20 to 40 m/s.
     expect(meanLap).toBeGreaterThanOrEqual(track.length / 40);
     expect(meanLap).toBeLessThanOrEqual(track.length / 20);
-    if (baseline.meanLap === null) {
-      expect(wallHits).toBeLessThanOrEqual(6);
-      expect(bandHits).toBeLessThanOrEqual(6);
-      return;
-    }
     // Stage 2: ratio to the recorded baseline.
     const ratio = meanLap / baseline.meanLap;
     expect(ratio).toBeGreaterThanOrEqual(0.95);

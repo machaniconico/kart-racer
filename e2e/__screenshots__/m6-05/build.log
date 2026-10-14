@@ -1,0 +1,17 @@
+
+> kart-racer@1.0.0 build
+> tsc --noEmit && vite build
+
+vite v7.3.6 building client environment for production...
+transforming...
+✓ 102 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                            1.38 kB │ gzip:  0.84 kB
+dist/assets/index-CfFH_629.css            45.44 kB │ gzip:  9.33 kB
+dist/assets/peerjsTransport-D1VvZSiL.js   12.60 kB │ gzip:  3.85 kB
+dist/assets/bundler-daK32bjV.js           88.81 kB │ gzip: 24.06 kB
+dist/assets/three-core-C2Pi58s_.js       167.61 kB │ gzip: 46.08 kB
+dist/assets/index-ChlbQkWO.js            241.36 kB │ gzip: 80.24 kB
+dist/assets/three-renderer-DgMyjtEO.js   324.29 kB │ gzip: 77.99 kB
+✓ built in 683ms

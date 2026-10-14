@@ -1,0 +1,144 @@
+
+> kart-racer@1.0.0 e2e
+> playwright test --update-snapshots=missing --global-timeout=3600000
+
+[WebServer] (node:65341) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+[WebServer]   ➜  Local:   http://127.0.0.1:4174/kart-racer/
+
+Running 29 tests using 1 worker
+
+(node:65343) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+M6-05 render measurement {"id":"meadow","meshes":34,"views":[{"name":"start-grid","distance":null,"budget":true,"samples":[{"drawCalls":125,"triangles":107048},{"drawCalls":125,"triangles":107048},{"drawCalls":125,"triangles":107048},{"drawCalls":125,"triangles":107048},{"drawCalls":125,"triangles":107048},{"drawCalls":125,"triangles":107048},{"drawCalls":125,"triangles":107048},{"drawCalls":125,"triangles":107048},{"drawCalls":125,"triangles":107048},{"drawCalls":125,"triangles":107048}],"fps":4.762963198243138},{"name":"narrow","distance":1135,"budget":true,"samples":[{"drawCalls":35,"triangles":100764},{"drawCalls":35,"triangles":100764},{"drawCalls":35,"triangles":100764},{"drawCalls":35,"triangles":100764},{"drawCalls":35,"triangles":100764},{"drawCalls":35,"triangles":100764},{"drawCalls":35,"triangles":100764},{"drawCalls":35,"triangles":100764},{"drawCalls":35,"triangles":100764},{"drawCalls":35,"triangles":100764}],"fps":5.91517637078651},{"name":"hairpin","distance":174.0821162676286,"budget":false,"samples":[{"drawCalls":35,"triangles":100944},{"drawCalls":35,"triangles":100944},{"drawCalls":35,"triangles":100944},{"drawCalls":35,"triangles":100944},{"drawCalls":35,"triangles":100944},{"drawCalls":35,"triangles":100944},{"drawCalls":35,"triangles":100944},{"drawCalls":35,"triangles":100944},{"drawCalls":35,"triangles":100944},{"drawCalls":35,"triangles":100944}],"fps":5.796093433052839}]}
+  ✓   1 e2e/courses.spec.ts:47:3 › C-010: MEADOW LOOP selection, three laps, isolated best and draw budget (47.1s)
+M6-05 render measurement {"id":"canyon","meshes":43,"views":[{"name":"start-grid","distance":null,"budget":true,"samples":[{"drawCalls":139,"triangles":124630},{"drawCalls":139,"triangles":124630},{"drawCalls":139,"triangles":124630},{"drawCalls":139,"triangles":124630},{"drawCalls":139,"triangles":124630},{"drawCalls":139,"triangles":124630},{"drawCalls":139,"triangles":124630},{"drawCalls":139,"triangles":124630},{"drawCalls":139,"triangles":124630},{"drawCalls":139,"triangles":124630}],"fps":4.3835936701365545},{"name":"crossing","distance":1217.5,"budget":false,"samples":[{"drawCalls":39,"triangles":117184},{"drawCalls":39,"triangles":117184},{"drawCalls":39,"triangles":117184},{"drawCalls":39,"triangles":117184},{"drawCalls":39,"triangles":117184},{"drawCalls":39,"triangles":117184},{"drawCalls":39,"triangles":117184},{"drawCalls":39,"triangles":117184},{"drawCalls":39,"triangles":117184},{"drawCalls":39,"triangles":117184}],"fps":5.036768409449021},{"name":"crossing-underpass","distance":193.5,"budget":false,"samples":[{"drawCalls":41,"triangles":117650},{"drawCalls":41,"triangles":117650},{"drawCalls":41,"triangles":117650},{"drawCalls":41,"triangles":117650},{"drawCalls":41,"triangles":117650},{"drawCalls":41,"triangles":117650},{"drawCalls":41,"triangles":117650},{"drawCalls":41,"triangles":117650},{"drawCalls":41,"triangles":117650},{"drawCalls":41,"triangles":117650}],"fps":4.74435816735892},{"name":"island","distance":786,"budget":true,"samples":[{"drawCalls":45,"triangles":118056},{"drawCalls":45,"triangles":118056},{"drawCalls":45,"triangles":118056},{"drawCalls":45,"triangles":118056},{"drawCalls":45,"triangles":118056},{"drawCalls":45,"triangles":118056},{"drawCalls":45,"triangles":118056},{"drawCalls":45,"triangles":118056},{"drawCalls":45,"triangles":118056},{"drawCalls":45,"triangles":118056}],"fps":5.26759376323514},{"name":"pit","distance":877,"budget":false,"samples":[{"drawCalls":42,"triangles":118050},{"drawCalls":42,"triangles":118050},{"drawCalls":42,"triangles":118050},{"drawCalls":42,"triangles":118050},{"drawCalls":42,"triangles":118050},{"drawCalls":42,"triangles":118050},{"drawCalls":42,"triangles":118050},{"drawCalls":42,"triangles":118050},{"drawCalls":42,"triangles":118050},{"drawCalls":42,"triangles":118050}],"fps":4.633204633204633},{"name":"narrow","distance":1626.5,"budget":false,"samples":[{"drawCalls":34,"triangles":116520},{"drawCalls":34,"triangles":116520},{"drawCalls":34,"triangles":116520},{"drawCalls":34,"triangles":116520},{"drawCalls":34,"triangles":116520},{"drawCalls":34,"triangles":116520},{"drawCalls":34,"triangles":116520},{"drawCalls":34,"triangles":116520},{"drawCalls":34,"triangles":116520},{"drawCalls":34,"triangles":116520}],"fps":5.181884133092124},{"name":"hairpin","distance":433.5,"budget":false,"samples":[{"drawCalls":37,"triangles":117322},{"drawCalls":37,"triangles":117322},{"drawCalls":37,"triangles":117322},{"drawCalls":37,"triangles":117322},{"drawCalls":37,"triangles":117322},{"drawCalls":37,"triangles":117322},{"drawCalls":37,"triangles":117322},{"drawCalls":37,"triangles":117322},{"drawCalls":37,"triangles":117322},{"drawCalls":37,"triangles":117322}],"fps":4.95671138714019}]}
+  ✓   2 e2e/courses.spec.ts:47:3 › C-010: SUNSCAR CANYON selection, three laps, isolated best and draw budget (1.4m)
+M6-05 render measurement {"id":"snowpeak","meshes":36,"views":[{"name":"start-grid","distance":null,"budget":true,"samples":[{"drawCalls":129,"triangles":112768},{"drawCalls":129,"triangles":112768},{"drawCalls":129,"triangles":112768},{"drawCalls":129,"triangles":112768},{"drawCalls":129,"triangles":112768},{"drawCalls":129,"triangles":112768},{"drawCalls":129,"triangles":112768},{"drawCalls":129,"triangles":112768},{"drawCalls":129,"triangles":112768},{"drawCalls":129,"triangles":112768}],"fps":3.6930349361213346},{"name":"narrow","distance":675,"budget":true,"samples":[{"drawCalls":38,"triangles":106714},{"drawCalls":38,"triangles":106714},{"drawCalls":38,"triangles":106714},{"drawCalls":38,"triangles":106714},{"drawCalls":38,"triangles":106714},{"drawCalls":38,"triangles":106714},{"drawCalls":38,"triangles":106714},{"drawCalls":38,"triangles":106714},{"drawCalls":38,"triangles":106714},{"drawCalls":38,"triangles":106714}],"fps":4.47868147610965},{"name":"hairpin","distance":254.08211626762863,"budget":false,"samples":[{"drawCalls":36,"triangles":106658},{"drawCalls":36,"triangles":106658},{"drawCalls":36,"triangles":106658},{"drawCalls":36,"triangles":106658},{"drawCalls":36,"triangles":106658},{"drawCalls":36,"triangles":106658},{"drawCalls":36,"triangles":106658},{"drawCalls":36,"triangles":106658},{"drawCalls":36,"triangles":106658},{"drawCalls":36,"triangles":106658}],"fps":4.393222721793933}]}
+  ✓   3 e2e/courses.spec.ts:47:3 › C-010: FROSTBITE PEAK selection, three laps, isolated best and draw budget (59.7s)
+M6-05 render measurement {"id":"neon","meshes":38,"views":[{"name":"start-grid","distance":null,"budget":true,"samples":[{"drawCalls":134,"triangles":115336},{"drawCalls":134,"triangles":115336},{"drawCalls":134,"triangles":115336},{"drawCalls":134,"triangles":115336},{"drawCalls":134,"triangles":115336},{"drawCalls":134,"triangles":115336},{"drawCalls":134,"triangles":115336},{"drawCalls":134,"triangles":115336},{"drawCalls":134,"triangles":115336},{"drawCalls":134,"triangles":115336}],"fps":3.8217534204925268},{"name":"crossing","distance":185,"budget":true,"samples":[{"drawCalls":38,"triangles":108988},{"drawCalls":38,"triangles":108988},{"drawCalls":38,"triangles":108988},{"drawCalls":38,"triangles":108988},{"drawCalls":38,"triangles":108988},{"drawCalls":38,"triangles":108988},{"drawCalls":38,"triangles":108988},{"drawCalls":38,"triangles":108988},{"drawCalls":38,"triangles":108988},{"drawCalls":38,"triangles":108988}],"fps":4.089087588242852},{"name":"crossing-underpass","distance":1260.0612319299014,"budget":false,"samples":[{"drawCalls":42,"triangles":109182},{"drawCalls":42,"triangles":109182},{"drawCalls":42,"triangles":109182},{"drawCalls":42,"triangles":109182},{"drawCalls":42,"triangles":109182},{"drawCalls":42,"triangles":109182},{"drawCalls":42,"triangles":109182},{"drawCalls":42,"triangles":109182},{"drawCalls":42,"triangles":109182},{"drawCalls":42,"triangles":109182}],"fps":3.8711175916844374},{"name":"island","distance":1350,"budget":false,"samples":[{"drawCalls":35,"triangles":105858},{"drawCalls":35,"triangles":105858},{"drawCalls":35,"triangles":105858},{"drawCalls":35,"triangles":105858},{"drawCalls":35,"triangles":105858},{"drawCalls":35,"triangles":105858},{"drawCalls":35,"triangles":105858},{"drawCalls":35,"triangles":105858},{"drawCalls":35,"triangles":105858},{"drawCalls":35,"triangles":105858}],"fps":4.713127631460954},{"name":"narrow","distance":1080,"budget":false,"samples":[{"drawCalls":45,"triangles":109268},{"drawCalls":45,"triangles":109268},{"drawCalls":45,"triangles":109268},{"drawCalls":45,"triangles":109268},{"drawCalls":45,"triangles":109268},{"drawCalls":45,"triangles":109268},{"drawCalls":45,"triangles":109268},{"drawCalls":45,"triangles":109268},{"drawCalls":45,"triangles":109268},{"drawCalls":45,"triangles":109268}],"fps":3.9360780917524036},{"name":"hairpin","distance":435.59829309541544,"budget":false,"samples":[{"drawCalls":30,"triangles":105662},{"drawCalls":30,"triangles":105662},{"drawCalls":30,"triangles":105662},{"drawCalls":30,"triangles":105662},{"drawCalls":30,"triangles":105662},{"drawCalls":30,"triangles":105662},{"drawCalls":30,"triangles":105662},{"drawCalls":30,"triangles":105662},{"drawCalls":30,"triangles":105662},{"drawCalls":30,"triangles":105662}],"fps":4.71253534401508}]}
+  ✓   4 e2e/courses.spec.ts:47:3 › C-010: NEON NIGHTLINE selection, three laps, isolated best and draw budget (1.4m)
+  ✘   5 e2e/courses.spec.ts:47:3 › C-010: TIDEWATER HARBOR selection, three laps, isolated best and draw budget (38.3s)
+(node:65408) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘   6 e2e/courses.spec.ts:47:3 › C-010: MOSSWOOD TRAIL selection, three laps, isolated best and draw budget (52.8s)
+(node:65428) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘   7 e2e/courses.spec.ts:47:3 › C-010: EMBER CALDERA selection, three laps, isolated best and draw budget (45.8s)
+
+
+  1) e2e/courses.spec.ts:47:3 › C-010: TIDEWATER HARBOR selection, three laps, isolated best and draw budget
+
+    Error: expect(Buffer).toMatchSnapshot(expected) failed
+
+      19 pixels (ratio 0.01 of all image pixels) are different.
+
+      Snapshot: harbor-start-grid.png
+
+
+      135 |       // Linux goldens are pending-ci (M6-06); never derive them from darwin pixels.
+      136 |       if (process.platform === 'darwin' && ['harbor', 'forest', 'volcano', 'skyline'].includes(id)) {
+    > 137 |         expect(Buffer.from(view.png, 'base64')).toMatchSnapshot(`${id}-${view.name}.png`);
+          |                                                 ^
+      138 |         if (view.name === 'start-grid') {
+      139 |           expect(Buffer.from(view.minimap, 'base64')).toMatchSnapshot(`${id}-minimap.png`);
+      140 |         }
+        at /Users/macha/kart-racer/e2e/courses.spec.ts:137:49
+
+    attachment #3: harbor-start-grid (image/png) ───────────────────────────────────────────────────
+    Expected: e2e/__screenshots__/darwin/harbor-start-grid.png
+    Received: test-results/courses-C-010-TIDEWATER-HA-7231b-olated-best-and-draw-budget/harbor-start-grid-actual.png
+    Diff:     test-results/courses-C-010-TIDEWATER-HA-7231b-olated-best-and-draw-budget/harbor-start-grid-diff.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #4: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/courses-C-010-TIDEWATER-HA-7231b-olated-best-and-draw-budget/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/courses-C-010-TIDEWATER-HA-7231b-olated-best-and-draw-budget/error-context.md
+
+    attachment #6: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/courses-C-010-TIDEWATER-HA-7231b-olated-best-and-draw-budget/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/courses-C-010-TIDEWATER-HA-7231b-olated-best-and-draw-budget/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  2) e2e/courses.spec.ts:47:3 › C-010: MOSSWOOD TRAIL selection, three laps, isolated best and draw budget
+
+    Error: expect(Buffer).toMatchSnapshot(expected) failed
+
+      39 pixels (ratio 0.01 of all image pixels) are different.
+
+      Snapshot: forest-start-grid.png
+
+
+      135 |       // Linux goldens are pending-ci (M6-06); never derive them from darwin pixels.
+      136 |       if (process.platform === 'darwin' && ['harbor', 'forest', 'volcano', 'skyline'].includes(id)) {
+    > 137 |         expect(Buffer.from(view.png, 'base64')).toMatchSnapshot(`${id}-${view.name}.png`);
+          |                                                 ^
+      138 |         if (view.name === 'start-grid') {
+      139 |           expect(Buffer.from(view.minimap, 'base64')).toMatchSnapshot(`${id}-minimap.png`);
+      140 |         }
+        at /Users/macha/kart-racer/e2e/courses.spec.ts:137:49
+
+    attachment #3: forest-start-grid (image/png) ───────────────────────────────────────────────────
+    Expected: e2e/__screenshots__/darwin/forest-start-grid.png
+    Received: test-results/courses-C-010-MOSSWOOD-TRA-e52a3-olated-best-and-draw-budget/forest-start-grid-actual.png
+    Diff:     test-results/courses-C-010-MOSSWOOD-TRA-e52a3-olated-best-and-draw-budget/forest-start-grid-diff.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #4: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/courses-C-010-MOSSWOOD-TRA-e52a3-olated-best-and-draw-budget/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/courses-C-010-MOSSWOOD-TRA-e52a3-olated-best-and-draw-budget/error-context.md
+
+    attachment #6: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/courses-C-010-MOSSWOOD-TRA-e52a3-olated-best-and-draw-budget/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/courses-C-010-MOSSWOOD-TRA-e52a3-olated-best-and-draw-budget/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  3) e2e/courses.spec.ts:47:3 › C-010: EMBER CALDERA selection, three laps, isolated best and draw budget
+
+    Test was interrupted.
+
+    Error: page.evaluate: Test ended.
+
+      86 |     const approach = features.filter(view => view.name === 'crossing' || view.name === 'island')
+      87 |       .sort((a, b) => a.distance - b.distance)[0] ?? features.find(view => view.name === 'narrow')!;
+    > 88 |     const { views, meshes } = await page.evaluate(async ({ id, features, approach }) => {
+         |                                          ^
+      89 |       const { createRace, captureRenderSnapshot, getTrack, sampleTrack } = window.__kartDebug.modules;
+      90 |       const renderer = window.__kartDebug.renderer!;
+      91 |       const track = getTrack(id);
+        at /Users/macha/kart-racer/e2e/courses.spec.ts:88:42
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/courses-C-010-EMBER-CALDER-cab15-olated-best-and-draw-budget/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/courses-C-010-EMBER-CALDER-cab15-olated-best-and-draw-budget/error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/courses-C-010-EMBER-CALDER-cab15-olated-best-and-draw-budget/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/courses-C-010-EMBER-CALDER-cab15-olated-best-and-draw-budget/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  2 failed
+    e2e/courses.spec.ts:47:3 › C-010: TIDEWATER HARBOR selection, three laps, isolated best and draw budget
+    e2e/courses.spec.ts:47:3 › C-010: MOSSWOOD TRAIL selection, three laps, isolated best and draw budget
+  1 interrupted
+    e2e/courses.spec.ts:47:3 › C-010: EMBER CALDERA selection, three laps, isolated best and draw budget
+  22 did not run
+  4 passed (6.9m)
+real 416.27
+user 2089.11
+sys 910.14

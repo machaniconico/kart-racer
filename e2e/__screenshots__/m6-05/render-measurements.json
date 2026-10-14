@@ -1,0 +1,394 @@
+[
+  {
+    "id": "meadow",
+    "meshes": 34,
+    "length": 2286.353556318704,
+    "trianglesCap": 167181.21337912223,
+    "views": [
+      {
+        "name": "start-grid",
+        "distance": null,
+        "drawCalls": 125,
+        "triangles": 107048,
+        "identicalFrames": 10,
+        "fps": 6.22600394313583
+      },
+      {
+        "name": "narrow",
+        "distance": 1135,
+        "drawCalls": 35,
+        "triangles": 100764,
+        "identicalFrames": 10,
+        "fps": 7.650914284210448
+      },
+      {
+        "name": "hairpin",
+        "distance": 174.0821162676286,
+        "drawCalls": 35,
+        "triangles": 100944,
+        "identicalFrames": 10,
+        "fps": 7.317965605561654
+      }
+    ]
+  },
+  {
+    "id": "canyon",
+    "meshes": 43,
+    "length": 2274.6514118884065,
+    "trianglesCap": 166479.0847133044,
+    "views": [
+      {
+        "name": "start-grid",
+        "distance": null,
+        "drawCalls": 139,
+        "triangles": 124630,
+        "identicalFrames": 10,
+        "fps": 5.297919683515291
+      },
+      {
+        "name": "crossing",
+        "distance": 1217.5,
+        "drawCalls": 39,
+        "triangles": 117184,
+        "identicalFrames": 10,
+        "fps": 5.99904015363263
+      },
+      {
+        "name": "crossing-underpass",
+        "distance": 193.5,
+        "drawCalls": 41,
+        "triangles": 117650,
+        "identicalFrames": 10,
+        "fps": 5.466173496275537
+      },
+      {
+        "name": "island",
+        "distance": 786,
+        "drawCalls": 45,
+        "triangles": 118056,
+        "identicalFrames": 10,
+        "fps": 6.010939910666075
+      },
+      {
+        "name": "pit",
+        "distance": 877,
+        "drawCalls": 42,
+        "triangles": 118050,
+        "identicalFrames": 10,
+        "fps": 5.226298735192291
+      },
+      {
+        "name": "narrow",
+        "distance": 1626.5,
+        "drawCalls": 34,
+        "triangles": 116520,
+        "identicalFrames": 10,
+        "fps": 5.6361313593591476
+      },
+      {
+        "name": "hairpin",
+        "distance": 433.5,
+        "drawCalls": 37,
+        "triangles": 117322,
+        "identicalFrames": 10,
+        "fps": 5.220387352698257
+      }
+    ]
+  },
+  {
+    "id": "snowpeak",
+    "meshes": 36,
+    "length": 2262.305617320616,
+    "trianglesCap": 165738.33703923697,
+    "views": [
+      {
+        "name": "start-grid",
+        "distance": null,
+        "drawCalls": 129,
+        "triangles": 112768,
+        "identicalFrames": 10,
+        "fps": 3.30036634067247
+      },
+      {
+        "name": "narrow",
+        "distance": 675,
+        "drawCalls": 38,
+        "triangles": 106714,
+        "identicalFrames": 10,
+        "fps": 4.069672798293854
+      },
+      {
+        "name": "hairpin",
+        "distance": 254.08211626762863,
+        "drawCalls": 36,
+        "triangles": 106658,
+        "identicalFrames": 10,
+        "fps": 3.9225428537684497
+      }
+    ]
+  },
+  {
+    "id": "neon",
+    "meshes": 38,
+    "length": 2282.93140155352,
+    "trianglesCap": 166975.8840932112,
+    "views": [
+      {
+        "name": "start-grid",
+        "distance": null,
+        "drawCalls": 134,
+        "triangles": 115336,
+        "identicalFrames": 10,
+        "fps": 3.6739492505572615
+      },
+      {
+        "name": "crossing",
+        "distance": 185,
+        "drawCalls": 38,
+        "triangles": 108988,
+        "identicalFrames": 10,
+        "fps": 3.972615437558506
+      },
+      {
+        "name": "crossing-underpass",
+        "distance": 1260.0612319299014,
+        "drawCalls": 42,
+        "triangles": 109182,
+        "identicalFrames": 10,
+        "fps": 3.7508439398641125
+      },
+      {
+        "name": "island",
+        "distance": 1350,
+        "drawCalls": 35,
+        "triangles": 105858,
+        "identicalFrames": 10,
+        "fps": 4.568296025582458
+      },
+      {
+        "name": "narrow",
+        "distance": 1080,
+        "drawCalls": 45,
+        "triangles": 109268,
+        "identicalFrames": 10,
+        "fps": 3.8419670871486202
+      },
+      {
+        "name": "hairpin",
+        "distance": 435.59829309541544,
+        "drawCalls": 30,
+        "triangles": 105662,
+        "identicalFrames": 10,
+        "fps": 4.661859771309896
+      }
+    ]
+  },
+  {
+    "id": "harbor",
+    "meshes": 47,
+    "length": 2341.240695605225,
+    "trianglesCap": 170474.4417363135,
+    "views": [
+      {
+        "name": "start-grid",
+        "distance": null,
+        "drawCalls": 129,
+        "triangles": 110460,
+        "identicalFrames": 10,
+        "fps": 4.45632798573975
+      },
+      {
+        "name": "island",
+        "distance": 707.3567679607937,
+        "drawCalls": 48,
+        "triangles": 104742,
+        "identicalFrames": 10,
+        "fps": 4.98471354514802
+      },
+      {
+        "name": "narrow",
+        "distance": 667.3567679607937,
+        "drawCalls": 47,
+        "triangles": 104500,
+        "identicalFrames": 10,
+        "fps": 5.496116077995573
+      },
+      {
+        "name": "hairpin",
+        "distance": 188,
+        "drawCalls": 35,
+        "triangles": 103504,
+        "identicalFrames": 10,
+        "fps": 5.08190334223948
+      }
+    ]
+  },
+  {
+    "id": "forest",
+    "meshes": 38,
+    "length": 2237.3654195978625,
+    "trianglesCap": 164241.92517587176,
+    "views": [
+      {
+        "name": "start-grid",
+        "distance": null,
+        "drawCalls": 134,
+        "triangles": 133980,
+        "identicalFrames": 10,
+        "fps": 3.8396559668605224
+      },
+      {
+        "name": "crossing",
+        "distance": 178,
+        "drawCalls": 42,
+        "triangles": 127872,
+        "identicalFrames": 10,
+        "fps": 4.343859953910097
+      },
+      {
+        "name": "crossing-underpass",
+        "distance": 1216.6230778561285,
+        "drawCalls": 43,
+        "triangles": 127874,
+        "identicalFrames": 10,
+        "fps": 3.947783977297922
+      },
+      {
+        "name": "narrow",
+        "distance": 100,
+        "drawCalls": 43,
+        "triangles": 127874,
+        "identicalFrames": 10,
+        "fps": 4.26075841499787
+      },
+      {
+        "name": "hairpin",
+        "distance": 443.5945320956121,
+        "drawCalls": 35,
+        "triangles": 125144,
+        "identicalFrames": 10,
+        "fps": 4.961055712636093
+      }
+    ]
+  },
+  {
+    "id": "volcano",
+    "meshes": 37,
+    "length": 2265.6342550196605,
+    "trianglesCap": 165938.05530117964,
+    "views": [
+      {
+        "name": "start-grid",
+        "distance": null,
+        "drawCalls": 132,
+        "triangles": 100648,
+        "identicalFrames": 10,
+        "fps": 4.29196829661693
+      },
+      {
+        "name": "crossing",
+        "distance": 1143.355828363949,
+        "drawCalls": 40,
+        "triangles": 94070,
+        "identicalFrames": 10,
+        "fps": 4.9710848564381385
+      },
+      {
+        "name": "crossing-underpass",
+        "distance": 216,
+        "drawCalls": 36,
+        "triangles": 94466,
+        "identicalFrames": 10,
+        "fps": 4.574356159403828
+      },
+      {
+        "name": "pit",
+        "distance": 1315,
+        "drawCalls": 36,
+        "triangles": 93750,
+        "identicalFrames": 10,
+        "fps": 5.74316563287064
+      },
+      {
+        "name": "narrow",
+        "distance": 985,
+        "drawCalls": 42,
+        "triangles": 94544,
+        "identicalFrames": 10,
+        "fps": 4.299965600304587
+      },
+      {
+        "name": "hairpin",
+        "distance": 393.5,
+        "drawCalls": 34,
+        "triangles": 94150,
+        "identicalFrames": 10,
+        "fps": 5.117008937750563
+      }
+    ]
+  },
+  {
+    "id": "skyline",
+    "meshes": 40,
+    "length": 2390.427831962635,
+    "trianglesCap": 173425.66991775812,
+    "views": [
+      {
+        "name": "start-grid",
+        "distance": null,
+        "drawCalls": 136,
+        "triangles": 90174,
+        "identicalFrames": 10,
+        "fps": 5.122163601822041
+      },
+      {
+        "name": "crossing",
+        "distance": 294.105015712864,
+        "drawCalls": 38,
+        "triangles": 83806,
+        "identicalFrames": 10,
+        "fps": 5.954862144828619
+      },
+      {
+        "name": "crossing-underpass",
+        "distance": 1389.9341548565492,
+        "drawCalls": 38,
+        "triangles": 83794,
+        "identicalFrames": 10,
+        "fps": 6.087538808177706
+      },
+      {
+        "name": "island",
+        "distance": 1078,
+        "drawCalls": 32,
+        "triangles": 81890,
+        "identicalFrames": 10,
+        "fps": 6.817871914839075
+      },
+      {
+        "name": "pit",
+        "distance": 403,
+        "drawCalls": 34,
+        "triangles": 82022,
+        "identicalFrames": 10,
+        "fps": 6.56656306085966
+      },
+      {
+        "name": "narrow",
+        "distance": 1038,
+        "drawCalls": 34,
+        "triangles": 81894,
+        "identicalFrames": 10,
+        "fps": 6.691798086110159
+      },
+      {
+        "name": "hairpin",
+        "distance": 504.79185628759626,
+        "drawCalls": 29,
+        "triangles": 81670,
+        "identicalFrames": 10,
+        "fps": 7.005090365821711
+      }
+    ]
+  }
+]

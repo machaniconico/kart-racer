@@ -9,9 +9,10 @@ declare const window: Window & { __kartDebug: KartDebug };
 
 // C-010 timing (2026-10-05): npm test, 738 passed, Vitest 4.57 s / wall 4.84 s.
 // .omc/baseline-v3.txt records 3 s before C-001; the 6 s budget needs no seed reduction.
-// M6-00 E2E estimate (v16, 8 courses): M5-05 recorded 18.9 min in total, of which courses.spec took
-// 10.7 min (.omc/logs/m5-05-e2e-full2.log:43). Only courses.spec scales by 8/4; other specs stay:
-// 10.7 x 2 + (18.9 - 10.7) = 29.6 min. M6-05 measures the real total and compares it with this figure.
+// M6-05 / darwin-arm64: all 29 E2E tests passed in 1437.15 s (23.95 min), workers 1.
+// courses.spec: 16.9 min; multiplayer.spec: 5.9 min. The M6-00 estimate was 29.6 min.
+// Below the 35 min parallelism threshold: retain 300 s/test and the 45 min CI job budget.
+// Build ran once; logs, FPS, and visual followups: e2e/__screenshots__/m6-05/.
 const courses = [
   // M2.5 re-measured 2026-10-11: Chromium 1280x720, DPR 1, seed 127, 10 stationary frames.
   // M1-04 -> M2.5 (drawCalls / triangles), including shadows:
@@ -23,16 +24,17 @@ const courses = [
   // M5-05 / v15: measured after all four course stories and shared followups, same grid setup.
   // Last values: meadow 123 / 41_530, canyon 129 / 54_564, snowpeak 125 / 41_952, neon 125 / 62_748.
   { id: 'meadow', name: 'MEADOW LOOP', drawCalls: 125, triangles: 107_048 },
-  { id: 'canyon', name: 'SUNSCAR CANYON', drawCalls: 138, triangles: 124_808 },
+  // M6-09: pit clipping/rim paint and tapered island scenery, same measurement setup.
+  { id: 'canyon', name: 'SUNSCAR CANYON', drawCalls: 139, triangles: 124_630 },
   { id: 'snowpeak', name: 'FROSTBITE PEAK', drawCalls: 129, triangles: 112_768 },
-  { id: 'neon', name: 'NEON NIGHTLINE', drawCalls: 134, triangles: 115_360 },
-  // M6-00 / v16: the four new courses are pending (null) until M6-05 measures them.
-  { id: 'harbor', name: 'TIDEWATER HARBOR', drawCalls: null, triangles: null },
-  { id: 'forest', name: 'MOSSWOOD TRAIL', drawCalls: null, triangles: null },
-  { id: 'volcano', name: 'EMBER CALDERA', drawCalls: null, triangles: null },
-  { id: 'skyline', name: 'STRATOS CITY', drawCalls: null, triangles: null },
+  { id: 'neon', name: 'NEON NIGHTLINE', drawCalls: 134, triangles: 115_336 },
+  // M6-05 / v16: Chromium on darwin-arm64, 1280×720, DPR 1, seed 127, 10 stationary frames.
+  { id: 'harbor', name: 'TIDEWATER HARBOR', drawCalls: 129, triangles: 110_460 },
+  { id: 'forest', name: 'MOSSWOOD TRAIL', drawCalls: 134, triangles: 133_980 },
+  { id: 'volcano', name: 'EMBER CALDERA', drawCalls: 132, triangles: 100_648 },
+  { id: 'skyline', name: 'STRATOS CITY', drawCalls: 136, triangles: 90_174 },
 ] as const satisfies readonly {
-  id: string; name: string; drawCalls: number | null; triangles: number | null;
+  id: string; name: string; drawCalls: number; triangles: number;
 }[];
 
 // Triangle cap by course length: 60 triangles per metre (ribbon, walls, decks) + 30k for scenery.
@@ -76,17 +78,20 @@ for (const { id, name, drawCalls: baselineDrawCalls, triangles: baselineTriangle
         return { name: 'crossing-underpass', distance: lower.distance - 30 };
       }),
       ...(track.def.splits ?? []).slice(0, 1).map(split => ({ name: 'island', distance: split.from - 30 })),
+      ...track.def.surfaces.filter(zone => zone.kind === 'pit').slice(0, 1)
+        .map(zone => ({ name: 'pit', distance: zone.from - 15 })),
       { name: 'narrow', distance: narrow.distance - 30 },
       { name: 'hairpin', distance: findHairpins(track)[0]!.from - 30 },
     ];
     // First deck or split by arc distance; courses without either use their narrow passage.
     const approach = features.filter(view => view.name === 'crossing' || view.name === 'island')
       .sort((a, b) => a.distance - b.distance)[0] ?? features.find(view => view.name === 'narrow')!;
-    const { views, meshes } = await page.evaluate(({ id, features, approach }) => {
+    const { views, meshes } = await page.evaluate(async ({ id, features, approach }) => {
       const { createRace, captureRenderSnapshot, getTrack, sampleTrack } = window.__kartDebug.modules;
       const renderer = window.__kartDebug.renderer!;
       const track = getTrack(id);
-      const views = [{ name: 'start-grid', distance: null }, ...features].map((view, index) => {
+      const views = [];
+      for (const [index, view] of [{ name: 'start-grid', distance: null }, ...features].entries()) {
         const state = createRace(127, { trackId: id });
         // GameUI redraws its minimap only on a new tick divisible by four.
         state.tick = (index + 1) * 4;
@@ -100,6 +105,9 @@ for (const { id, name, drawCalls: baselineDrawCalls, triangles: baselineTriangle
         window.__kartDebug.advance(0);
         const minimap = (document.querySelector('#minimap-canvas') as HTMLCanvasElement).toDataURL('image/png').split(',')[1];
         const snapshot = captureRenderSnapshot(state);
+        // Item-box spin/bob uses renderer time, independently of the seeded simulation.
+        // Pin it before the synchronous capture so load time cannot change golden pixels.
+        (renderer as unknown as { elapsed: number }).elapsed = 0;
         renderer.update(state, snapshot, 1, 0, 'title');
         const samples: { drawCalls: number; triangles: number }[] = [];
         for (let frame = 0; frame < 10; frame++) {
@@ -107,9 +115,18 @@ for (const { id, name, drawCalls: baselineDrawCalls, triangles: baselineTriangle
           const { calls: drawCalls, triangles } = renderer.renderer.info.render;
           samples.push({ drawCalls, triangles });
         }
-        return { ...view, budget: view.name === 'start-grid' || view.name === approach.name,
-          samples, minimap, png: renderer.renderer.domElement.toDataURL('image/png').split(',')[1] };
-      });
+        const png = renderer.renderer.domElement.toDataURL('image/png').split(',')[1];
+        // Static, paced frames measure observed browser FPS, including GPU completion.
+        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+        const started = performance.now();
+        for (let frame = 0; frame < 30; frame++) {
+          await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+          renderer.update(state, snapshot, 1, 0, 'race');
+          renderer.renderer.getContext().finish();
+        }
+        views.push({ ...view, budget: view.name === 'start-grid' || view.name === approach.name,
+          samples, fps: 30_000 / (performance.now() - started), minimap, png });
+      }
       let meshes = 0;
       window.__kartDebug.render.courseGroup!.traverse(object => {
         if (object.type === 'Mesh' || object.type === 'InstancedMesh') meshes++;
@@ -119,17 +136,27 @@ for (const { id, name, drawCalls: baselineDrawCalls, triangles: baselineTriangle
     for (const view of views) {
       await testInfo.attach(`${id}-${view.name}`, { body: Buffer.from(view.png, 'base64'), contentType: 'image/png' });
       await testInfo.attach(`${id}-${view.name}-minimap`, { body: Buffer.from(view.minimap, 'base64'), contentType: 'image/png' });
-      if (!view.budget) continue;
+      // Linux goldens are pending-ci (M6-06); never derive them from darwin pixels.
+      if (process.platform === 'darwin' && ['harbor', 'forest', 'volcano', 'skyline'].includes(id)) {
+        expect(Buffer.from(view.png, 'base64')).toMatchSnapshot(`${id}-${view.name}.png`);
+        if (view.name === 'start-grid') {
+          expect(Buffer.from(view.minimap, 'base64')).toMatchSnapshot(`${id}-minimap.png`);
+        }
+      }
       for (const { drawCalls, triangles } of view.samples) {
+        if (view.name === 'start-grid') {
+          expect({ drawCalls, triangles }).toEqual({ drawCalls: baselineDrawCalls, triangles: baselineTriangles });
+        }
         expect(drawCalls).toBeGreaterThan(0);
         expect(drawCalls).toBeLessThanOrEqual(200);
         expect(triangles).toBeGreaterThan(0);
         expect(triangles).toBeLessThanOrEqual(trianglesCap(track.length));
-        // Pending (null) rows check only the absolute budgets above.
-        if (baselineDrawCalls !== null) expect(drawCalls).toBeLessThanOrEqual(baselineDrawCalls + 20);
-        if (baselineTriangles !== null) expect(triangles).toBeLessThanOrEqual(baselineTriangles + 15_000);
+        if (view.budget) expect(drawCalls).toBeLessThanOrEqual(baselineDrawCalls + 20);
+        if (view.budget) expect(triangles).toBeLessThanOrEqual(baselineTriangles + 15_000);
       }
     }
+    console.info('M6-05 render measurement', JSON.stringify({ id, meshes,
+      views: views.map(({ png: _png, minimap: _minimap, ...view }) => view) }));
     await testInfo.attach('draw-calls', {
       body: JSON.stringify({ id, layout, baselineDrawCalls, baselineTriangles, meshes,
         views: views.map(({ png: _png, minimap: _minimap, ...view }) => view) }), contentType: 'application/json',
@@ -172,6 +199,19 @@ for (const { id, name, drawCalls: baselineDrawCalls, triangles: baselineTriangle
     }
   });
 }
+
+test('C-010: title shows the eight-course picker', async ({ page }) => {
+  await page.goto('./');
+  await expect(page.locator('#title-screen')).toBeVisible();
+  await expect(page.locator('#course-select input')).toHaveCount(8);
+  // Linux golden remains pending-ci until M6-06 captures it on the CI renderer.
+  if (process.platform === 'darwin') {
+    await page.addStyleTag({ content: 'canvas { visibility: hidden !important; }' });
+    await expect(page.locator('#title-screen')).toHaveScreenshot('title-eight-courses.png', {
+      animations: 'disabled',
+    });
+  }
+});
 
 test.describe('C-011 solo touch selection', () => {
   test.use({ hasTouch: true });
@@ -540,7 +580,7 @@ for (const missedBoost of [false, true]) {
 test('C-010: sixteen course switches keep renderer geometry memory bounded', async ({ page }, testInfo) => {
   await page.goto('./');
   await page.waitForFunction(() => !!window.__kartDebug?.rendererInfo);
-  // Canyon has the largest geometry count; visit every course twice (8 courses x 2 = 16 switches).
+  // Canyon still has the largest measured geometry count (90); visit all eight courses twice.
   const lap = ['canyon', 'snowpeak', 'neon', 'meadow', 'harbor', 'forest', 'volcano', 'skyline'] as const;
   const sequence = [...lap, ...lap];
   const samples = [];
@@ -563,6 +603,7 @@ test('C-010: sixteen course switches keep renderer geometry memory bounded', asy
   await testInfo.attach('geometry-memory', {
     body: JSON.stringify(samples), contentType: 'application/json',
   });
+  console.info('M6-05 geometry memory', JSON.stringify(samples));
   for (const [index, sample] of samples.entries()) {
     expect(sample.geometries).toBeLessThanOrEqual(samples[0].geometries);
     if (index >= lap.length) expect(sample.geometries).toBe(samples[index - lap.length].geometries);

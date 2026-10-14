@@ -45,16 +45,17 @@ import { skyline } from './themes/skyline';
 // neon 134 / 115_360 / 38 -> 134 / 115_336 / 38; two tapered building instances removed.
 // meadow 125 / 107_048 / 34 and snowpeak 129 / 112_768 / 36 are unchanged.
 type RenderBaseline = { drawCalls: number; triangles: number; meshes: number };
-// M6-00 / v16: the four new courses are pending (null) until M6-05 measures them.
-const RENDER_BASELINE: Record<TrackId, RenderBaseline | null> = {
+// M6-05 / v16: Chromium on darwin-arm64, 1280×720, DPR 1, seed 127, 10 stationary frames.
+// All ten grid frames matched; all feature views also passed the length-based trianglesCap.
+const RENDER_BASELINE: Record<TrackId, RenderBaseline> = {
   meadow: { drawCalls: 125, triangles: 107_048, meshes: 34 },
   canyon: { drawCalls: 139, triangles: 124_630, meshes: 43 },
   snowpeak: { drawCalls: 129, triangles: 112_768, meshes: 36 },
   neon: { drawCalls: 134, triangles: 115_336, meshes: 38 },
-  harbor: null,
-  forest: null,
-  volcano: null,
-  skyline: null,
+  harbor: { drawCalls: 129, triangles: 110_460, meshes: 47 },
+  forest: { drawCalls: 134, triangles: 133_980, meshes: 38 },
+  volcano: { drawCalls: 132, triangles: 100_648, meshes: 37 },
+  skyline: { drawCalls: 136, triangles: 90_174, meshes: 40 },
 };
 
 // Only the browser's text drawing context is supplied. All three objects and
@@ -854,7 +855,7 @@ describe('variable widths and batched barriers', () => {
       + track.def.surfaces.filter(zone => zone.kind === 'spin').length;
     const course = build(track, theme);
     const baseline = RENDER_BASELINE[id];
-    if (baseline) expect(meshCount(course.group)).toBe(baseline.meshes);
+    expect(meshCount(course.group)).toBe(baseline.meshes);
     expect(course.group.getObjectByName('motion')!.children).toHaveLength(motionMeshes);
   });
 });

@@ -1,0 +1,173 @@
+
+> kart-racer@1.0.0 test
+> vitest run --maxWorkers=1 --silent=false --reporter=verbose src/sim/handling.test.ts src/net/snapshotCodec.test.ts -t all 72 laps|pins the complete course registry
+
+
+ RUN  v4.1.11 /Users/macha/kart-racer
+
+stdout | src/sim/handling.test.ts > H1 CPU balance: absolute range and recorded baseline > finishes and replays all 72 laps on meadow within pace and hit budgets
+M6-05 handling measurement {
+  trackId: 'meadow',
+  meanLap: 68.5011574074074,
+  wallHits: 0,
+  bandHits: 0,
+  length: 2286.353556318704
+}
+
+ ↓ src/sim/handling.test.ts > H1 handling > turns tighter than v7 at 8 m/s with full steer and throttle
+ ↓ src/sim/handling.test.ts > H1 handling > turns tighter than v7 at 15 m/s with full steer and throttle
+ ↓ src/sim/handling.test.ts > H1 handling > turns tighter than v7 at 25 m/s with full steer and throttle
+ ↓ src/sim/handling.test.ts > H1 handling > caps high-speed yaw at 1.3x v7 at 25 m/s
+ ↓ src/sim/handling.test.ts > H1 handling > caps high-speed yaw at 1.3x v7 at 30 m/s
+ ↓ src/sim/handling.test.ts > H1 handling > caps high-speed yaw at 1.3x v7 at 35 m/s
+ ↓ src/sim/handling.test.ts > H1 handling > caps high-speed yaw at 1.3x v7 at 45 m/s
+ ↓ src/sim/handling.test.ts > H1 handling > caps high-speed yaw at 1.3x v7 at 60 m/s
+ ↓ src/sim/handling.test.ts > H1 handling > caps high-speed yaw at 1.3x v7 at 90 m/s
+ ↓ src/sim/handling.test.ts > H1 handling > keeps drift direction -1 under neutral and reverse steering
+ ↓ src/sim/handling.test.ts > H1 handling > keeps drift direction 1 under neutral and reverse steering
+ ↓ src/sim/handling.test.ts > H1 handling > latches direction -1 on entry and keeps it through sustained countersteering
+ ↓ src/sim/handling.test.ts > H1 handling > latches direction 1 on entry and keeps it through sustained countersteering
+ ↓ src/sim/handling.test.ts > H1 handling > preserves the mini-turbo boundary at 0.6333333333333333 seconds and awards 0 seconds
+ ↓ src/sim/handling.test.ts > H1 handling > preserves the mini-turbo boundary at 0.65 seconds and awards 0.65 seconds
+ ↓ src/sim/handling.test.ts > H1 handling > preserves the mini-turbo boundary at 1.4833333333333334 seconds and awards 0.65 seconds
+ ↓ src/sim/handling.test.ts > H1 handling > preserves the mini-turbo boundary at 1.5 seconds and awards 1.25 seconds
+stdout | src/sim/handling.test.ts > H1 CPU balance: absolute range and recorded baseline > finishes and replays all 72 laps on canyon within pace and hit budgets
+M6-05 handling measurement {
+  trackId: 'canyon',
+  meanLap: 68.49583333333334,
+  wallHits: 0,
+  bandHits: 0,
+  length: 2274.6514118884065
+}
+
+ ✓ src/sim/handling.test.ts > H1 CPU balance: absolute range and recorded baseline > finishes and replays all 72 laps on meadow within pace and hit budgets 3551ms
+stdout | src/sim/handling.test.ts > H1 CPU balance: absolute range and recorded baseline > finishes and replays all 72 laps on snowpeak within pace and hit budgets
+M6-05 handling measurement {
+  trackId: 'snowpeak',
+  meanLap: 67.89120370370368,
+  wallHits: 0,
+  bandHits: 0,
+  length: 2262.305617320616
+}
+
+ ✓ src/sim/handling.test.ts > H1 CPU balance: absolute range and recorded baseline > finishes and replays all 72 laps on canyon within pace and hit budgets 4528ms
+stdout | src/sim/handling.test.ts > H1 CPU balance: absolute range and recorded baseline > finishes and replays all 72 laps on neon within pace and hit budgets
+M6-05 handling measurement {
+  trackId: 'neon',
+  meanLap: 64.32939814814814,
+  wallHits: 0,
+  bandHits: 1,
+  length: 2282.93140155352
+}
+
+ ✓ src/sim/handling.test.ts > H1 CPU balance: absolute range and recorded baseline > finishes and replays all 72 laps on snowpeak within pace and hit budgets 3536ms
+stdout | src/sim/handling.test.ts > H1 CPU balance: absolute range and recorded baseline > finishes and replays all 72 laps on harbor within pace and hit budgets
+M6-05 handling measurement {
+  trackId: 'harbor',
+  meanLap: 69.73750000000001,
+  wallHits: 0,
+  bandHits: 0,
+  length: 2341.240695605225
+}
+
+ ✓ src/sim/handling.test.ts > H1 CPU balance: absolute range and recorded baseline > finishes and replays all 72 laps on neon within pace and hit budgets 3317ms
+stdout | src/sim/handling.test.ts > H1 CPU balance: absolute range and recorded baseline > finishes and replays all 72 laps on forest within pace and hit budgets
+M6-05 handling measurement {
+  trackId: 'forest',
+  meanLap: 70.53587962962962,
+  wallHits: 0,
+  bandHits: 0,
+  length: 2237.3654195978625
+}
+
+ ✓ src/sim/handling.test.ts > H1 CPU balance: absolute range and recorded baseline > finishes and replays all 72 laps on harbor within pace and hit budgets 4097ms
+stdout | src/sim/handling.test.ts > H1 CPU balance: absolute range and recorded baseline > finishes and replays all 72 laps on volcano within pace and hit budgets
+M6-05 handling measurement {
+  trackId: 'volcano',
+  meanLap: 67.82407407407408,
+  wallHits: 0,
+  bandHits: 0,
+  length: 2265.6342550196605
+}
+
+ ✓ src/sim/handling.test.ts > H1 CPU balance: absolute range and recorded baseline > finishes and replays all 72 laps on forest within pace and hit budgets 3556ms
+stdout | src/sim/handling.test.ts > H1 CPU balance: absolute range and recorded baseline > finishes and replays all 72 laps on skyline within pace and hit budgets
+M6-05 handling measurement {
+  trackId: 'skyline',
+  meanLap: 67.35324074074076,
+  wallHits: 0,
+  bandHits: 1,
+  length: 2390.427831962635
+}
+
+ ✓ src/sim/handling.test.ts > H1 CPU balance: absolute range and recorded baseline > finishes and replays all 72 laps on volcano within pace and hit budgets 3476ms
+ ✓ src/sim/handling.test.ts > H1 CPU balance: absolute range and recorded baseline > finishes and replays all 72 laps on skyline within pace and hit budgets 4331ms
+ ↓ src/sim/handling.test.ts > M1-03 passages around centre pillars > keeps an assisted, neutral-steer kart clear of three pillars for 8 seconds
+ ↓ src/sim/handling.test.ts > M1-03 passages around centre pillars > 8 CPUs finish seed 1 with at most 4 band hits and 4 exclusion entries
+ ↓ src/sim/handling.test.ts > M1-03 passages around centre pillars > 8 CPUs finish seed 42 with at most 4 band hits and 4 exclusion entries
+ ↓ src/sim/handling.test.ts > M1-03 passages around centre pillars > 8 CPUs finish seed 98765 with at most 4 band hits and 4 exclusion entries
+ ↓ src/sim/handling.test.ts > M2-02 CPU lane choice at an island split > uses both lanes, picks the risky one 25-45% of the time, never switches on the approach, and finishes
+stdout | src/net/snapshotCodec.test.ts > protocol layout fingerprint > pins the complete course registry to the protocol version
+COURSE_FINGERPRINT (v16 pending): 513548114
+
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > fits eight karts, 24 boxes and 27 entities at 1,200 bytes; two bolts below 600
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > round-trips all moving poses within tolerance, including a ten-second drift
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > round-trips the lap count in header byte 28 and lastBand + 1 in kart byte 58
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > packs all roulette buckets alongside all orbit counts in byte seven without growing effects
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > inherits meadow and static state from a template without aliasing it
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > inherits canyon and static state from a template without aliasing it
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > inherits snowpeak and static state from a template without aliasing it
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > inherits neon and static state from a template without aliasing it
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > inherits harbor and static state from a template without aliasing it
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > inherits forest and static state from a template without aliasing it
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > inherits volcano and static state from a template without aliasing it
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > inherits skyline and static state from a template without aliasing it
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > carries airTime 0 as a clamped centisecond byte
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > carries airTime 0.004 as a clamped centisecond byte
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > carries airTime 0.005 as a clamped centisecond byte
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > carries airTime 0.8 as a clamped centisecond byte
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > carries airTime 2.55 as a clamped centisecond byte
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > carries airTime 3 as a clamped centisecond byte
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > retains the closest 27 of 28 entities to any human, ignoring nearer CPUs
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > retains the closest 27 of 40 entities to any human, ignoring nearer CPUs
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > retains the closest 27 of 80 entities to any human, ignoring nearer CPUs
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > retains the closest 27 of 512 entities to any human, ignoring nearer CPUs
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > considers all humans, breaks distance ties by ID and has a deterministic CPU-only fallback
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > preserves quantization at boundaries and across a deterministic sweep of headings and timers
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > encodes real countdown/racing/finished states and default neutral inputs
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > packs every valid byte 55 combination without changing neighboring effect fields
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > normalizes an already-running rapid dash before timer quantization without mutating the source
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > rejects missing, fractional and out-of-range 'rapidUnused' before encoding
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > rejects missing, fractional and out-of-range 'aiHoldTicks' before encoding
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > keeps a fresh rapid dash usable after a zero-timer snapshot
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > expires an active rapid dash rounded to zero on press without restarting it
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > expires an active rapid dash rounded to zero on advance without restarting it
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > resumes CPU trap defense at tick 59 and releases at the 60-tick cap
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > resumes CPU bolt defense at tick 59 and releases at the 60-tick cap
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > resumes CPU decoy defense at tick 59 and releases at the 60-tick cap
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > resumes CPU bomb defense at tick 59 and releases at the 60-tick cap
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > preserves all fourteen inventory items and entity targeting/auxiliary values
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > round-trips every I2 kind with its targeting, fuse, track distance or trap age
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > preserves bolt launch safety (cleared=false) without losing bomb bounce counts
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > preserves bolt launch safety (cleared=true) without losing bomb bounce counts
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > expires a float32 bomb fuse on the same tick as the host with 128 ticks remaining
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > expires a float32 bomb fuse on the same tick as the host with 143 ticks remaining
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > arms bomb proximity on the same tick after restoring a float32 fuse
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > uses the documented little-endian header and rejects truncated or oversized payloads
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > rejects corrupt discriminants, flags, floats, inputs, owners and duplicate entity IDs
+ ↓ src/net/snapshotCodec.test.ts > snapshot codec > rejects invalid source metadata and incompatible roster/box layouts
+ ↓ src/net/snapshotCodec.test.ts > protocol layout fingerprint > matches the actual sim descriptors to the pinned protocol version
+ ✓ src/net/snapshotCodec.test.ts > protocol layout fingerprint > pins the complete course registry to the protocol version 2ms
+ ↓ src/net/snapshotCodec.test.ts > I5 orbit snapshots > synchronizes orbit kind and count in two effect bytes without consuming entity capacity
+ ↓ src/net/snapshotCodec.test.ts > I5 orbit snapshots > resumes orbit phase, contact and final kind-1 deployment from a snapshot
+ ↓ src/net/snapshotCodec.test.ts > I5 orbit snapshots > resumes orbit phase, contact and final kind-2 deployment from a snapshot
+ ↓ src/net/snapshotCodec.test.ts > I5 orbit snapshots > rejects reserved orbit/roulette bits and out-of-range orbit kinds
+ ↓ src/net/snapshotCodec.test.ts > I5 orbit snapshots > rejects bomb ownerCleared=false in source and the binary owner-cleared bit
+ ↓ src/net/snapshotCodec.test.ts > I5 orbit snapshots > rejects bomb ownerCleared=true in source and the binary owner-cleared bit
+ ↓ src/net/snapshotCodec.test.ts > snapshot item visuals > matches collision and rendered world positions at any heading, scale and local animation time
+ ↓ src/net/snapshotCodec.test.ts > snapshot item visuals > keeps the decoy box silhouette, mint shell and height identical to a pickup box
+
+ Test Files  2 passed (2)
+      Tests  9 passed | 77 skipped (86)
+   Start at  04:56:10
+   Duration  30.74s (transform 111ms, setup 0ms, import 182ms, tests 30.39s, environment 0ms)

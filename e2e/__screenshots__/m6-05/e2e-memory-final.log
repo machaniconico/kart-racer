@@ -1,0 +1,19 @@
+
+> kart-racer@1.0.0 e2e
+> playwright test e2e/courses.spec.ts --grep sixteen course switches --update-snapshots=none
+
+[WebServer] (node:65966) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+[WebServer]   ➜  Local:   http://127.0.0.1:4174/kart-racer/
+
+Running 1 test using 1 worker
+
+(node:65968) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+M6-05 geometry memory [{"trackId":"canyon","geometries":90,"disposedGeometries":0},{"trackId":"snowpeak","geometries":80,"disposedGeometries":0},{"trackId":"neon","geometries":83,"disposedGeometries":0},{"trackId":"meadow","geometries":77,"disposedGeometries":0},{"trackId":"harbor","geometries":81,"disposedGeometries":0},{"trackId":"forest","geometries":85,"disposedGeometries":0},{"trackId":"volcano","geometries":79,"disposedGeometries":0},{"trackId":"skyline","geometries":80,"disposedGeometries":0},{"trackId":"canyon","geometries":90,"disposedGeometries":0},{"trackId":"snowpeak","geometries":80,"disposedGeometries":0},{"trackId":"neon","geometries":83,"disposedGeometries":0},{"trackId":"meadow","geometries":77,"disposedGeometries":0},{"trackId":"harbor","geometries":81,"disposedGeometries":0},{"trackId":"forest","geometries":85,"disposedGeometries":0},{"trackId":"volcano","geometries":79,"disposedGeometries":0},{"trackId":"skyline","geometries":80,"disposedGeometries":0}]
+  ✓  1 e2e/courses.spec.ts:580:1 › C-010: sixteen course switches keep renderer geometry memory bounded (23.2s)
+
+  1 passed (24.0s)
+real 24.42
+user 36.44
+sys 10.93

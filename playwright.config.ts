@@ -4,6 +4,7 @@ export default defineConfig({
   testDir: './e2e',
   testMatch: ['multiplayer.spec.ts', 'courses.spec.ts', 'roulette.spec.ts', 'handling.spec.ts'],
   fullyParallel: false,
+  // M6-05: 29 tests / 23.95 min on darwin; below the 35 min threshold for workers 2.
   workers: 1,
   forbidOnly: !!process.env.CI,
   retries: 0,
@@ -12,11 +13,13 @@ export default defineConfig({
   timeout: 300_000,
   expect: { timeout: 10_000 },
   outputDir: 'test-results',
+  snapshotPathTemplate: '{testDir}/__screenshots__/{platform}/{arg}{ext}',
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
     browserName: 'chromium',
     baseURL: 'http://127.0.0.1:4174/kart-racer/',
     viewport: { width: 1280, height: 720 },
+    deviceScaleFactor: 1,
     actionTimeout: 10_000,
     navigationTimeout: 30_000,
     // Continuous canvas captures stall WebGL and distort the real-time race.
@@ -31,7 +34,8 @@ export default defineConfig({
     },
   },
   webServer: {
-    command: 'vite build --mode e2e && vite preview --config e2e/vite.e2e.config.ts --port 4174 --strictPort',
+    // Build once beforehand with VITE_KART_DEBUG=1 npm run build; every spec shares that dist.
+    command: 'vite preview --config e2e/vite.e2e.config.ts --port 4174 --strictPort',
     url: 'http://127.0.0.1:4174/kart-racer/',
     reuseExistingServer: false,
     timeout: 60_000,

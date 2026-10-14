@@ -1,0 +1,82 @@
+[
+  {
+    "trackId": "canyon",
+    "geometries": 90,
+    "disposedGeometries": 0
+  },
+  {
+    "trackId": "snowpeak",
+    "geometries": 80,
+    "disposedGeometries": 0
+  },
+  {
+    "trackId": "neon",
+    "geometries": 83,
+    "disposedGeometries": 0
+  },
+  {
+    "trackId": "meadow",
+    "geometries": 77,
+    "disposedGeometries": 0
+  },
+  {
+    "trackId": "harbor",
+    "geometries": 81,
+    "disposedGeometries": 0
+  },
+  {
+    "trackId": "forest",
+    "geometries": 85,
+    "disposedGeometries": 0
+  },
+  {
+    "trackId": "volcano",
+    "geometries": 79,
+    "disposedGeometries": 0
+  },
+  {
+    "trackId": "skyline",
+    "geometries": 80,
+    "disposedGeometries": 0
+  },
+  {
+    "trackId": "canyon",
+    "geometries": 90,
+    "disposedGeometries": 0
+  },
+  {
+    "trackId": "snowpeak",
+    "geometries": 80,
+    "disposedGeometries": 0
+  },
+  {
+    "trackId": "neon",
+    "geometries": 83,
+    "disposedGeometries": 0
+  },
+  {
+    "trackId": "meadow",
+    "geometries": 77,
+    "disposedGeometries": 0
+  },
+  {
+    "trackId": "harbor",
+    "geometries": 81,
+    "disposedGeometries": 0
+  },
+  {
+    "trackId": "forest",
+    "geometries": 85,
+    "disposedGeometries": 0
+  },
+  {
+    "trackId": "volcano",
+    "geometries": 79,
+    "disposedGeometries": 0
+  },
+  {
+    "trackId": "skyline",
+    "geometries": 80,
+    "disposedGeometries": 0
+  }
+]
