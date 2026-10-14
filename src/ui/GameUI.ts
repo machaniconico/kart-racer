@@ -46,6 +46,7 @@ export class GameUI {
   private readonly mapContext: CanvasRenderingContext2D | null;
   private trackPath = new Path2D();
   private lanePath = new Path2D();
+  private deckPath = new Path2D();
   private laneWidth = 5;
   private mapTrack: Track | null = null;
   private readonly refs: Record<string, HTMLElement> = {};
@@ -484,6 +485,7 @@ export class GameUI {
     this.mapTrack = track;
     this.trackPath = new Path2D();
     this.lanePath = new Path2D();
+    this.deckPath = new Path2D();
     this.laneWidth = 5;
     if (track.samples.length === 0) return;
     const minX = Math.min(...track.samples.map((point) => point.x));
@@ -518,6 +520,24 @@ export class GameUI {
           ...split.lanes.map(lane => (lane.offsetMax - lane.offsetMin) * this.mapScale * 0.5));
       }
     }
+    this.prepareDecks(track);
+  }
+
+  /** Elevated spans as their own path, drawn after the flat road so the upper deck shows on top at a crossing. */
+  private prepareDecks(track: Track): void {
+    for (const deck of track.def.decks ?? []) {
+      const spans = deck.from <= deck.to ? [[deck.from, deck.to]] : [[deck.from, track.length], [0, deck.to]];
+      for (const [from, to] of spans) {
+        const points = [sampleTrack(track, from!), ...track.samples.filter(p => p.distance > from! && p.distance < to!),
+          sampleTrack(track, to! >= track.length ? track.length - 1e-6 : to!)];
+        points.forEach((point, index) => {
+          const x = point.x * this.mapScale + this.mapOffsetX;
+          const y = point.z * this.mapScale + this.mapOffsetZ;
+          if (index === 0) this.deckPath.moveTo(x, y);
+          else this.deckPath.lineTo(x, y);
+        });
+      }
+    }
   }
 
   private drawMap(state: RaceState): void {
@@ -540,6 +560,14 @@ export class GameUI {
     context.strokeStyle = 'rgba(255, 255, 255, .7)';
     context.lineWidth = this.laneWidth;
     context.stroke(this.lanePath);
+    if (track.def.decks?.length) {
+      context.strokeStyle = 'rgba(9, 39, 31, .95)';
+      context.lineWidth = 13;
+      context.stroke(this.deckPath);
+      context.strokeStyle = '#ffe9a8';
+      context.lineWidth = 7;
+      context.stroke(this.deckPath);
+    }
     const start = track.samples[0];
     if (start) {
       const x = start.x * this.mapScale + this.mapOffsetX;
