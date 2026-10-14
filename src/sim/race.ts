@@ -101,11 +101,16 @@ interface PreviousPose { readonly x: number; readonly z: number; readonly trackD
 
 /** Outer walls first, then barrier bands. `previous` is the pre-move position for swept nose contact. */
 function collideCorridor(track: Track, state: RaceState, kart: KartState, time: number, previous?: PreviousPose): void {
-  collideWall(track, state, kart);
   const barriers = track.def.barriers;
+  const lastBarrier = barriers?.[kart.lastBand];
+  // exclusionAt includes the radius-expanded caps and handles spans across the lap seam.
+  if (kart.lastBand !== -1 && (!lastBarrier || !exclusionAt(track, lastBarrier, kart.trackDistance, time))) {
+    kart.lastBand = -1;
+  }
+  collideWall(track, state, kart);
   if (!barriers?.length) return;
-  const contacts: { normal: CorridorNormal; band: boolean }[] = [];
-  for (const barrier of barriers) {
+  const contacts: { normal: CorridorNormal; band: boolean; barrierIndex: number }[] = [];
+  for (const [barrierIndex, barrier] of barriers.entries()) {
     if (!insideBarrier(track, barrier, kart.trackDistance, kart.lateralOffset, time)) continue;
     if (!previous || insideBarrier(track, barrier, previous.trackDistance, previous.lateralOffset, time)) continue;
     // A fast kart can jump the 0.95 m nose in one tick; the swept entry point keeps it a head-on hit.
@@ -160,7 +165,7 @@ function collideCorridor(track: Track, state: RaceState, kart: KartState, time: 
       kart.z = fromZ + (toZ - fromZ) * low;
       updateProjection(track, kart);
     }
-    contacts.push({ normal, band: true });
+    contacts.push({ normal, band: true, barrierIndex });
   }
   // Settle laterally into the nearest interval that satisfies every band and the wall at once.
   for (let correction = 0; correction < 4; correction++) {
@@ -175,16 +180,21 @@ function collideCorridor(track: Track, state: RaceState, kart: KartState, time: 
     const margin = Math.min(1e-6, (interval.max - interval.min) / 2);
     const target = kart.lateralOffset < interval.min ? interval.min + margin : interval.max - margin;
     const shift = target - kart.lateralOffset;
+    if (contacts.length === 0) {
+      const edge = shift > 0 ? interval.min : interval.max;
+      const band = Math.abs(edge) < limit;
+      const barrierIndex = band ? barriers.findIndex(barrier => {
+        const exclusion = exclusionAt(track, barrier, kart.trackDistance, time);
+        return exclusion !== null && Math.abs((shift > 0 ? exclusion.max : exclusion.min) - edge) < 1e-9;
+      }) : -1;
+      contacts.push({ normal: { d: 0, offset: Math.sign(shift) }, band, barrierIndex });
+    }
     const sample = sampleTrack(track, kart.trackDistance);
     kart.x += sample.nx * shift;
     kart.z += sample.nz * shift;
     updateProjection(track, kart);
-    if (contacts.length === 0) {
-      const edge = shift > 0 ? interval.min : interval.max;
-      contacts.push({ normal: { d: 0, offset: Math.sign(shift) }, band: Math.abs(edge) < limit });
-    }
   }
-  for (const { normal, band } of contacts) {
+  for (const { normal, band, barrierIndex } of contacts) {
     const sample = sampleTrack(track, kart.trackDistance);
     // Outward from the obstacle in world space; the kart moves into it when travel opposes this.
     const wx = sample.tx * normal.d + sample.nx * normal.offset;
@@ -202,9 +212,14 @@ function collideCorridor(track: Track, state: RaceState, kart: KartState, time: 
     // riding the rail into a nose would otherwise stop the kart silently. The speed floor keeps the
     // follow-up nudges after a head-on stop (heading kept, speed nearly zero) under the cooldown.
     const heavyBand = band && angle >= Math.PI / 3 && kart.speed > 6;
-    if (kart.speed * inward > 4 && (kart.hitCooldown === 0 || heavyBand)) {
+    if (band && barrierIndex === kart.lastBand) {
+      // Same-band contact never reports again until its span is left, even at speed.
+      // Keep the rail cooldown alive for later collision passes in this tick.
+      kart.hitCooldown = 0.7;
+    } else if (kart.speed * inward > 4 && (kart.hitCooldown === 0 || heavyBand)) {
       // Rail hits keep their original value-less event (value 0 by convention).
       state.events.push(band ? { type: 'hit', kartId: kart.id, value: 1 } : { type: 'hit', kartId: kart.id });
+      if (band) kart.lastBand = barrierIndex;
       kart.hitCooldown = 0.7;
     }
     const blend = Math.max(0, Math.min(1, (angle - Math.PI / 9) / (2 * Math.PI / 9)));

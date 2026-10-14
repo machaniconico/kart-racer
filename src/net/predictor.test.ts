@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { getAIInput } from '../sim/ai';
 import { ROULETTE_TIME } from '../sim/items';
 import { createRace, FIXED_DT, stepRace } from '../sim/race';
+import { sampleTrack } from '../sim/track';
+import { getTrack } from '../sim/tracks';
 import type { InputFrame, RaceState, TrackId } from '../sim/types';
 import { packPong, TICK_MS, unpackClock } from './clock';
 import { GuestSession } from './guestSession';
@@ -38,6 +40,35 @@ function distance(a: { x: number; y: number; z: number }, b: { x: number; y: num
 }
 
 describe('Predictor', () => {
+  it.each([0, 4].flatMap(replay => [-1, 0].map(lastBand => ({ replay, lastBand }))))(
+    'restores authoritative lastBand=$lastBand with $replay replay ticks', ({ replay, lastBand }) => {
+      const initial = snapshot(180, 'canyon');
+      initial.state.karts = [initial.state.karts[1]];
+      initial.state.boxes = [];
+      const track = getTrack('canyon');
+      const sample = sampleTrack(track, track.def.barriers![0]!.from + 5);
+      const offset = 4;
+      Object.assign(initial.state.karts[0], {
+        x: sample.x + sample.nx * offset, z: sample.z + sample.nz * offset, y: sample.y,
+        heading: Math.atan2(sample.tx, sample.tz), trackDistance: sample.distance, lateralOffset: offset,
+        lastBand: lastBand === -1 ? 0 : -1,
+      });
+      const predictor = new Predictor(initial, 1);
+      predictor.advanceTo(181 + replay);
+      expect(predictor.kart.lastBand).toBe(initial.state.karts[0].lastBand);
+      const authoritative = structuredClone(initial);
+      authoritative.state.tick = 181;
+      authoritative.state.karts[0].lastBand = lastBand;
+      authoritative.state.events = [{ type: 'hit', kartId: 1, value: 1 }];
+      predictor.reconcile(authoritative);
+      expect(predictor.replayTicks).toBe(replay);
+      expect(predictor.kart.lastBand).toBe(lastBand);
+      expect(predictor.state.events).toEqual([]);
+      expect(authoritative.state.karts[0].lastBand).toBe(lastBand);
+      expect(initial.state.karts[0].lastBand).toBe(lastBand === -1 ? 0 : -1);
+    },
+  );
+
   it.each((['tripleDash', 'trap', 'autopilot'] as const).flatMap(item =>
     [false, true].map(earlyStop => ({ item, earlyStop }))))
   ('preserves roulette expiry and latched $item input without replay (earlyStop=$earlyStop)', ({ item, earlyStop }) => {

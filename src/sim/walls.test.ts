@@ -133,6 +133,16 @@ describe('collideCorridor: barrier bands and width profiles', () => {
     state.phase = 'racing';
     state.karts = [state.karts[0]!];
     state.boxes = [];
+    place(state, on, distance, offset, speed, angle);
+    return state;
+  }
+  const inside = (state: RaceState): boolean => {
+    const kart = state.karts[0]!;
+    const projection = projectToTrack(banded, kart.x, kart.z);
+    return insideBarrier(banded, barrier, projection.distance, projection.offset, 0);
+  };
+
+  function place(state: RaceState, on: typeof track, distance: number, offset: number, speed: number, angle = 0): void {
     const sample = sampleTrack(on, distance);
     const radians = angle * Math.PI / 180;
     Object.assign(state.karts[0]!, {
@@ -141,13 +151,114 @@ describe('collideCorridor: barrier bands and width profiles', () => {
         sample.tz * Math.cos(radians) + sample.nz * Math.sin(radians)),
       speed, trackDistance: distance, lateralOffset: offset,
     });
-    return state;
   }
-  const inside = (state: RaceState): boolean => {
+
+  it('reports one hit while pressing the same nose, even with heavy impacts and an expired cooldown', () => {
+    const state = solo(banded, 1498.8, 0, 30);
     const kart = state.karts[0]!;
-    const projection = projectToTrack(banded, kart.x, kart.z);
-    return insideBarrier(banded, barrier, projection.distance, projection.offset, 0);
-  };
+    const hits: unknown[] = [];
+    for (let tick = 0; tick < 120; tick++) {
+      // Repeated rear pushes can restore speed after the nose has stopped the kart.
+      kart.speed = 30;
+      kart.hitCooldown = tick % 2 === 0 ? 0 : 0.4;
+      stepRace(state, [{ ...NEUTRAL_INPUT, throttle: 1 }]);
+      hits.push(...state.events.filter(event => event.type === 'hit'));
+      expect(kart.lastBand).toBe(0);
+      expect(kart.hitCooldown).toBe(0.7);
+      expect(kart.speed).toBeLessThan(6);
+    }
+    expect(hits).toEqual([{ type: 'hit', kartId: 0, value: 1 }]);
+  });
+
+  it('refreshes the suppressed band cooldown before a kart push causes a rail contact in the same tick', () => {
+    const narrow = buildTrack({ ...track.def, roadHalfWidth: 3.6, wallHalfWidth: 5,
+      barriers: [{ ...barrier, center: 4 }] });
+    const state = solo(narrow, 1498.7, 3.6, 50, 25);
+    const kart = state.karts[0]!;
+    kart.lastBand = 0;
+    const pusher = solo(narrow, 1498.2, 3.2, 0).karts[0]!;
+    pusher.id = 1;
+    state.karts.push(pusher);
+    stepRace(state, [NEUTRAL_INPUT, NEUTRAL_INPUT]);
+    expect(kart.lastBand).toBe(0);
+    expect(kart.hitCooldown).toBe(0.7);
+    // Without refreshing the suppressed contact's timer, the later wall pass emits this hit.
+    expect(state.events.filter(event => event.type === 'hit' && event.kartId === 0)).toEqual([]);
+  });
+
+  it.each([barrier.from - KART_RADIUS - 0.01, barrier.to + KART_RADIUS + 0.01])(
+    'allows a second nose hit after leaving the expanded span at %s', outside => {
+      const state = solo(banded, 1498.8, 0, 30);
+      const kart = state.karts[0]!;
+      stepRace(state, [NEUTRAL_INPUT]);
+      const hits = [...state.events.filter(event => event.type === 'hit')];
+      expect(kart.lastBand).toBe(0);
+      // Leaving laterally does not release the remembered band.
+      place(state, banded, 1515, 4, 0);
+      stepRace(state, [NEUTRAL_INPUT]);
+      expect(kart.lastBand).toBe(0);
+      place(state, banded, outside, 4, 0);
+      stepRace(state, [NEUTRAL_INPUT]);
+      expect(kart.lastBand).toBe(-1);
+      place(state, banded, 1498.8, 0, 30);
+      stepRace(state, [NEUTRAL_INPUT]);
+      hits.push(...state.events.filter(event => event.type === 'hit'));
+      expect(kart.lastBand).toBe(0);
+      expect(hits).toEqual(Array.from({ length: 2 }, () => ({ type: 'hit', kartId: 0, value: 1 })));
+    },
+  );
+
+  it.each(['nose', 'side'] as const)('switches lastBand at a neighboring %s inside the previous span and cooldown', contact => {
+    const pair = buildTrack({ ...track.def, barriers: [barrier, { ...barrier, from: 1502, center: 4 }] });
+    const state = solo(pair, 1498.8, 0, 30);
+    const kart = state.karts[0]!;
+    stepRace(state, [NEUTRAL_INPUT]);
+    expect(kart.lastBand).toBe(0);
+    expect(state.events).toContainEqual({ type: 'hit', kartId: 0, value: 1 });
+    if (contact === 'nose') place(state, pair, 1500.8, 4, 30);
+    else place(state, pair, 1515, 4.5, 30, -90); // Already inside: uses the lateral settle contact.
+    expect(kart.hitCooldown).toBe(0.7);
+    stepRace(state, [NEUTRAL_INPUT]);
+    expect(kart.lastBand).toBe(1);
+    expect(state.events).toContainEqual({ type: 'hit', kartId: 0, value: 1 });
+  });
+
+  it('leaves lastBand unchanged for rail and pit hits within its span', () => {
+    const withPit = buildTrack({ ...banded.def, surfaces: [
+      { kind: 'pit', from: 1510, to: 1515, offsetMin: 3, offsetMax: 5 },
+    ] });
+    const state = solo(withPit, 1498.8, 0, 30);
+    const kart = state.karts[0]!;
+    stepRace(state, [NEUTRAL_INPUT]);
+    expect(kart.lastBand).toBe(0);
+    place(state, withPit, 1505, limit - 0.01, 14, 90);
+    kart.hitCooldown = 0;
+    stepRace(state, [NEUTRAL_INPUT]);
+    expect(state.events).toContainEqual({ type: 'hit', kartId: 0 });
+    expect(kart.lastBand).toBe(0);
+    place(state, withPit, 1509.9, 4, 14);
+    stepRace(state, [NEUTRAL_INPUT]);
+    expect(state.events).toContainEqual({ type: 'hit', kartId: 0, value: 2 });
+    expect(kart.lastBand).toBe(0);
+  });
+
+  it('keeps lastBand across a wrapped span and clears it beyond either expanded cap', () => {
+    const wrapped = buildTrack({ ...track.def, barriers: [{ ...barrier, from: track.length - 10, to: 10 }] });
+    const state = solo(wrapped, 0, 4, 0);
+    const kart = state.karts[0]!;
+    for (const distance of [wrapped.length - 10.5, wrapped.length - 0.1, 0.1, 10.5]) {
+      kart.lastBand = 0;
+      place(state, wrapped, distance, 4, 0);
+      stepRace(state, [NEUTRAL_INPUT]);
+      expect(kart.lastBand, `inside ${distance}`).toBe(0);
+    }
+    for (const distance of [wrapped.length - 11, 11]) {
+      kart.lastBand = 0;
+      place(state, wrapped, distance, 4, 0);
+      stepRace(state, [NEUTRAL_INPUT]);
+      expect(kart.lastBand, `outside ${distance}`).toBe(-1);
+    }
+  });
 
   it('slows a 32 m/s head-on entry with one band hit and bounded steps', () => {
     const state = solo(banded, 1490, 0, 32);

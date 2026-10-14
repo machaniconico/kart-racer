@@ -149,6 +149,9 @@ export class Predictor {
   }
 
   private rememberTimers(): void {
+    // lastBand is an exact wire field: reconcile restores it from snapshot.state
+    // before replay. Keeping a predicted copy here could overwrite a host correction;
+    // replay events are discarded in advanceTo, so they cannot play a second hit.
     this.timerHistory.set(this.tick, this.predicted.karts.map(({ id, boostTime, spinTime, hopTime, airTime, hitCooldown, driftTime, effects }) =>
       ({ id, boostTime, spinTime, hopTime, airTime, hitCooldown, driftTime, rouletteTime: effects.rouletteTime })));
     for (const tick of this.timerHistory.keys()) if (tick < this.tick - MAX_REPLAY_TICKS) this.timerHistory.delete(tick);
