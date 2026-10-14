@@ -138,6 +138,8 @@ export class GuestSession {
       const link = await this.transport.join(code);
       if (generation !== this.generation) { link.close(); return; }
       this.link = link;
+      // Broker and ICE setup have their own transport timeouts; the 5 s budget is for the welcome.
+      this.joinedAt = this.now();
       link.onClose(() => { if (generation === this.generation) this.finish('host_lost'); });
       // Transport implementations may synchronously flush queued messages here.
       link.onMessage((kind, data) => {
@@ -351,7 +353,7 @@ export class GuestSession {
     this.lastPollAt = now;
     // Never pass rAF's older frame timestamp into ClockSync.expire/sample.
     this.clock.expire(now);
-    if (this.phase === 'connecting' && now - this.joinedAt >= 5000) this.finish('timeout');
+    if (this.phase === 'connecting' && this.link && now - this.joinedAt >= 5000) this.finish('timeout');
     if ((this.phase === 'lobby' || this.phase === 'results') && now - this.lastPongAt >= 5000) this.finish('host_lost');
     if (this.activeRace) {
       const silence = now - this.lastSnapshotAt;

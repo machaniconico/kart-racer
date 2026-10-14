@@ -177,15 +177,19 @@ describe('H1 handling', () => {
 // | neon     | v12 / 18.308796296296297   | 19.16759259259259  | 1.0469  | 0 / 0        | 3 / 2        |
 // NEON's added rows at ~158 / 309 m caused 5 band hits; moving them to ~132 / 283 m
 // clears the bands and their 40 m approaches. Band hits by seed are now [1, 0, 1].
-// M5 / v15: every course is rebuilt by its own story, so the baseline is pending (null) until
-// M5-05 re-measures it. While pending, only the absolute pace and hit budgets below apply.
-type Baseline = { version: string; meanLap: number | null; wallHits: number | null; bandHits: number | null };
-const PENDING: Baseline = { version: 'v15-pending', meanLap: null, wallHits: null, bandHits: null };
+// M5-05 / v15: rebuilt courses, measured on darwin-arm64 with the same 72-lap method.
+// | Course   | v14 mean lap (s)   | v15 mean lap (s)   | Wall old/new | Band old/new |
+// | meadow   | 19.105555555555558 | 68.5011574074074   | 0 / 0        | 0 / 0        |
+// | canyon   | 20.39398148148148  | 68.49583333333334  | 0 / 0        | 1 / 0        |
+// | snowpeak | 18.92245370370371  | 67.89120370370368  | 0 / 0        | 0 / 0        |
+// | neon     | 19.16759259259259  | 64.32939814814814  | 0 / 0        | 2 / 1        |
+// All values match the M5-01–04 reports (rounding only); NEON's band hit is seed 1.
+type Baseline = { version: 'v15'; meanLap: number; wallHits: number; bandHits: number };
 const BASELINE: Record<(typeof tracks.TRACK_IDS)[number], Baseline> = {
-  meadow: PENDING,
-  canyon: PENDING,
-  snowpeak: PENDING,
-  neon: PENDING,
+  meadow: { version: 'v15', meanLap: 68.5011574074074, wallHits: 0, bandHits: 0 },
+  canyon: { version: 'v15', meanLap: 68.49583333333334, wallHits: 0, bandHits: 0 },
+  snowpeak: { version: 'v15', meanLap: 67.89120370370368, wallHits: 0, bandHits: 0 },
+  neon: { version: 'v15', meanLap: 64.32939814814814, wallHits: 0, bandHits: 1 },
 };
 const SEEDS = [1, 42, 98765];
 
@@ -258,25 +262,8 @@ describe('H1 CPU balance: absolute range and recorded baseline', () => {
       }
     }
     const meanLap = totalLapTime / 72;
+    expect(meanLap).toBeGreaterThanOrEqual(60);
     const baseline = BASELINE[trackId];
-    const pending = baseline.meanLap === null || baseline.wallHits === null || baseline.bandHits === null;
-    if (trackId === 'snowpeak' && !pending) {
-      const m401MeanLap = 17.86990740740741;
-      expect(baseline.meanLap! / m401MeanLap).toBeGreaterThanOrEqual(0.95);
-      expect(baseline.meanLap! / m401MeanLap).toBeLessThanOrEqual(1.10);
-      expect(meanLap / m401MeanLap).toBeGreaterThanOrEqual(0.95);
-      expect(meanLap / m401MeanLap).toBeLessThanOrEqual(1.10);
-      expect(wallHits).toBe(0);
-      expect(bandHits).toBe(0);
-    }
-    if (trackId === 'neon') {
-      if (!pending) {
-        const v11MeanLap = 18.441435185185185;
-        expect(meanLap / v11MeanLap).toBeGreaterThanOrEqual(0.95);
-        expect(meanLap / v11MeanLap).toBeLessThanOrEqual(1.10);
-      }
-      expect(bandHits).toBeLessThanOrEqual(4);
-    }
     if (trackId === 'canyon') {
       expect(split).toBeDefined();
       expect(passes.size).toBe(72);
@@ -287,18 +274,12 @@ describe('H1 CPU balance: absolute range and recorded baseline', () => {
     // Stage 1: absolute range, an average pace of 20 to 40 m/s.
     expect(meanLap).toBeGreaterThanOrEqual(track.length / 40);
     expect(meanLap).toBeLessThanOrEqual(track.length / 20);
-    if (pending) {
-      // Pending: hit budgets over the 72 laps only.
-      expect(wallHits).toBeLessThanOrEqual(6);
-      expect(bandHits).toBeLessThanOrEqual(6);
-      return;
-    }
     // Stage 2: ratio to the recorded baseline.
-    const ratio = meanLap / baseline.meanLap!;
+    const ratio = meanLap / baseline.meanLap;
     expect(ratio).toBeGreaterThanOrEqual(0.95);
     expect(ratio).toBeLessThanOrEqual(1.05);
-    expect(wallHits).toBeLessThanOrEqual(baseline.wallHits!);
-    expect(bandHits).toBeLessThanOrEqual(baseline.bandHits!);
+    expect(wallHits).toBeLessThanOrEqual(baseline.wallHits);
+    expect(bandHits).toBeLessThanOrEqual(baseline.bandHits);
   }, 120_000);
 });
 

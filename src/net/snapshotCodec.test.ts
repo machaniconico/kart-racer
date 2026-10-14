@@ -595,7 +595,7 @@ describe('protocol layout fingerprint', () => {
     pinned[13] = 2812341565;
     pinned[14] = 4027931737;
     const definitions = TRACK_IDS.map(id => TRACKS[id]);
-    pinned[15] = undefined; // pending: M5-05 pins after the four course stories
+    pinned[15] = 642527371; // M5-05: measured after M5-01–04 and the shared followups
     expect(COURSE_FINGERPRINT).toBe(Number.parseInt(fingerprint(definitions), 16));
     if (pinned[PROTOCOL_VERSION] === undefined) {
       console.info(`COURSE_FINGERPRINT (v${PROTOCOL_VERSION} pending): ${COURSE_FINGERPRINT}`);

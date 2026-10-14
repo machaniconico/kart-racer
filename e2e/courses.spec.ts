@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import type { KartDebug } from '../src/main';
 import { getTrack } from '../src/sim/tracks';
 import { sampleTrack } from '../src/sim/track';
+import { findHairpins } from '../src/sim/tracks/shapeMetrics';
 import { KART_RADIUS, widthAt } from '../src/sim/corridor';
 
 declare const window: Window & { __kartDebug: KartDebug };
@@ -16,14 +17,14 @@ const courses = [
   // M3-08 re-measured 2026-10-14, same setup: NEON layout 2 -> 3:
   // drawCalls / triangles: 125 / 62_748 -> 126 / 62_812; retain the old budget baseline.
   // M4-06: SNOWPEAK layout 3 retains the layout-2 budget for the elevated/banked road.
-  // M5-00: every course is rebuilt in M5; baselines are null (pending) until M5-05 re-measures.
+  // M5-05 / v15: measured after all four course stories and shared followups, same grid setup.
   // Last values: meadow 123 / 41_530, canyon 129 / 54_564, snowpeak 125 / 41_952, neon 125 / 62_748.
-  { id: 'meadow', name: 'MEADOW LOOP', drawCalls: null, triangles: null },
-  { id: 'canyon', name: 'SUNSCAR CANYON', drawCalls: null, triangles: null },
-  { id: 'snowpeak', name: 'FROSTBITE PEAK', drawCalls: null, triangles: null },
-  { id: 'neon', name: 'NEON NIGHTLINE', drawCalls: null, triangles: null },
+  { id: 'meadow', name: 'MEADOW LOOP', drawCalls: 125, triangles: 107_048 },
+  { id: 'canyon', name: 'SUNSCAR CANYON', drawCalls: 138, triangles: 124_808 },
+  { id: 'snowpeak', name: 'FROSTBITE PEAK', drawCalls: 129, triangles: 112_768 },
+  { id: 'neon', name: 'NEON NIGHTLINE', drawCalls: 134, triangles: 115_360 },
 ] as const satisfies readonly {
-  id: string; name: string; drawCalls: number | null; triangles: number | null;
+  id: string; name: string; drawCalls: number; triangles: number;
 }[];
 
 // Triangle cap by course length: 60 triangles per metre (ribbon, walls, decks) + 30k for scenery.
@@ -52,37 +53,84 @@ for (const { id, name, drawCalls: baselineDrawCalls, triangles: baselineTriangle
     }))).toEqual({ selected: id, rendered: id });
     // Reproduce the seed-127 baseline: ten stationary frames, including shadows.
     // Synchronous renders avoid CPU movement and wall-clock-dependent culling.
-    const { renderSamples, grid, meshes } = await page.evaluate(id => {
-      const { createRace, captureRenderSnapshot } = window.__kartDebug.modules;
+    await page.locator('#start-race').click();
+    await page.locator('#pause-race').click();
+    const track = getTrack(id);
+    const narrow = track.def.widthKeys!.reduce((best, key) =>
+      key.roadHalfWidth < best.roadHalfWidth ? key : best);
+    const features = [
+      ...(track.def.decks ?? []).slice(0, 1).map(deck => ({ name: 'crossing', distance: deck.from - 30 })),
+      ...(track.def.decks ?? []).slice(0, 1).map(deck => {
+        const upper = sampleTrack(track, (deck.from + deck.to) / 2);
+        const lower = track.samples.filter(point => point.y < upper.y - 10).reduce((best, point) =>
+          Math.hypot(point.x - upper.x, point.z - upper.z) < Math.hypot(best.x - upper.x, best.z - upper.z)
+            ? point : best);
+        return { name: 'crossing-underpass', distance: lower.distance - 30 };
+      }),
+      ...(track.def.splits ?? []).slice(0, 1).map(split => ({ name: 'island', distance: split.from - 30 })),
+      { name: 'narrow', distance: narrow.distance - 30 },
+      { name: 'hairpin', distance: findHairpins(track)[0]!.from - 30 },
+    ];
+    // First deck or split by arc distance; courses without either use their narrow passage.
+    const approach = features.filter(view => view.name === 'crossing' || view.name === 'island')
+      .sort((a, b) => a.distance - b.distance)[0] ?? features.find(view => view.name === 'narrow')!;
+    const { views, meshes } = await page.evaluate(({ id, features, approach }) => {
+      const { createRace, captureRenderSnapshot, getTrack, sampleTrack } = window.__kartDebug.modules;
       const renderer = window.__kartDebug.renderer!;
-      const state = createRace(127, { trackId: id });
-      const snapshot = captureRenderSnapshot(state);
-      const samples: { drawCalls: number; triangles: number }[] = [];
-      for (let frame = 0; frame < 10; frame++) {
-        renderer.update(state, snapshot, 1, 0, 'race');
-        const { calls: drawCalls, triangles } = renderer.renderer.info.render;
-        samples.push({ drawCalls, triangles });
-      }
+      const track = getTrack(id);
+      const views = [{ name: 'start-grid', distance: null }, ...features].map((view, index) => {
+        const state = createRace(127, { trackId: id });
+        // GameUI redraws its minimap only on a new tick divisible by four.
+        state.tick = (index + 1) * 4;
+        if (view.distance !== null) {
+          const point = sampleTrack(track, view.distance);
+          Object.assign(state.karts[0], { x: point.x, y: point.y, z: point.z,
+            heading: Math.atan2(point.tx, point.tz), trackDistance: view.distance,
+            lateralOffset: 0, speed: 0, steer: 0 });
+        }
+        Object.assign(window.__kartDebug.state, state);
+        window.__kartDebug.advance(0);
+        const minimap = (document.querySelector('#minimap-canvas') as HTMLCanvasElement).toDataURL('image/png').split(',')[1];
+        const snapshot = captureRenderSnapshot(state);
+        renderer.update(state, snapshot, 1, 0, 'title');
+        const samples: { drawCalls: number; triangles: number }[] = [];
+        for (let frame = 0; frame < 10; frame++) {
+          renderer.update(state, snapshot, 1, 0, 'race');
+          const { calls: drawCalls, triangles } = renderer.renderer.info.render;
+          samples.push({ drawCalls, triangles });
+        }
+        return { ...view, budget: view.name === 'start-grid' || view.name === approach.name,
+          samples, minimap, png: renderer.renderer.domElement.toDataURL('image/png').split(',')[1] };
+      });
       let meshes = 0;
-      // Count course meshes only, matching buildCourse.test.ts (exclude karts/items).
       window.__kartDebug.render.courseGroup!.traverse(object => {
         if (object.type === 'Mesh' || object.type === 'InstancedMesh') meshes++;
       });
-      return { renderSamples: samples, meshes, grid: renderer.renderer.domElement.toDataURL('image/png').split(',')[1] };
-    }, id);
-    await testInfo.attach(`${id}-start-grid`, { body: Buffer.from(grid, 'base64'), contentType: 'image/png' });
-    for (const { drawCalls, triangles } of renderSamples) {
-      expect(drawCalls).toBeGreaterThan(0);
-      expect(drawCalls).toBeLessThanOrEqual(200);
-      expect(triangles).toBeGreaterThan(0);
-      expect(triangles).toBeLessThanOrEqual(trianglesCap(getTrack(id).length));
-      if (baselineDrawCalls !== null) expect(drawCalls).toBeLessThanOrEqual(baselineDrawCalls + 20);
-      if (baselineTriangles !== null) expect(triangles).toBeLessThanOrEqual(baselineTriangles + 15_000);
+      return { views, meshes };
+    }, { id, features, approach });
+    for (const view of views) {
+      await testInfo.attach(`${id}-${view.name}`, { body: Buffer.from(view.png, 'base64'), contentType: 'image/png' });
+      await testInfo.attach(`${id}-${view.name}-minimap`, { body: Buffer.from(view.minimap, 'base64'), contentType: 'image/png' });
+      if (!view.budget) continue;
+      for (const { drawCalls, triangles } of view.samples) {
+        expect(drawCalls).toBeGreaterThan(0);
+        expect(drawCalls).toBeLessThanOrEqual(200);
+        expect(triangles).toBeGreaterThan(0);
+        expect(triangles).toBeLessThanOrEqual(trianglesCap(track.length));
+        expect(drawCalls).toBeLessThanOrEqual(baselineDrawCalls + 20);
+        expect(triangles).toBeLessThanOrEqual(baselineTriangles + 15_000);
+      }
     }
     await testInfo.attach('draw-calls', {
-      body: JSON.stringify({ id, layout, baselineDrawCalls, baselineTriangles, meshes, renderSamples }), contentType: 'application/json',
+      body: JSON.stringify({ id, layout, baselineDrawCalls, baselineTriangles, meshes,
+        views: views.map(({ png: _png, minimap: _minimap, ...view }) => view) }), contentType: 'application/json',
     });
-    await page.locator('#start-race').click();
+    await page.evaluate(id => {
+      const debug = window.__kartDebug;
+      Object.assign(debug.state, debug.modules.createRace(127, { trackId: id }));
+      debug.advance(0);
+    }, id);
+    await page.locator('#resume-race').click();
     await expect(page.locator('#race-screen')).toBeVisible();
     await expect.poll(() => page.evaluate(() => window.__kartDebug.state.phase)).toBe('racing');
     await page.evaluate(() => {

@@ -26,7 +26,12 @@ function scenario(page: Page, steps: Step[]) {
     const box = debug.state.boxes[0];
     box.respawnTime = 0;
     me.item = null; me.speed = 0; me.effects.rouletteTime = 0; me.spinTime = 0;
-    me.x = box.x; me.z = box.z;
+    const { getTrack, sampleTrack } = debug.modules;
+    const track = getTrack(debug.state.trackId);
+    const distance = track.def.boxRows[0] * track.length;
+    const point = sampleTrack(track, distance);
+    Object.assign(me, { x: box.x, y: box.y, z: box.z, trackDistance: distance,
+      lateralOffset: track.def.boxLanes[0], heading: Math.atan2(point.tx, point.tz) });
     debug.advance(1);
     const log: { step: string; item: KartDebug['state']['karts'][number]['item']; roulette: number }[] = [
       { step: 'grab', item: me.item, roulette: me.effects.rouletteTime },

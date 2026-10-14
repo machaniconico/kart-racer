@@ -686,6 +686,23 @@ describe('GuestSession', () => {
     expect(closed).toBe(true);
   });
 
+  it('starts the welcome timeout once the link is up, not while the transport is still connecting', async () => {
+    const h = await setup();
+    let release!: () => void;
+    const gate = new Promise<void>(done => { release = done; });
+    // Broker and ICE have their own transport timeouts; a slow main thread can stretch them past 5 s.
+    const slow: Transport = { host: code => h.network.host(code), join: async code => { await gate; return h.network.join(code); } };
+    const guest = new GuestSession(slow, { now: () => h.network.now, prediction: false });
+    const joining = guest.join('AB2X');
+    for (let i = 0; i < 60; i++) { guest.frame(h.network.now); h.network.advance(100); }
+    expect(guest.phase).toBe('connecting');
+    release();
+    await joining;
+    h.network.advance(0);
+    guest.frame(h.network.now);
+    expect(guest.phase).toBe('lobby');
+  });
+
   it('resets clocks, input history and race IDs when rejoining, and isolates read-only views', async () => {
     const h = await setup();
     h.pump(500);
