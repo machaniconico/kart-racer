@@ -37,6 +37,8 @@ export function interpolateState(from: Snapshot, to: Snapshot, hostTime: number,
     }
     kart.x += Math.sin(kart.heading) * kart.speed * seconds;
     kart.z += Math.cos(kart.heading) * kart.speed * seconds;
+    // Karts carry no vertical speed, so extrapolate y along the last snapshot pair's slope.
+    if (previous && duration > 0) kart.y += (current.y - previous.y) * seconds * 1000 / duration;
   }
   const oldEntities = new Map([...from.state.projectiles, ...from.state.traps].map(entity => [entity.id, entity]));
   const newEntities = new Map([...to.state.projectiles, ...to.state.traps].map(entity => [entity.id, entity]));

@@ -874,9 +874,9 @@ describe('HostSession integration', () => {
         const error = Math.hypot(kart.x - expected.x, kart.y - expected.y, kart.z - expected.z);
         const at = `host tick ${view.hostTick}, reference ${referenceTick}, kart ${kart.id}`;
         if (localPrediction) expect(error, at).toBeLessThanOrEqual(0.1);
-        // 0.5 -> 0.55 (M4-01): extrapolation advances x/z but not y, so on MEADOW's grades a lost
-        // snapshot adds up to ~0.48 m of height error (measured max 0.5425 m at host tick 576).
-        else expect(error, at).toBeLessThan(0.55);
+        // M5-07 (a): extrapolation advances y along the last snapshot pair's slope. Measured max on
+        // M5 MEADOW 0.4179 m (host tick 438, kart 2); with seed 92 the other tracks stay under 0.28 m.
+        else expect(error, at).toBeLessThan(0.5);
         comparisons++;
       }
     }
