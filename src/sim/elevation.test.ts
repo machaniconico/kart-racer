@@ -87,7 +87,7 @@ describe('slope physics', () => {
     expect(state.karts[0]!.speed).toBeCloseTo(5 - 5.5 * FIXED_DT + 9.8 * 0.6 * 0.3 * FIXED_DT, 12);
   });
 
-  it('matches the sample segment grade on all four courses and is exactly 0 on NEON', () => {
+  it('matches the sample segment grade on all four courses and is exactly 0 on a flat fixture', () => {
     for (const id of tracks.TRACK_IDS) {
       const track = tracks.getTrack(id);
       const { samples } = track;
@@ -100,11 +100,10 @@ describe('slope physics', () => {
         expect(slopeAt(track, sample.distance + run / 2), `${id} sample ${i}`).toBe((next.y - sample.y) / run);
       });
     }
-    const neon = tracks.getTrack('neon');
-    for (let i = 0; i < neon.samples.length; i++) {
-      const sample = neon.samples[i]!;
-      expect(slopeAt(neon, sample.distance)).toBe(0);
-      expect(slopeAt(neon, sample.distance + 0.5)).toBe(0);
+    const flat = buildTrack(slopeCourse(0));
+    for (const sample of flat.samples) {
+      expect(slopeAt(flat, sample.distance)).toBe(0);
+      expect(slopeAt(flat, sample.distance + 0.5)).toBe(0);
     }
   });
 });

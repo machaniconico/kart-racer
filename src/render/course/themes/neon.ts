@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { projectToTrack, sampleTrack } from '../../../sim';
 import type { Track } from '../../../sim';
 import { NEON_TUNNEL } from '../../../sim/tracks/neon';
@@ -24,26 +25,38 @@ export const neon: CourseTheme = {
     hemisphere: { sky: 0x98b9ff, ground: 0x433256, intensity: 1.45 },
     sun: { color: 0xc3d7ff, intensity: 0.85, position: [70, 100, 40], offset: [55, 85, 35] },
   },
-  signFractions: [0.19, 0.44, 0.69, 0.94],
+  // Advance notices for the rooftop hairpin, narrow street, island and chicane.
+  signFractions: [0.19, 0.46, 0.59, 0.72],
   budget: { trees: 0, rocks: 0, flowers: 0 },
   buildProps,
   buildLandmarks,
 };
 
 function buildProps(track: Track, scene: THREE.Group): void {
-  const blocks: { x: number; z: number; width: number; depth: number; height: number }[] = [];
-  // A fixed city grid leaves the entire drivable corridor clear, including bends.
-  for (let row = 0; row < 10; row++) {
-    for (let column = 0; column < 10; column++) {
-      const x = (column - 4.5) * 38;
-      const z = (row - 4.5) * 38;
+  const candidates: { x: number; z: number; width: number; depth: number; height: number }[] = [];
+  const xs = track.samples.map(point => point.x);
+  const zs = track.samples.map(point => point.z);
+  const minX = Math.min(...xs) - 50, maxX = Math.max(...xs) + 50;
+  const minZ = Math.min(...zs) - 50, maxZ = Math.max(...zs) + 50;
+  // Use the widest island lane for clearance, and project without a height hint
+  // so buildings stay outside both branches of the overpass.
+  const wallHalfWidth = Math.max(track.def.wallHalfWidth,
+    ...(track.def.widthKeys ?? []).map(key => key.wallHalfWidth));
+  for (let row = 0; row < 12; row++) {
+    for (let column = 0; column < 12; column++) {
+      const x = minX + column / 11 * (maxX - minX);
+      const z = minZ + row / 11 * (maxZ - minZ);
       const width = 16 + (row * 7 + column * 3) % 9;
       const depth = 16 + (row * 3 + column * 7) % 9;
-      const clearance = track.def.wallHalfWidth + Math.hypot(width, depth) / 2 + 5;
+      const clearance = wallHalfWidth + Math.hypot(width, depth) / 2 + 5;
       if (Math.abs(projectToTrack(track, x, z).offset) < clearance) continue;
-      blocks.push({ x, z, width, depth, height: 20 + (row * 17 + column * 11) % 49 });
+      candidates.push({ x, z, width, depth, height: 20 + (row * 17 + column * 11) % 49 });
     }
   }
+  // 60 buildings × (body + 32 windows + 2 signs) × 12 = 25,200 triangles.
+  // Distribute this fixed scenery allowance over the whole expanded city.
+  const count = Math.min(60, candidates.length);
+  const blocks = Array.from({ length: count }, (_, i) => candidates[Math.floor(i * candidates.length / count)]!);
   const geometry = new THREE.BoxGeometry(1, 1, 1);
   const buildings = new THREE.InstancedMesh(geometry, material(0xffffff), blocks.length);
   const glow = new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false });
@@ -105,28 +118,35 @@ function buildLandmarks(track: Track, scene: THREE.Group): void {
   tunnel.position.set((entrance.x + exit.x) / 2, entrance.y, (entrance.z + exit.z) / 2);
   tunnel.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction);
   tunnel.name = 'neon:tunnel';
-  const glow = new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false });
-  const ribs = new THREE.InstancedMesh(new THREE.TorusGeometry(radius - 0.08, 0.12, 5, 32), glow, 9);
+  // These lights belong to the tunnel below the deck. Batch them as static
+  // geometry so the generic scenery-instance clearance pass preserves them.
+  const parts: THREE.BufferGeometry[] = [];
+  const addLight = (geometry: THREE.BufferGeometry, color: number): void => {
+    const rgb = new THREE.Color(color);
+    const colors = new Float32Array(geometry.getAttribute('position').count * 3);
+    for (let i = 0; i < colors.length; i += 3) rgb.toArray(colors, i);
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    parts.push(geometry);
+  };
   const transform = new THREE.Object3D();
   transform.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), direction);
-  for (let i = 0; i < ribs.count; i++) {
-    const point = sampleTrack(track, NEON_TUNNEL.from + i / (ribs.count - 1) * length);
+  for (let i = 0; i < 9; i++) {
+    const point = sampleTrack(track, NEON_TUNNEL.from + i / 8 * length);
     transform.position.set(point.x, point.y, point.z);
     transform.updateMatrix();
-    ribs.setMatrixAt(i, transform.matrix);
-    ribs.setColorAt(i, new THREE.Color(i % 2 ? pink : cyan));
+    addLight(new THREE.TorusGeometry(radius - 0.08, 0.12, 5, 32).applyMatrix4(transform.matrix), i % 2 ? pink : cyan);
   }
-  ribs.name = 'neon:tunnel-ribs';
-  const guides = new THREE.InstancedMesh(new THREE.BoxGeometry(0.16, 0.16, length), glow, 2);
-  for (let i = 0; i < guides.count; i++) {
+  for (let i = 0; i < 2; i++) {
     const offset = (i * 2 - 1) * (track.def.wallHalfWidth - 0.35);
     transform.position.set(tunnel.position.x + entrance.nx * offset, entrance.y + 1.2,
       tunnel.position.z + entrance.nz * offset);
     transform.rotation.set(0, Math.atan2(entrance.tx, entrance.tz), 0);
     transform.updateMatrix();
-    guides.setMatrixAt(i, transform.matrix);
-    guides.setColorAt(i, new THREE.Color(cyan));
+    addLight(new THREE.BoxGeometry(0.16, 0.16, length).applyMatrix4(transform.matrix), cyan);
   }
-  guides.name = 'neon:tunnel-guides';
-  scene.add(tunnel, ribs, guides);
+  const lights = new THREE.Mesh(mergeGeometries(parts)!,
+    new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false }));
+  parts.forEach(part => part.dispose());
+  lights.name = 'neon:tunnel-lights';
+  scene.add(tunnel, lights);
 }
