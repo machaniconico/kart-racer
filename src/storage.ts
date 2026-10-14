@@ -1,6 +1,7 @@
 const BEST_KEY = 'pocket-circuit.best.v1';
 const BEST_KEY_V2 = 'pocket-circuit.best.v2';
 const BEST_KEY_V3 = 'pocket-circuit.best.v3';
+const BEST_KEY_V4 = 'pocket-circuit.best.v4';
 const MUTE_KEY = 'pocket-circuit.muted.v1';
 const SENSITIVITY_KEY = 'pocket-circuit.steer-sensitivity.v1';
 const ASSIST_KEY = 'pocket-circuit.steer-assist.v1';
@@ -21,6 +22,13 @@ type BestRecord = { time: number; layout: number };
 
 function validLayout(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 1;
+}
+
+type BestsV4 = Record<string, Record<string, BestRecord>>;
+
+// Same shape as validLayout; kept local so storage does not import sim/laps.
+function validLaps(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 3;
 }
 
 function readV2(): Record<string, number> | null {
@@ -74,7 +82,7 @@ function readBestsV2(): Record<string, number> {
 }
 
 /** Reads v3, importing v2 (itself migrated from v1) as layout 1 the first time v3 is missing. */
-function readBests(): Record<string, BestRecord> {
+function readBestsV3(): Record<string, BestRecord> {
   const bests = readV3();
   if (bests !== null) return bests;
   const migrated: Record<string, BestRecord> = {};
@@ -85,22 +93,57 @@ function readBests(): Record<string, BestRecord> {
   return migrated;
 }
 
-/** Only a record taken on the same course layout counts; `layout` is TrackDef.layoutVersion (1 when omitted). */
-export function loadBest(trackId: string, layout = 1): number | null {
+function readV4(): BestsV4 | null {
+  const raw = localStorage.getItem(BEST_KEY_V4);
+  if (raw === null) return null;
+  const out: BestsV4 = {};
   try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      for (const [key, byLaps] of Object.entries(parsed)) {
+        if (!KNOWN_TRACK_IDS.has(key) || !byLaps || typeof byLaps !== 'object' || Array.isArray(byLaps)) continue;
+        for (const [laps, value] of Object.entries(byLaps)) {
+          if (!validLaps(Number(laps)) || String(Number(laps)) !== laps || !value || typeof value !== 'object') continue;
+          const { time, layout } = value as { time?: unknown; layout?: unknown };
+          if (validTime(time) && validLayout(layout)) (out[key] ??= {})[laps] = { time, layout };
+        }
+      }
+    }
+  } catch { /* Corrupt JSON is treated as empty. */ }
+  return out;
+}
+
+/** Reads v4, importing v3 as laps 3 only the first time v4 is missing. */
+function readBests(): BestsV4 {
+  const bests = readV4();
+  if (bests !== null) return bests;
+  const migrated: BestsV4 = {};
+  for (const [id, record] of Object.entries(readBestsV3())) migrated[id] = { '3': record };
+  if (Object.keys(migrated).length > 0) {
+    try { localStorage.setItem(BEST_KEY_V4, JSON.stringify(migrated)); } catch { /* Reads still work from the migrated copy. */ }
+  }
+  return migrated;
+}
+
+/** Only a record taken on the same course layout and lap count counts; `layout` is TrackDef.layoutVersion (1 when omitted). */
+export function loadBest(trackId: string, layout = 1, laps = 3): number | null {
+  try {
+    if (!KNOWN_TRACK_IDS.has(trackId) || !validLaps(laps)) return null;
     const bests = readBests();
-    if (!KNOWN_TRACK_IDS.has(trackId) || !Object.prototype.hasOwnProperty.call(bests, trackId)) return null;
-    const record = bests[trackId];
+    if (!Object.prototype.hasOwnProperty.call(bests, trackId)) return null;
+    const byLaps = bests[trackId];
+    if (!Object.prototype.hasOwnProperty.call(byLaps, String(laps))) return null;
+    const record = byLaps[String(laps)];
     return record.layout === layout ? record.time : null;
   } catch { return null; }
 }
 
-export function saveBest(trackId: string, time: number, layout = 1): void {
-  if (!KNOWN_TRACK_IDS.has(trackId) || !validTime(time) || !validLayout(layout)) return;
+export function saveBest(trackId: string, time: number, layout = 1, laps = 3): void {
+  if (!KNOWN_TRACK_IDS.has(trackId) || !validTime(time) || !validLayout(layout) || !validLaps(laps)) return;
   try {
     const bests = readBests();
-    bests[trackId] = { time, layout };
-    localStorage.setItem(BEST_KEY_V3, JSON.stringify(bests));
+    (bests[trackId] ??= {})[String(laps)] = { time, layout };
+    localStorage.setItem(BEST_KEY_V4, JSON.stringify(bests));
   } catch { /* Private browsing can deny storage. */ }
 }
 

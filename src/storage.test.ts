@@ -5,6 +5,7 @@ import { TRACK_IDS } from './sim/tracks';
 const V1 = 'pocket-circuit.best.v1';
 const V2 = 'pocket-circuit.best.v2';
 const V3 = 'pocket-circuit.best.v3';
+const V4 = 'pocket-circuit.best.v4';
 
 let store: Map<string, string>;
 
@@ -44,13 +45,13 @@ describe('storage steer assist', () => {
 });
 
 describe('storage best times', () => {
-  it('round-trips per track in v3', () => {
+  it('round-trips per track in v4', () => {
     saveBest('meadow', 41.5);
     saveBest('canyon', 50);
     expect(loadBest('meadow')).toBe(41.5);
     expect(loadBest('canyon')).toBe(50);
     expect(loadBest('other')).toBeNull();
-    expect(JSON.parse(store.get(V3)!)).toEqual({ meadow: { time: 41.5, layout: 1 }, canyon: { time: 50, layout: 1 } });
+    expect(JSON.parse(store.get(V4)!)).toEqual({ meadow: { '3': { time: 41.5, layout: 1 } }, canyon: { '3': { time: 50, layout: 1 } } });
   });
 
   it('migrates v1 into meadow on first load and keeps v1', () => {
@@ -119,17 +120,17 @@ describe('storage best times', () => {
     saveBest('meadow', 0);
     saveBest('meadow', NaN);
     saveBest('meadow', Infinity);
-    expect(store.has(V3)).toBe(false);
-    store.set(V3, '{bad');
+    expect(store.has(V4)).toBe(false);
+    store.set(V4, '{bad');
     saveBest('meadow', 20);
     expect(loadBest('meadow')).toBe(20);
   });
 
   it('ignores unknown track ids on save and drops them from stored data', () => {
-    store.set(V3, JSON.stringify({ meadow: { time: 40, layout: 1 }, ghost: { time: 5, layout: 1 } }));
+    store.set(V4, JSON.stringify({ meadow: { '3': { time: 40, layout: 1 } }, ghost: { '3': { time: 5, layout: 1 } } }));
     saveBest('ghost', 9);
     saveBest('canyon', 50);
-    expect(JSON.parse(store.get(V3)!)).toEqual({ meadow: { time: 40, layout: 1 }, canyon: { time: 50, layout: 1 } });
+    expect(JSON.parse(store.get(V4)!)).toEqual({ meadow: { '3': { time: 40, layout: 1 } }, canyon: { '3': { time: 50, layout: 1 } } });
   });
 
   it('migrates v1 even when another course is saved before the first load', () => {
@@ -167,6 +168,63 @@ describe('storage best times', () => {
     expect(loadBest('meadow')).toBeNull();
     expect(store.has(V2)).toBe(false);
   });
+
+  it('migrates v3 into laps 3 keeping layout, and keeps v3', () => {
+    const v3 = JSON.stringify({ meadow: { time: 30, layout: 2 }, canyon: { time: 55, layout: 1 } });
+    store.set(V3, v3);
+    expect(loadBest('meadow', 2)).toBe(30);
+    expect(loadBest('meadow', 2, 3)).toBe(30);
+    expect(loadBest('meadow', 1)).toBeNull();
+    expect(loadBest('meadow', 2, 1)).toBeNull();
+    expect(JSON.parse(store.get(V4)!)).toEqual({ meadow: { '3': { time: 30, layout: 2 } }, canyon: { '3': { time: 55, layout: 1 } } });
+    expect(store.get(V3)).toBe(v3);
+  });
+
+  it('does not read v3 once v4 exists', () => {
+    store.set(V3, JSON.stringify({ meadow: { time: 30, layout: 1 } }));
+    store.set(V4, JSON.stringify({ canyon: { '2': { time: 55, layout: 1 } } }));
+    expect(loadBest('meadow')).toBeNull();
+    expect(loadBest('canyon', 1, 2)).toBe(55);
+  });
+
+  it('keeps laps 1, 2 and 3 independent', () => {
+    saveBest('meadow', 12, 1, 1);
+    saveBest('meadow', 25, 1, 2);
+    saveBest('meadow', 40, 1);
+    expect(loadBest('meadow', 1, 1)).toBe(12);
+    expect(loadBest('meadow', 1, 2)).toBe(25);
+    expect(loadBest('meadow', 1, 3)).toBe(40);
+    expect(loadBest('meadow')).toBe(40);
+    saveBest('meadow', 11, 1, 1);
+    expect(loadBest('meadow', 1, 3)).toBe(40);
+  });
+
+  it('returns null for the same laps on a different layout', () => {
+    saveBest('canyon', 20, 2, 2);
+    expect(loadBest('canyon', 2, 2)).toBe(20);
+    expect(loadBest('canyon', 1, 2)).toBeNull();
+  });
+
+  it('refuses laps 0 / 4 / non-integers on save and load', () => {
+    for (const laps of [0, 4, -1, 1.5, NaN]) {
+      saveBest('meadow', 10, 1, laps);
+      expect(loadBest('meadow', 1, laps)).toBeNull();
+    }
+    expect(store.has(V4)).toBe(false);
+  });
+
+  it('discards a corrupt v4 (laps key 5, string time)', () => {
+    store.set(V4, JSON.stringify({
+      meadow: { '5': { time: 10, layout: 1 }, '0': { time: 10, layout: 1 }, '1.5': { time: 10, layout: 1 }, '2': { time: 'x', layout: 1 }, '3': { time: 9, layout: 1 } },
+      canyon: [1, 2],
+    }));
+    expect(loadBest('meadow', 1, 2)).toBeNull();
+    expect(loadBest('meadow', 1, 3)).toBe(9);
+    expect(loadBest('canyon')).toBeNull();
+    saveBest('neon', 33, 1, 1);
+    expect(JSON.parse(store.get(V4)!)).toEqual({ meadow: { '3': { time: 9, layout: 1 } }, neon: { '1': { time: 33, layout: 1 } } });
+  });
+
   it('saves and loads every registered course', () => {
     TRACK_IDS.forEach((id, index) => saveBest(id, 40 + index));
     TRACK_IDS.forEach((id, index) => expect(loadBest(id)).toBe(40 + index));
