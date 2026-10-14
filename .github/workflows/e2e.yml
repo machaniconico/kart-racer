@@ -19,10 +19,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium
-      - name: Build once for all E2E specs
-        run: npm run build
-        env:
-          VITE_KART_DEBUG: '1'
       - name: Run real-broker E2E
         id: e2e
         # Public broker / NAT failures are advisory, separate from the push build.

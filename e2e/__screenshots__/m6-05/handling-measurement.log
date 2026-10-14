@@ -3,7 +3,7 @@
 > vitest run --maxWorkers=1 --silent=false --reporter=verbose src/sim/handling.test.ts src/net/snapshotCodec.test.ts -t all 72 laps|pins the complete course registry
 
 
- RUN  v4.1.11 /Users/macha/kart-racer
+ RUN  v4.1.11 .
 
 stdout | src/sim/handling.test.ts > H1 CPU balance: absolute range and recorded baseline > finishes and replays all 72 laps on meadow within pace and hit budgets
 M6-05 handling measurement {

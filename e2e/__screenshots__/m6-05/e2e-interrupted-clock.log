@@ -43,7 +43,7 @@ M6-05 render measurement {"id":"neon","meshes":38,"views":[{"name":"start-grid",
       138 |         if (view.name === 'start-grid') {
       139 |           expect(Buffer.from(view.minimap, 'base64')).toMatchSnapshot(`${id}-minimap.png`);
       140 |         }
-        at /Users/macha/kart-racer/e2e/courses.spec.ts:137:49
+        at ./e2e/courses.spec.ts:137:49
 
     attachment #3: harbor-start-grid (image/png) ───────────────────────────────────────────────────
     Expected: e2e/__screenshots__/darwin/harbor-start-grid.png
@@ -81,7 +81,7 @@ M6-05 render measurement {"id":"neon","meshes":38,"views":[{"name":"start-grid",
       138 |         if (view.name === 'start-grid') {
       139 |           expect(Buffer.from(view.minimap, 'base64')).toMatchSnapshot(`${id}-minimap.png`);
       140 |         }
-        at /Users/macha/kart-racer/e2e/courses.spec.ts:137:49
+        at ./e2e/courses.spec.ts:137:49
 
     attachment #3: forest-start-grid (image/png) ───────────────────────────────────────────────────
     Expected: e2e/__screenshots__/darwin/forest-start-grid.png
@@ -116,7 +116,7 @@ M6-05 render measurement {"id":"neon","meshes":38,"views":[{"name":"start-grid",
       89 |       const { createRace, captureRenderSnapshot, getTrack, sampleTrack } = window.__kartDebug.modules;
       90 |       const renderer = window.__kartDebug.renderer!;
       91 |       const track = getTrack(id);
-        at /Users/macha/kart-racer/e2e/courses.spec.ts:88:42
+        at ./e2e/courses.spec.ts:88:42
 
     attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
     test-results/courses-C-010-EMBER-CALDER-cab15-olated-best-and-draw-budget/test-failed-1.png

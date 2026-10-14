@@ -3,7 +3,7 @@
 > vitest run
 
 
- RUN  v4.1.11 /Users/macha/kart-racer
+ RUN  v4.1.11 .
 
 
  Test Files  45 passed (45)

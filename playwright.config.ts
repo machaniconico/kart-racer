@@ -34,8 +34,8 @@ export default defineConfig({
     },
   },
   webServer: {
-    // Build once beforehand with VITE_KART_DEBUG=1 npm run build; every spec shares that dist.
-    command: 'vite preview --config e2e/vite.e2e.config.ts --port 4174 --strictPort',
+    // One e2e-mode build per run (VITE_KART_DEBUG=1 via .env.e2e); every spec shares that dist.
+    command: 'vite build --mode e2e && vite preview --config e2e/vite.e2e.config.ts --port 4174 --strictPort',
     url: 'http://127.0.0.1:4174/kart-racer/',
     reuseExistingServer: false,
     timeout: 60_000,
