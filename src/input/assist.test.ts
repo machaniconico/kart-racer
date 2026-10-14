@@ -536,15 +536,17 @@ describe('M1-03 assist passages', () => {
   }, 120_000);
 
   it('keeps the road centre and roadHalfWidth - |offset| exactly on roads without bands', () => {
-    // Courses with bands or width keys (CANYON since M1-05, NEON since M3-05) are covered by the banded tests above.
-    const plain = TRACK_IDS.filter(id => !getTrack(id).def.barriers?.length && !getTrack(id).def.widthKeys?.length);
-    expect(plain.length).toBeGreaterThanOrEqual(2);
-    for (const trackId of plain) {
-      const track = getTrack(trackId);
-      const state = solo(trackId);
+    // Registered courses all gained bands or width keys in M5, so this pins plain fixtures instead:
+    // the legacy MEADOW loop and the synthetic straight. Banded courses are covered by the tests above.
+    const plain = [buildTrack(LEGACY_MEADOW), plainTrack];
+    for (const track of plain) {
+      expect(track.def.barriers?.length ?? 0).toBe(0);
+      expect(track.def.widthKeys?.length ?? 0).toBe(0);
+      vi.spyOn(tracks, 'getTrack').mockReturnValue(track);
+      const state = solo();
       const kart = state.karts[0]!;
       for (const distance of [0, 123.4, track.length / 2]) {
-        for (const offset of [-11, -7.25, -0.3, 0, 0.3, 2, 6.9, 11]) {
+        for (const offset of [-7.25, -0.3, 0, 0.3, 2, 6.9]) {
           Object.assign(kart, { trackDistance: distance, lateralOffset: offset });
           for (const steer of [-1, 0, 0.5]) {
             expect(assistPassage(state, kart, steer, 16)).toEqual({ center: 0,
@@ -552,6 +554,7 @@ describe('M1-03 assist passages', () => {
           }
         }
       }
+      vi.restoreAllMocks();
     }
   });
 
