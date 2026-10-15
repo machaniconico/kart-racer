@@ -1,7 +1,8 @@
-// M10-03, darwin-arm64: 30 meshes, 66,982 triangles including shadows;
-// buildCourse median of five builds: 47.06 ms under concurrent story load (2026-10-16).
+// M10-03, darwin-arm64: 30 meshes, 68,122 triangles including shadows;
+// buildCourse median of five builds: 82.47 ms under concurrent story load (2026-10-16).
 // 8 CPUs × seeds [1, 42, 98765] × 3 laps = 72 completed laps:
-// meanLap 63.468287037037015 s, wallHits 0, bandHits 0, pitFalls 0.
+// meanLap 63.362500000000004 s, meanSpeed 35.610839532949186 m/s,
+// wallHits 0, bandHits 0, pitFalls 0 (NEON baseline: 35.488151098445165 m/s).
 import * as THREE from 'three';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildCourse } from '../../render/course/buildCourse';
@@ -42,7 +43,6 @@ function renderCourse() {
 describe('THUNDER OVAL', () => {
   it('replaces the scaffold with a playable, serializable full-width oval', () => {
     expect(track.length).toBeCloseTo(SPEEDWAY_LENGTH, 8);
-    expect(track.length).toBeCloseTo(2211.306159822773, 8);
     expect(track.length).toBeGreaterThanOrEqual(2100);
     expect(track.length).toBeLessThanOrEqual(2400);
     expect(track.def.layoutVersion).toBe(1);
@@ -75,16 +75,23 @@ describe('THUNDER OVAL', () => {
     }
   });
 
-  it('holds two long banks at opposite 0.35 rolls with gentle transitions', () => {
+  it('banks both long turns toward their inside at 0.35 with gentle transitions', () => {
     const keys = track.def.bankKeys!;
     const plateaus = keys.slice(1).flatMap((key, i) => {
       const previous = keys[i]!;
       return key.roll !== 0 && key.roll === previous.roll ? [{ from: previous.distance, to: key.distance, roll: key.roll }] : [];
     });
-    expect(plateaus.map(bank => bank.roll)).toEqual([0.35, -0.35]);
+    expect(plateaus).toHaveLength(2);
     for (const bank of plateaus) {
+      expect(Math.abs(bank.roll)).toBe(0.35);
       expect(bank.to - bank.from).toBeGreaterThanOrEqual(350);
       for (let d = bank.from; d <= bank.to; d += 2) expect(rollAt(track, d)).toBeCloseTo(bank.roll, 10);
+      const bend = profile.filter(point => point.distance >= bank.from && point.distance <= bank.to);
+      expect(bend.length).toBeGreaterThan(0);
+      for (const point of bend) {
+        expect(Math.sign(rollAt(track, point.distance)), `bank direction at ${point.distance}`)
+          .toBe(Math.sign(point.curvature));
+      }
     }
     for (let i = 1; i < keys.length; i++) {
       expect(Math.abs(keys[i]!.roll - keys[i - 1]!.roll) / (keys[i]!.distance - keys[i - 1]!.distance))
@@ -233,12 +240,23 @@ describe('THUNDER OVAL', () => {
     }
     expect(lapTimes).toHaveLength(72);
     const meanLap = lapTimes.reduce((sum, time) => sum + time, 0) / lapTimes.length;
-    console.info('speedway CPU', { length: track.length, meanLap, wallHits, bandHits, pitFalls });
+    const meanSpeed = track.length / meanLap;
+    console.info('speedway CPU', { length: track.length, meanLap, meanSpeed, wallHits, bandHits, pitFalls });
     expect(meanLap).toBeGreaterThanOrEqual(60);
     expect(meanLap).toBeGreaterThanOrEqual(track.length / 40);
     expect(meanLap).toBeLessThanOrEqual(track.length / 20);
-    // NEON's 64.32939814814814 s is the fastest original eight-course baseline.
-    expect(meanLap).toBeLessThan(64.32939814814814);
+    // Original eight-course baselines from handling.test.ts: the same 8 CPUs,
+    // seeds [1, 42, 98765] and 3 laps. Compare speed, since lap lengths differ.
+    const originalMeanLaps = {
+      meadow: 68.5011574074074, canyon: 68.49583333333334,
+      snowpeak: 67.89120370370368, neon: 64.32939814814814,
+      harbor: 69.73750000000001, forest: 69.52407407407406,
+      volcano: 67.82407407407408, skyline: 67.35324074074076,
+    };
+    for (const [id, baselineMeanLap] of Object.entries(originalMeanLaps)) {
+      expect(meanSpeed, `average speed must exceed ${id}`)
+        .toBeGreaterThan(getTrack(id).length / baselineMeanLap);
+    }
     expect(wallHits).toBeLessThanOrEqual(6);
     expect(bandHits).toBeLessThanOrEqual(2);
     expect(pitFalls).toBeLessThanOrEqual(6);

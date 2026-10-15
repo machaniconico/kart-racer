@@ -4,18 +4,20 @@ import { BASE_ROAD_HALF_WIDTH, BASE_WALL_HALF_WIDTH } from './widths';
 
 const layout: TrackDef = {
   id: 'speedway', name: 'THUNDER OVAL', layoutVersion: 1, themeId: 'speedway',
-  // Two 752 m straights joined by broad, 112.8 m radius stadium turns.
+  // Two 752 m straights joined by long, elliptical stadium turns.
+  // Tighter entries and exits let CPUs build drift boosts before each straight.
   // Collinear approach points keep the long straights and start seam flat.
-  // Height 5 keeps the low edge of both 0.35-radian banks above the infield.
+  // Both turns have positive curvature, so both +0.35-radian banks lower the inside.
+  // Height 5 keeps their low edges above the infield.
   controlPoints: [
     [-300, 5, 0], [-200, 5, 0], [-100, 5, 0], [0, 5, 0],
     [100, 5, 0], [200, 5, 0], [300, 5, 0], [350, 5, 0], [400, 5, 0],
-    [460, 5, 16.077], [503.923, 5, 60], [520, 5, 120],
-    [503.923, 5, 180], [460, 5, 223.923], [400, 5, 240], [350, 5, 240],
-    [300, 5, 240], [200, 5, 240], [100, 5, 240], [0, 5, 240],
-    [-100, 5, 240], [-200, 5, 240], [-300, 5, 240], [-350, 5, 240], [-400, 5, 240],
-    [-460, 5, 223.923], [-503.923, 5, 180], [-520, 5, 120],
-    [-503.923, 5, 60], [-460, 5, 16.077], [-400, 5, 0], [-350, 5, 0],
+    [430, 5, 24.115], [451.962, 5, 90], [460, 5, 180],
+    [451.962, 5, 270], [430, 5, 335.885], [400, 5, 360], [350, 5, 360],
+    [300, 5, 360], [200, 5, 360], [100, 5, 360], [0, 5, 360],
+    [-100, 5, 360], [-200, 5, 360], [-300, 5, 360], [-350, 5, 360], [-400, 5, 360],
+    [-430, 5, 335.885], [-451.962, 5, 270], [-460, 5, 180],
+    [-451.962, 5, 90], [-430, 5, 24.115], [-400, 5, 0], [-350, 5, 0],
   ],
   scale: 0.94, samplesPerSegment: 32,
   roadHalfWidth: BASE_ROAD_HALF_WIDTH, wallHalfWidth: BASE_WALL_HALF_WIDTH,
@@ -31,13 +33,21 @@ export const SPEEDWAY_LENGTH = geometry.length;
 
 export const speedway: TrackDef = {
   ...layout,
-  racingLine: [{ distance: 0, offset: 0 }, { distance: SPEEDWAY_LENGTH, offset: 0 }],
+  // Hold the low, inside lane through both banks and return to centre on the straights.
+  racingLine: [
+    { distance: 0, offset: 0 },
+    { distance: at(7), offset: 0 }, { distance: at(8), offset: -6.5 },
+    { distance: at(14), offset: -6.5 }, { distance: at(15), offset: 0 },
+    { distance: at(23), offset: 0 }, { distance: at(24), offset: -6.5 },
+    { distance: at(30), offset: -6.5 }, { distance: at(31), offset: 0 },
+    { distance: SPEEDWAY_LENGTH, offset: 0 },
+  ],
   bankKeys: [
     { distance: 0, roll: 0 },
     { distance: at(7), roll: 0 }, { distance: at(8), roll: 0.35 },
     { distance: at(14), roll: 0.35 }, { distance: at(15), roll: 0 },
-    { distance: at(23), roll: 0 }, { distance: at(24), roll: -0.35 },
-    { distance: at(30), roll: -0.35 }, { distance: at(31), roll: 0 },
+    { distance: at(23), roll: 0 }, { distance: at(24), roll: 0.35 },
+    { distance: at(30), roll: 0.35 }, { distance: at(31), roll: 0 },
     { distance: SPEEDWAY_LENGTH, roll: 0 },
   ],
   surfaces: [
