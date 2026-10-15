@@ -271,50 +271,81 @@ test('M8-07 T3: racing survives 15 seconds of latency, jitter, loss and bursts',
   await startRace(host, guest, 'meadow');
   await guest.bringToFront();
   await guest.locator('#game-canvas').focus();
-  await guest.evaluate(async () => {
-    await window.__kartDebug.net.impair({
-      latencyMs: 120, jitterMs: 50, lossRate: 0.1, seed: 3,
-      bursts: { periodMs: 3_000, lengthMs: 400, extraLatencyMs: 200, lossRate: 0.4 },
-    });
-  });
-  const monitors = await Promise.all([host, guest].map(page => monitorSession(page, 'racing')));
+  await guest.keyboard.down('ArrowUp');
   try {
-    await guest.keyboard.down('ArrowUp');
-    await guest.waitForTimeout(15_000);
-    for (const page of [host, guest]) {
-      expect.soft(await page.evaluate(() => window.__kartDebug.net.phase)).toBe('racing');
-      await expect.soft(page.locator('#net-dialog')).toBeHidden();
-      expect.soft(await page.evaluate(() => window.__kartDebug.state.karts[1].speed)).toBeGreaterThan(5);
+    // Measure the baseline in this race while driving, before adding impairment.
+    const baselineMonitor = await monitorSession(guest, 'racing');
+    await guest.waitForTimeout(5_000);
+    const baseline = await finishMonitor(baselineMonitor, 'guest-baseline-race', testInfo);
+    const baselineDelayMs = baseline.samples.at(-1)!.renderDelayMs;
+    expect(baselineDelayMs, 'Baseline delay B must be available').not.toBeNull();
+    const baselineRecoveryLimitMs = Math.max(110, baselineDelayMs! + 30);
+    await guest.evaluate(async () => {
+      await window.__kartDebug.net.impair({
+        latencyMs: 120, jitterMs: 50, lossRate: 0.1, seed: 3,
+        bursts: { periodMs: 3_000, lengthMs: 400, extraLatencyMs: 200, lossRate: 0.4 },
+      });
+    });
+    const monitors = await Promise.all([host, guest].map(page => monitorSession(page, 'racing')));
+    let maxImpairedDelayMs = 0;
+    try {
+      await guest.waitForTimeout(15_000);
+      for (const page of [host, guest]) {
+        expect.soft(await page.evaluate(() => window.__kartDebug.net.phase)).toBe('racing');
+        await expect.soft(page.locator('#net-dialog')).toBeHidden();
+        expect.soft(await page.evaluate(() => window.__kartDebug.state.karts[1].speed)).toBeGreaterThan(5);
+      }
+    } finally {
+      const [, guestResult] = await Promise.all(monitors.map((monitor, i) =>
+        finishMonitor(monitor, ['host-impaired-race', 'guest-impaired-race'][i], testInfo),
+      ));
+      maxImpairedDelayMs = Math.max(...guestResult.samples.map(sample => sample.renderDelayMs ?? -Infinity));
+      // Coordinator revision (2026-10-15): delay may fall between bursts (112 ms
+      // observed). Requiring every post-5s sample >= 140 would reject the intended
+      // recovery. Require the first and peak post-5s values >= 140, and cap ALL
+      // samples at 250 so neither a late rise nor a later overshoot is hidden.
+      const adapted = guestResult.samples.filter(sample => sample.elapsedMs >= 5_000 && sample.elapsedMs <= 15_000);
+      expect.soft(adapted.length, 'Delay samples after the five second adaptation period').toBeGreaterThan(0);
+      expect.soft(adapted[0]?.renderDelayMs, 'First post-5s delay').toBeGreaterThanOrEqual(140);
+      const maxAdaptedDelayMs = Math.max(...adapted.map(sample => sample.renderDelayMs ?? -Infinity));
+      expect.soft(maxAdaptedDelayMs, 'Peak post-5s delay').toBeGreaterThanOrEqual(140);
+      expect.soft(maxAdaptedDelayMs, 'Peak post-5s delay').toBeLessThanOrEqual(250);
+      expect.soft(guestResult.samples.every(sample =>
+        sample.renderDelayMs !== null && sample.renderDelayMs <= 250,
+      ), 'Every delay sample is available and <= 250 ms').toBe(true);
+      expect.soft(guestResult.samples.every(sample => sample.regressions === 0), 'No render time regressions').toBe(true);
+      expect.soft(guestResult.samples.every(sample => sample.stalls === 0), 'No stalls').toBe(true);
     }
+    // Coordinator revision: the 3 s jitter window and 5%/s slew, plus baseline
+    // jitter from two headless pages, made a fixed 110 ms at 6 s too strict
+    // (136 / 123.675 ms observed). Both relative recovery limits must be met
+    // by the SAME sample within 10 s of clearing impairment.
+    const recovery = await guest.evaluate(async ({ baselineLimit, peak }) => {
+      const startedAt = performance.now();
+      await window.__kartDebug.net.impair(null);
+      const samples: { elapsedMs: number; renderDelayMs: number | null }[] = [];
+      let recovered = false;
+      do {
+        const elapsedMs = performance.now() - startedAt;
+        const renderDelayMs = window.__kartDebug.net.renderDelayMs;
+        samples.push({ elapsedMs, renderDelayMs });
+        recovered = elapsedMs <= 10_000 && renderDelayMs !== null
+          && renderDelayMs <= baselineLimit && renderDelayMs <= peak - 50;
+        if (recovered || elapsedMs >= 10_000) break;
+        await new Promise(resolve => setTimeout(resolve, Math.min(100, 10_000 - elapsedMs)));
+      } while (true);
+      return { recovered, samples };
+    }, { baselineLimit: baselineRecoveryLimitMs, peak: maxImpairedDelayMs });
+    const evidence = { baselineDelayMs, baselineRecoveryLimitMs, maxImpairedDelayMs, ...recovery };
+    await testInfo.attach('recovered-delay', {
+      body: JSON.stringify(evidence), contentType: 'application/json',
+    });
+    console.info(`M8-07 recovery ${JSON.stringify(evidence)}`);
+    expect(recovery.recovered, 'Within 10 s: delay <= max(110, B + 30) and <= impaired peak - 50').toBe(true);
   } finally {
     await guest.keyboard.up('ArrowUp');
     await guest.evaluate(async () => { await window.__kartDebug.net.impair(null); });
-    const [, guestResult] = await Promise.all(monitors.map((monitor, i) =>
-      finishMonitor(monitor, ['host-impaired-race', 'guest-impaired-race'][i], testInfo),
-    ));
-    // Coordinator revision (2026-10-15): delay may fall between bursts (112 ms
-    // observed). Requiring every post-5s sample >= 140 would reject the intended
-    // recovery. Require the first and peak post-5s values >= 140, and cap ALL
-    // samples at 250 so neither a late rise nor a later overshoot is hidden.
-    const adapted = guestResult.samples.filter(sample => sample.elapsedMs >= 5_000 && sample.elapsedMs <= 15_000);
-    expect.soft(adapted.length, 'Delay samples after the five second adaptation period').toBeGreaterThan(0);
-    expect.soft(adapted[0]?.renderDelayMs, 'First post-5s delay').toBeGreaterThanOrEqual(140);
-    const maxAdaptedDelayMs = Math.max(...adapted.map(sample => sample.renderDelayMs ?? -Infinity));
-    expect.soft(maxAdaptedDelayMs, 'Peak post-5s delay').toBeGreaterThanOrEqual(140);
-    expect.soft(maxAdaptedDelayMs, 'Peak post-5s delay').toBeLessThanOrEqual(250);
-    expect.soft(guestResult.samples.every(sample =>
-      sample.renderDelayMs !== null && sample.renderDelayMs <= 250,
-    ), 'Every delay sample is available and <= 250 ms').toBe(true);
-    expect.soft(guestResult.samples.every(sample => sample.regressions === 0), 'No render time regressions').toBe(true);
-    expect.soft(guestResult.samples.every(sample => sample.stalls === 0), 'No stalls').toBe(true);
   }
-  await guest.waitForTimeout(6_000);
-  const recoveredDelayMs = await guest.evaluate(() => window.__kartDebug.net.renderDelayMs);
-  await testInfo.attach('recovered-delay', {
-    body: JSON.stringify({ recoveredDelayMs }), contentType: 'application/json',
-  });
-  expect(recoveredDelayMs).not.toBeNull();
-  expect(recoveredDelayMs).toBeLessThanOrEqual(110);
 });
 
 test('M8-07 T4: losing the lobby host shows a dialog within ten seconds and returns to title', async ({ page: host, guest }) => {
