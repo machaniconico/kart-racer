@@ -8,6 +8,7 @@ import { ClockSync, packPing, packPong, TICK_MS, TickMap, unpackClock } from './
 import { INPUT_HISTORY, NEUTRAL_INPUT, pack, quantizeInput } from './inputBuffer';
 import { INTERPOLATION_DELAY_MS, SnapshotBuffer } from './interpolation';
 import { Predictor } from './predictor';
+import { JitterEstimator, RenderClock } from './renderClock';
 import { encodeControlMessage, isProfile, PacketKind, parseControlMessage, PROTOCOL_VERSION } from './protocol';
 import type { ControlMessage, RaceStart, RejectReason } from './protocol';
 import { normalize } from './roomCode';
@@ -29,6 +30,8 @@ export interface GuestSessionOptions {
   now?: () => number;
   /** Predict the local kart; false retains the interpolation-only N4 view. */
   prediction?: boolean;
+  /** 'adaptive' slews the interpolation delay with snapshot jitter; 'fixed' keeps INTERPOLATION_DELAY_MS. */
+  renderDelay?: 'fixed' | 'adaptive';
 }
 
 export interface GuestFrame { state: RaceState; previous: RenderSnapshot; alpha: number }
@@ -38,6 +41,11 @@ export type GuestCloseReason = 'host_lost' | 'left' | RejectReason | TransportEr
 export class GuestSession {
   private readonly now: () => number;
   private readonly prediction: boolean;
+  private readonly adaptiveDelay: boolean;
+  private renderClock = new RenderClock(0);
+  private jitter = new JitterEstimator();
+  private lastRenderHostTime = -Infinity;
+  private regressions = 0;
   private predictor: Predictor | null = null;
   private pendingSnapshot: Snapshot | null = null;
   private predictionAt = 0;
@@ -83,6 +91,7 @@ export class GuestSession {
   constructor(private readonly transport: Transport, options: GuestSessionOptions = {}) {
     this.now = options.now ?? (() => performance.now());
     this.prediction = options.prediction ?? true;
+    this.adaptiveDelay = (options.renderDelay ?? 'adaptive') === 'adaptive';
     this.name = options.name ?? 'Guest';
     this.color = options.color ?? 0x38bdf8;
     if (!isProfile({ type: 'profile', name: this.name, color: this.color })) throw new TypeError('Invalid guest profile');
@@ -101,6 +110,11 @@ export class GuestSession {
   }
   get predictedState(): RaceState | null { return this.predictor?.state ?? null; }
   get replayTicks(): number { return this.predictor?.replayTicks ?? 0; }
+  get renderDelayMs(): number { return this.adaptiveDelay ? this.renderClock.delayMs : INTERPOLATION_DELAY_MS; }
+  /** The host time of the last interpolated sample. */
+  get renderHostTime(): number { return this.lastRenderHostTime; }
+  /** Frames whose requested sample time was earlier than the previous frame's request. */
+  get renderTimeRegressions(): number { return this.regressions; }
   get visualOffset(): Readonly<{ x: number; y: number; z: number }> {
     return this.predictor?.visualOffset ?? { x: 0, y: 0, z: 0 };
   }
@@ -206,6 +220,10 @@ export class GuestSession {
     this.inputHistory = [];
     this.isStalled = false;
     this.graceUntil = 0;
+    this.renderClock.reset(this.offset);
+    this.jitter = new JitterEstimator();
+    this.lastRenderHostTime = -Infinity;
+    this.regressions = 0;
   }
 
   private start(message: RaceStart, now: number): void {
@@ -273,6 +291,7 @@ export class GuestSession {
     this.ticks.update(snapshot.state.tick, snapshot.hostTime);
     this.fallbackOffset = snapshot.hostTime - now;
     this.lastSnapshotAt = now;
+    if (this.adaptiveDelay) this.jitter.observe(now - snapshot.hostTime, now);
     // Keep interpolation history, but replay only the newest snapshot before
     // the next simulation/render frame when several datagrams arrive together.
     if (this.predictor) this.pendingSnapshot = snapshot;
@@ -447,7 +466,14 @@ export class GuestSession {
       return { state, previous: captureRenderSnapshot(state), alpha: 1 };
     }
     if (!this.activeRace) return null;
-    const state = this.snapshots.sample(now + this.offset - INTERPOLATION_DELAY_MS);
+    let renderHostTime: number;
+    if (this.adaptiveDelay) {
+      this.renderClock.advance(now, this.offset, this.jitter.target(now));
+      renderHostTime = this.renderClock.hostTime(now);
+    } else renderHostTime = now + this.offset - INTERPOLATION_DELAY_MS;
+    if (renderHostTime < this.lastRenderHostTime) this.regressions++;
+    this.lastRenderHostTime = renderHostTime;
+    const state = this.snapshots.sample(renderHostTime);
     if (!state) return null;
     // Buffered snapshots predate subsequently recovered lap boundaries.
     for (const kart of state.karts) {

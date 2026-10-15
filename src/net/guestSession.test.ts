@@ -914,7 +914,7 @@ describe('HostSession integration', () => {
     let comparisons = 0;
     // Host time at which each tick's snapshot was encoded, and each view's interpolation age.
     const sentAt = new Map<number, number>();
-    const views: { hostTick: number; predictedTick: number | undefined; state: RaceState; age: number }[] = [];
+    const views: { hostTick: number; predictedTick: number | undefined; state: RaceState; age: number; delayMs: number }[] = [];
     // Run the host beyond the measured window so every leading local prediction
     // has an authoritative state at the same tick to compare after the loop.
     for (let tick = 1; tick <= ticks + (prediction ? 30 : 0); tick++) {
@@ -931,14 +931,17 @@ describe('HostSession integration', () => {
       const sampledAt = Math.max(...sample.mock.calls.map(([hostTime]) => hostTime));
       const newestTick = sample.mock.results.at(-1)!.value!.tick;
       sample.mockClear();
+      // Fixed latency without jitter: the adaptive delay must stay at its 100 ms floor and never rewind.
+      expect(guest.renderDelayMs).toBe(100);
+      expect(guest.renderTimeRegressions).toBe(0);
       if (tick >= 30 && tick <= ticks) views.push({ hostTick: tick, predictedTick: guest.predictedState?.tick, state: view.state,
-        age: sampledAt - sentAt.get(newestTick)! });
+        age: sampledAt - sentAt.get(newestTick)!, delayMs: guest.renderDelayMs });
     }
     sample.mockRestore();
     for (const view of views) {
       for (const kart of view.state.karts) {
         const localPrediction = prediction && kart.id === 1;
-        const referenceTick = localPrediction ? view.predictedTick! : view.hostTick - 6;
+        const referenceTick = localPrediction ? view.predictedTick! : view.hostTick - Math.round(view.delayMs / TICK_MS);
         const reference = history.get(referenceTick);
         expect(reference, `missing host history at tick ${referenceTick}`).toBeDefined();
         const expected = reference!.karts[kart.id];
@@ -987,6 +990,35 @@ describe('HostSession integration', () => {
     expect(guest.frame()!.state.tick).toBe(0);
     host.close();
     expect(guest.reason).toBe('host_lost');
+  });
+
+  it('renders identical poses with fixed and adaptive delay at RTT 120 ms, loss 10 %, no jitter (seed 92, meadow)', async () => {
+    // The network seed fixes every loss, so two runs differ only in the guest's render delay mode.
+    const run = async (renderDelay: 'fixed' | 'adaptive') => {
+      const network = new MockTransport({ latencyMs: 60, lossRate: 0.1, seed: 92 });
+      const host = await HostSession.create(network, { roomCode: 'AB2X', now: () => network.now, hostInput: { sample: getAIInput } });
+      const guest = new GuestSession(network, { now: () => network.now, prediction: false, renderDelay });
+      await guest.join('AB2X');
+      host.setCourse('meadow');
+      for (let n = 0; n < 200; n++) { host.frame(); guest.frame(); network.advance(10); }
+      const state = host.startRace(431);
+      network.advance(host.startAtHostTime - network.now);
+      const frames: { x: number; y: number; z: number; heading: number }[][] = [];
+      for (let tick = 1; tick <= 600; tick++) {
+        guest.tick(getAIInput(state, 1));
+        network.advance(TICK_MS);
+        stepRace(state, state.karts.map(kart => host.inputSource(kart.id).sample(state, kart.id)));
+        host.afterTick(state);
+        frames.push(guest.frame()!.state.karts.map(({ x, y, z, heading }) => ({ x, y, z, heading })));
+        expect(guest.renderDelayMs).toBe(100);
+        expect(guest.renderTimeRegressions).toBe(0);
+      }
+      host.close();
+      return frames;
+    };
+    const fixed = await run('fixed');
+    expect(fixed).toHaveLength(600);
+    expect(await run('adaptive')).toEqual(fixed);
   });
 });
 
