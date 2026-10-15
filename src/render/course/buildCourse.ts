@@ -5,6 +5,7 @@ import type { Barrier, SurfaceZone, Track, TrackProjection, TrackSample } from '
 import { widthAt } from '../../sim/corridor';
 import type { CourseTheme as BaseCourseTheme } from './CourseTheme';
 import { buildMotion } from './motion';
+import { RoadIndex } from './roadIndex';
 
 // Keep compatibility with callers of the original theme contract.
 export interface CourseTheme extends BaseCourseTheme {
@@ -110,7 +111,7 @@ function subtractFootprint(polygon: GroundPoint[], footprint: GroundPoint[]): Gr
   return kept;
 }
 
-function ribbonGeometry(track: Track, offsets: RibbonOffsets, lift = 0, slope = false,
+function ribbonGeometry(track: Track, roadIndex: RoadIndex, offsets: RibbonOffsets, lift = 0, slope = false,
   from = 0, to = track.length, boundaries: readonly number[] = [],
   cutouts: readonly SurfaceZone[] = [], omitted: readonly Span[] = []): THREE.BufferGeometry {
   let positions: number[] = [];
@@ -144,7 +145,7 @@ function ribbonGeometry(track: Track, offsets: RibbonOffsets, lift = 0, slope = 
         const ceiling = sampleTrack(track, middle).y - 0.6;
         // The 22 m halo sets terrain height only; it does not widen the cutout.
         groundHeight = Math.min(groundHeight, ...[n, n + 1, n + 2, n + 3].map(index =>
-          roadHeightAtXZ(track, positions[index * 3], positions[index * 3 + 2], false, 22, ceiling) ?? -1.35));
+          roadIndex.heightAt(positions[index * 3], positions[index * 3 + 2], false, 22, ceiling) ?? -1.35));
       }
       for (const triangle of [[n, n + 2, n + 1], [n + 1, n + 2, n + 3]]) {
         // A suspended slab has flat terrain beside it, not a bank hanging over
@@ -239,9 +240,9 @@ function sectionDistances(track: Track, count: number, from = 0, to = track.leng
   return [...distances].sort((a, b) => a - b);
 }
 
-function ribbon(track: Track, scene: THREE.Group, offsets: RibbonOffsets, color: number, lift = 0, slope = false,
+function ribbon(track: Track, roadIndex: RoadIndex, scene: THREE.Group, offsets: RibbonOffsets, color: number, lift = 0, slope = false,
   cutouts: readonly SurfaceZone[] = [], omitted: readonly Span[] = []): THREE.Mesh {
-  const geo = ribbonGeometry(track, offsets, lift, slope, 0, track.length, [], cutouts, omitted);
+  const geo = ribbonGeometry(track, roadIndex, offsets, lift, slope, 0, track.length, [], cutouts, omitted);
   const mat = material(color);
   mat.side = THREE.DoubleSide;
   const mesh = new THREE.Mesh(geo, mat);
@@ -259,6 +260,7 @@ export interface Course {
 }
 
 export function buildCourse(track: Track, theme: CourseTheme): Course {
+  const roadIndex = new RoadIndex(track);
   const group = new THREE.Group();
   group.name = `course:${track.def.id}`;
   const sky = new THREE.Mesh(new THREE.SphereGeometry(600, 16, 12), new THREE.ShaderMaterial({
@@ -269,13 +271,13 @@ export function buildCourse(track: Track, theme: CourseTheme): Course {
     fragmentShader: 'uniform vec3 top; uniform vec3 bottom; varying vec3 vPosition; void main(){float t=smoothstep(-0.08,0.7,normalize(vPosition).y);gl_FragColor=vec4(mix(bottom,top,t),1.0);\n#include <colorspace_fragment>\n}',
   }));
   group.add(sky);
-  buildRoad(track, theme, group);
+  buildRoad(track, theme, group, roadIndex);
   const surfaces = new Map<Exclude<SurfaceZone['kind'], 'spin'>, THREE.BufferGeometry[]>();
   for (const zone of track.def.surfaces) {
     if (zone.kind === 'spin') continue;
     // Sampling beyond length also handles a single zone crossing the finish line.
     const to = zone.to < zone.from ? zone.to + track.length : zone.to;
-    const geometry = ribbonGeometry(track, d => {
+    const geometry = ribbonGeometry(track, roadIndex, d => {
       const { roadHalfWidth } = widthAt(track, d);
       return [zone.offsetMin ?? -roadHalfWidth, zone.offsetMax ?? roadHalfWidth];
     }, zone.kind === 'pit' ? 0.06 - 0.3 : 0.1, false, zone.from, to, [],
@@ -284,7 +286,7 @@ export function buildCourse(track: Track, theme: CourseTheme): Course {
     parts.push(geometry);
     surfaces.set(zone.kind, parts);
   }
-  buildPitRims(track, theme, group);
+  buildPitRims(track, theme, group, roadIndex);
   for (const [kind, parts] of surfaces) {
     const geometry = mergeGeometries(parts)!;
     parts.forEach(part => part.dispose());
@@ -301,8 +303,8 @@ export function buildCourse(track: Track, theme: CourseTheme): Course {
     group.add(mesh);
   }
   buildBarriers(track, theme, group);
-  buildIslands(track, theme, group);
-  buildScenery(track, theme, group);
+  buildIslands(track, theme, group, roadIndex);
+  buildScenery(track, theme, group, roadIndex);
   const motion = buildMotion(track, theme, group);
   return {
     group, sky,
@@ -312,7 +314,7 @@ export function buildCourse(track: Track, theme: CourseTheme): Course {
 }
 
 /** Paint belongs on the lip, never suspended over the recessed floor/open air. */
-function buildPitRims(track: Track, theme: CourseTheme, group: THREE.Group): void {
+function buildPitRims(track: Track, theme: CourseTheme, group: THREE.Group, roadIndex: RoadIndex): void {
   const parts: THREE.BufferGeometry[] = [];
   for (const pit of track.def.surfaces.filter(zone => zone.kind === 'pit')) {
     const to = pit.to < pit.from ? pit.to + track.length : pit.to;
@@ -323,12 +325,12 @@ function buildPitRims(track: Track, theme: CourseTheme, group: THREE.Group): voi
     // End caps lie on the approach/landing road. Side paint stays on surviving
     // asphalt only; there is no side stripe when the pit reaches the road edge.
     for (const [from, end] of [[pit.from - 0.18, pit.from], [to, to + 0.18]]) {
-      parts.push(ribbonGeometry(track, edges, 0.075, false, from, end));
+      parts.push(ribbonGeometry(track, roadIndex, edges, 0.075, false, from, end));
     }
     for (const side of [0, 1]) {
       const middle = (pit.from + to) / 2;
       if (Math.abs(edges(middle)[side]) >= widthAt(track, middle).roadHalfWidth) continue;
-      parts.push(ribbonGeometry(track, d => {
+      parts.push(ribbonGeometry(track, roadIndex, d => {
         const edge = edges(d)[side];
         return side === 0 ? [edge - 0.18, edge] : [edge, edge + 0.18];
       }, 0.075, false, pit.from, to));
@@ -345,7 +347,8 @@ function buildPitRims(track: Track, theme: CourseTheme, group: THREE.Group): voi
   group.add(mesh);
 }
 
-export function buildScenery(track: Track, theme: CourseTheme, scene: THREE.Group): void {
+export function buildScenery(track: Track, theme: CourseTheme, scene: THREE.Group,
+  roadIndex = new RoadIndex(track)): void {
   const existing = new Set(scene.children);
   theme.buildProps(track, scene, theme.budget);
   theme.buildLandmarks(track, scene);
@@ -366,8 +369,8 @@ export function buildScenery(track: Track, theme: CourseTheme, scene: THREE.Grou
         position.setFromMatrixPosition(matrix).applyMatrix4(object.matrixWorld);
         // Include the removed 22 m embankment beside the upper road: scenery
         // there must not hang over the lower road either.
-        const upper = roadHeightAtXZ(track, position.x, position.z, true, 22);
-        const lower = upper === undefined ? undefined : roadHeightAtXZ(track, position.x, position.z, false, 0, upper - 0.6);
+        const upper = roadIndex.heightAt(position.x, position.z, true, 22);
+        const lower = upper === undefined ? undefined : roadIndex.heightAt(position.x, position.z, false, 0, upper - 0.6);
         if (upper !== undefined && lower !== undefined && lower < upper - 0.6) continue;
         object.setMatrixAt(kept, matrix);
         if (object.instanceColor) {
@@ -384,7 +387,7 @@ export function buildScenery(track: Track, theme: CourseTheme, scene: THREE.Grou
 }
 
 /** Examine both crossing branches instead of the single nearest XZ projection. */
-function roadHeightAtXZ(track: Track, x: number, z: number, deck: boolean, margin = 0,
+export function roadHeightAtXZReference(track: Track, x: number, z: number, deck: boolean, margin = 0,
   ceiling = Infinity): number | undefined {
   let height: number | undefined;
   let nearestSquared = Infinity;
@@ -409,7 +412,7 @@ function roadHeightAtXZ(track: Track, x: number, z: number, deck: boolean, margi
   return height;
 }
 
-function buildDecks(track: Track, theme: CourseTheme, scene: THREE.Group): void {
+function buildDecks(track: Track, theme: CourseTheme, scene: THREE.Group, roadIndex: RoadIndex): void {
   if (!track.def.decks?.length) return;
   const positions: number[] = [];
   const indices: number[] = [];
@@ -461,7 +464,7 @@ function buildDecks(track: Track, theme: CourseTheme, scene: THREE.Group): void 
         const top = pointHeight(track, point, offset) + 0.06 - 0.6;
         // Decorative supports must not pass through a drivable lower branch.
         // Include the cylinder radius so even its outer face clears the lane.
-        if (roadHeightAtXZ(track, x, z, false, 0.45, top) !== undefined) continue;
+        if (roadIndex.heightAt(x, z, false, 0.45, top) !== undefined) continue;
         const bottom = -1.35;
         if (top > bottom) supports.push({ x, z, bottom, top });
       }
@@ -558,7 +561,7 @@ function buildBarriers(track: Track, theme: CourseTheme, group: THREE.Group): vo
   }
 }
 
-function buildIslands(track: Track, theme: CourseTheme, group: THREE.Group): void {
+function buildIslands(track: Track, theme: CourseTheme, group: THREE.Group, roadIndex: RoadIndex): void {
   for (const [index, split] of (track.def.splits ?? []).entries()) {
     const point = sampleTrack(track, split.from - 30);
     const wall = widthAt(track, split.from - 30).wallHalfWidth;
@@ -582,7 +585,7 @@ function buildIslands(track: Track, theme: CourseTheme, group: THREE.Group): voi
     along / (b.taper ?? 4), (spanOf(b) - along) / (b.taper ?? 4));
   const parts = islands.map(b => {
     const span = spanOf(b), taper = Math.min(b.taper ?? 4, span / 2);
-    return ribbonGeometry(track, d => {
+    return ribbonGeometry(track, roadIndex, d => {
       const half = halfAt(b, d - b.from);
       return [b.center - half, b.center + half];
     }, 0.06 + 0.15, false, b.from, b.from + span, [b.from + taper, b.from + span - taper]);
@@ -662,7 +665,7 @@ export function disposeObjectTree(root: THREE.Object3D): void {
   root.clear();
 }
 
-function buildRoad(track: Track, theme: CourseTheme, scene: THREE.Group): void {
+function buildRoad(track: Track, theme: CourseTheme, scene: THREE.Group, roadIndex: RoadIndex): void {
   const transform = new THREE.Object3D();
   const colors = theme.colors;
   const pits = track.def.surfaces.filter(zone => zone.kind === 'pit');
@@ -671,25 +674,25 @@ function buildRoad(track: Track, theme: CourseTheme, scene: THREE.Group): void {
   ground.position.y = -1.45;
   ground.receiveShadow = true;
   scene.add(ground);
-  ribbon(track, scene, d => {
+  ribbon(track, roadIndex, scene, d => {
     const { roadHalfWidth } = widthAt(track, d);
     return [-roadHalfWidth, roadHalfWidth];
   }, colors.road, 0.06, false, pits, track.def.decks).name = 'road';
   for (const side of [-1, 1]) {
-    ribbon(track, scene, d => {
+    ribbon(track, roadIndex, scene, d => {
       const w = widthAt(track, d);
       return [side * w.roadHalfWidth, side * w.wallHalfWidth];
     }, colors.shoulder, 0.01, false, pits, track.def.decks).name = `shoulder:${side}`;
-    ribbon(track, scene, d => {
+    ribbon(track, roadIndex, scene, d => {
       const { wallHalfWidth } = widthAt(track, d);
       return [side * wallHalfWidth, side * (wallHalfWidth + 22)];
     }, colors.ground, 0, true, [], track.def.decks).name = `ground:${side}`;
-    ribbon(track, scene, d => {
+    ribbon(track, roadIndex, scene, d => {
       const { roadHalfWidth } = widthAt(track, d);
       return [side * (roadHalfWidth - 0.16), side * (roadHalfWidth + 0.06)];
     }, colors.line, 0.075, false, pits).name = `line:${side}`;
   }
-  buildDecks(track, theme, scene);
+  buildDecks(track, theme, scene, roadIndex);
   const distances = sectionDistances(track, Math.floor(track.length / 3), 0, track.length,
     pits.flatMap(pit => [pit.from, pit.to]));
   const count = distances.length - 1;
