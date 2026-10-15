@@ -44,6 +44,7 @@ export class GuestSession {
   private readonly adaptiveDelay: boolean;
   private renderClock = new RenderClock(0);
   private jitter = new JitterEstimator();
+  private lastFrameNow: number | null = null;
   private lastRenderHostTime = -Infinity;
   private regressions = 0;
   private predictor: Predictor | null = null;
@@ -110,6 +111,13 @@ export class GuestSession {
   }
   get predictedState(): RaceState | null { return this.predictor?.state ?? null; }
   get replayTicks(): number { return this.predictor?.replayTicks ?? 0; }
+  /**
+   * Lateness distribution of the estimator window, or null unless adaptive.
+   * Uses the last frame's now: JitterEstimator expires state, so never call it with a future now (M8-03).
+   */
+  get latenessStats(): ReturnType<JitterEstimator['stats']> {
+    return this.adaptiveDelay && this.lastFrameNow !== null ? this.jitter.stats(this.lastFrameNow) : null;
+  }
   get renderDelayMs(): number { return this.adaptiveDelay ? this.renderClock.delayMs : INTERPOLATION_DELAY_MS; }
   /** The host time of the last interpolated sample. */
   get renderHostTime(): number { return this.lastRenderHostTime; }
@@ -222,6 +230,7 @@ export class GuestSession {
     this.graceUntil = 0;
     this.renderClock.reset(this.offset);
     this.jitter = new JitterEstimator();
+    this.lastFrameNow = null;
     this.lastRenderHostTime = -Infinity;
     this.regressions = 0;
   }
@@ -468,6 +477,7 @@ export class GuestSession {
     if (!this.activeRace) return null;
     let renderHostTime: number;
     if (this.adaptiveDelay) {
+      this.lastFrameNow = Math.max(now, this.lastFrameNow ?? now);
       this.renderClock.advance(now, this.offset, this.jitter.target(now));
       renderHostTime = this.renderClock.hostTime(now);
     } else renderHostTime = now + this.offset - INTERPOLATION_DELAY_MS;

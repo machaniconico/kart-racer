@@ -22,12 +22,28 @@ export class JitterEstimator {
 
   target(now: number): number {
     if (!Number.isFinite(now)) return BASE_RENDER_DELAY_MS;
-    this.expire(now);
-    const values = this.samples.filter(sample => sample.now <= now)
-      .map(sample => sample.latenessMs).sort((a, b) => a - b);
+    const values = this.window(now);
     if (values.length < MIN_JITTER_SAMPLES) return BASE_RENDER_DELAY_MS;
     const jitter = values[Math.ceil(values.length * 0.95) - 1] - values[0];
     return clampDelay(BASE_RENDER_DELAY_MS + (jitter < JITTER_DEADBAND_MS ? 0 : Math.round(jitter)));
+  }
+
+  /** Nearest-rank lateness distribution of the current window; null when it is empty. Does not affect target(). */
+  stats(now: number): { samples: number; minMs: number; p50Ms: number; p90Ms: number; p95Ms: number; maxMs: number } | null {
+    if (!Number.isFinite(now)) return null;
+    const values = this.window(now);
+    if (values.length === 0) return null;
+    const rank = (q: number): number => values[Math.ceil(values.length * q) - 1];
+    return {
+      samples: values.length, minMs: values[0], p50Ms: rank(0.5), p90Ms: rank(0.9), p95Ms: rank(0.95),
+      maxMs: values[values.length - 1],
+    };
+  }
+
+  private window(now: number): number[] {
+    this.expire(now);
+    return this.samples.filter(sample => sample.now <= now)
+      .map(sample => sample.latenessMs).sort((a, b) => a - b);
   }
 
   private expire(now: number): void {

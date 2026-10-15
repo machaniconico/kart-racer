@@ -68,6 +68,24 @@ describe('JitterEstimator', () => {
     expect(estimator.target(0)).toBe(171);
   });
 
+  it('stats() reports nearest-rank quantiles of 20 known samples, consistent with target()', () => {
+    const estimator = new JitterEstimator();
+    for (let i = 20; i >= 1; i--) estimator.observe(i * 3, 0);
+    expect(estimator.stats(0)).toEqual({ samples: 20, minMs: 3, p50Ms: 30, p90Ms: 54, p95Ms: 57, maxMs: 60 });
+    const stats = estimator.stats(0)!;
+    expect(estimator.target(0)).toBe(Math.max(BASE_RENDER_DELAY_MS, Math.min(MAX_RENDER_DELAY_MS,
+      BASE_RENDER_DELAY_MS + Math.round(stats.p95Ms - stats.minMs))));
+    expect(estimator.stats(0)).toEqual(stats);
+  });
+
+  it('stats() is null with no samples and once the window has expired', () => {
+    const estimator = new JitterEstimator();
+    expect(estimator.stats(0)).toBeNull();
+    estimator.observe(5, 0);
+    expect(estimator.stats(JITTER_WINDOW_MS)?.samples).toBe(1);
+    expect(estimator.stats(JITTER_WINDOW_MS + 1)).toBeNull();
+  });
+
   it.each([[1.99, 100], [2, 102], [2.49, 102], [2.5, 103], [1000, 250]])(
     'applies the deadband and delay limit for %f ms of jitter', (jitter, expected) => {
       const estimator = new JitterEstimator();

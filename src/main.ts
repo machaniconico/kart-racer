@@ -898,6 +898,7 @@ function createDebugBridge() {
       get stallCount() { return stallCount; },
       /** Guest: current (adaptive) interpolation delay and render-time regressions. */
       get renderDelayMs() { return guest?.renderDelayMs ?? null; },
+      get jitterStats() { return guest?.latenessStats ?? null; },
       get renderTimeRegressions() { return guest?.renderTimeRegressions ?? null; },
       /** Impairs the current and later transports' links; null restores a clean link. */
       async impair(profile: ImpairmentProfile | null) {

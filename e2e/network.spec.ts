@@ -276,10 +276,16 @@ test('M8-07 T3: racing survives 15 seconds of latency, jitter, loss and bursts',
     // Measure the baseline in this race while driving, before adding impairment.
     const baselineMonitor = await monitorSession(guest, 'racing');
     await guest.waitForTimeout(5_000);
-    const baseline = await finishMonitor(baselineMonitor, 'guest-baseline-race', testInfo);
-    const baselineDelayMs = baseline.samples.at(-1)!.renderDelayMs;
-    expect(baselineDelayMs, 'Baseline delay B must be available').not.toBeNull();
-    const baselineRecoveryLimitMs = Math.max(110, baselineDelayMs! + 30);
+    await finishMonitor(baselineMonitor, 'guest-baseline-race', testInfo);
+    // B is the median of five delay samples taken 100 ms apart while driving, before impairment.
+    const baselineSamples: (number | null)[] = [];
+    for (let i = 0; i < 5; i++) {
+      baselineSamples.push(await guest.evaluate(() => window.__kartDebug.net.renderDelayMs));
+      if (i < 4) await guest.waitForTimeout(100);
+    }
+    expect(baselineSamples.every(sample => sample !== null), 'Baseline delay samples must be available').toBe(true);
+    const baselineDelayMs = [...baselineSamples as number[]].sort((a, b) => a - b)[2];
+    const baselineRecoveryLimitMs = Math.max(110, baselineDelayMs + 30);
     await guest.evaluate(async () => {
       await window.__kartDebug.net.impair({
         latencyMs: 120, jitterMs: 50, lossRate: 0.1, seed: 3,
@@ -288,8 +294,10 @@ test('M8-07 T3: racing survives 15 seconds of latency, jitter, loss and bursts',
     });
     const monitors = await Promise.all([host, guest].map(page => monitorSession(page, 'racing')));
     let maxImpairedDelayMs = 0;
+    let impairedJitterStats: unknown = null;
     try {
       await guest.waitForTimeout(15_000);
+      impairedJitterStats = await guest.evaluate(() => window.__kartDebug.net.jitterStats);
       for (const page of [host, guest]) {
         expect.soft(await page.evaluate(() => window.__kartDebug.net.phase)).toBe('racing');
         await expect.soft(page.locator('#net-dialog')).toBeHidden();
@@ -336,7 +344,11 @@ test('M8-07 T3: racing survives 15 seconds of latency, jitter, loss and bursts',
       } while (true);
       return { recovered, samples };
     }, { baselineLimit: baselineRecoveryLimitMs, peak: maxImpairedDelayMs });
-    const evidence = { baselineDelayMs, baselineRecoveryLimitMs, maxImpairedDelayMs, ...recovery };
+    const recoveredJitterStats = await guest.evaluate(() => window.__kartDebug.net.jitterStats);
+    const evidence = {
+      baselineSamples, baselineDelayMs, baselineRecoveryLimitMs, maxImpairedDelayMs,
+      impairedJitterStats, recoveredJitterStats, ...recovery,
+    };
     await testInfo.attach('recovered-delay', {
       body: JSON.stringify(evidence), contentType: 'application/json',
     });
