@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { getTrack, sampleTrack } from '../sim';
-import type { RaceState, Track, TrackId } from '../sim';
+import type { KartState, Pose, RaceState, Track, TrackId } from '../sim';
 import { LOOK_AHEAD_DISTANCE, lookAheadOffset, trackTurn } from './cameraLookAhead';
 import type { RenderSnapshot } from './snapshot';
 import { kartRotationZ } from './kartRoll';
@@ -60,6 +60,8 @@ export class GameRenderer {
   private readonly boxCubes: THREE.InstancedMesh;
   private readonly boxCores: THREE.InstancedMesh;
   private readonly entities = new Map<number, THREE.Mesh>();
+  /** Time-attack ghost: a translucent copy of kart 0's body, outside the roster, minimap and shadows. */
+  private ghost: { root: THREE.Group; body: THREE.Group; wheels: THREE.Object3D[] } | null = null;
   private readonly course: Course;
   private elapsed = 0;
   private cameraReady = false;
@@ -92,8 +94,10 @@ export class GameRenderer {
     this.setRoster(initial.karts);
     const cubeGeometry = new THREE.BoxGeometry(1.3, 1.3, 1.3);
     cubeGeometry.applyMatrix4(new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(Math.PI / 5, 0, Math.PI / 4)));
-    this.boxCubes = new THREE.InstancedMesh(cubeGeometry, material(0x9ce9d2), initial.boxes.length);
-    this.boxCores = new THREE.InstancedMesh(new THREE.OctahedronGeometry(0.62).translate(0, 0.2, 0), material(0xfff4a3), initial.boxes.length);
+    // Sized for the course, not this race: a time-attack race (no boxes) may build the renderer a later race reuses.
+    const boxSlots = Math.max(initial.boxes.length, this.track.boxPoses.length);
+    this.boxCubes = new THREE.InstancedMesh(cubeGeometry, material(0x9ce9d2), boxSlots);
+    this.boxCores = new THREE.InstancedMesh(new THREE.OctahedronGeometry(0.62).translate(0, 0.2, 0), material(0xfff4a3), boxSlots);
     this.boxCubes.castShadow = true;
     for (const mesh of [this.boxCubes, this.boxCores]) {
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -216,6 +220,66 @@ export class GameRenderer {
     return { root, body, wheels, paint, sparks, effects: attachKartEffects(root) };
   }
 
+  /** Builds (or disposes) the ghost kart; a course rebuild disposes it with the scene. */
+  setGhost(enabled: boolean): void {
+    if (!enabled) {
+      if (this.ghost) {
+        this.scene.remove(this.ghost.root);
+        disposeObjectTree(this.ghost.root);
+        this.ghost = null;
+      }
+      return;
+    }
+    if (this.ghost) return;
+    const source = this.kartVisuals[0];
+    if (!source) return;
+    const root = new THREE.Group();
+    root.rotation.order = 'YXZ';
+    const body = source.body.clone();
+    const wheels = source.wheels.map((wheel) => body.children[source.body.children.indexOf(wheel)]);
+    const materials = new Map<THREE.Material, THREE.Material>();
+    body.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      // Own every geometry and material so disposing the ghost never touches the source kart.
+      object.geometry = object.geometry.clone();
+      const original = object.material as THREE.Material;
+      let ghostMaterial = materials.get(original);
+      if (!ghostMaterial) {
+        ghostMaterial = original.clone();
+        Object.assign(ghostMaterial, { transparent: true, opacity: 0.4, depthWrite: false });
+        materials.set(original, ghostMaterial);
+      }
+      object.material = ghostMaterial;
+      object.castShadow = false;
+      object.receiveShadow = false;
+    });
+    root.add(body);
+    root.visible = false;
+    this.scene.add(root);
+    this.ghost = { root, body, wheels };
+  }
+
+  /** Same pose formulas as the roster karts in update(); null hides the ghost. */
+  updateGhost(kart: KartState | null, prev: Pose | null, alpha: number): void {
+    if (!this.ghost) return;
+    this.ghost.root.visible = kart !== null;
+    if (!kart) return;
+    const { root, body, wheels } = this.ghost;
+    const from = prev ?? kart;
+    root.position.set(mix(from.x, kart.x, alpha), mix(from.y, kart.y, alpha), mix(from.z, kart.z, alpha));
+    root.rotation.y = angleMix(from.heading, kart.heading, alpha);
+    root.rotation.z = kartRotationZ(this.track, kart.trackDistance);
+    const p = sampleTrack(this.track, kart.trackDistance);
+    const next = sampleTrack(this.track, kart.trackDistance + 1);
+    const slope = (next.y - p.y) * Math.cos(kart.heading - Math.atan2(p.tx, p.tz));
+    body.rotation.x = -Math.atan(slope);
+    body.rotation.z = -kart.steer * Math.min(kart.speed / 32, 1) * 0.075;
+    body.position.y = kart.hopTime > 0 ? Math.sin(Math.min(1, kart.hopTime / 0.35) * Math.PI) * 0.48 : 0;
+    if (kart.spinTime > 0) body.rotation.y = kart.spinTime * 14;
+    else body.rotation.y = kart.driftTime > 0 ? kart.driftDirection * 0.19 : 0;
+    for (const wheel of wheels) wheel.rotation.y = wheel.position.z > 0 ? kart.steer * 0.3 : 0;
+  }
+
   update(state: RaceState, previous: RenderSnapshot, alpha: number, dt: number, mode: 'title' | 'lobby' | 'race' | 'results'): void {
     if (state.trackId !== this.track.def.id) {
       throw new RangeError(`Renderer course ${this.track.def.id} does not match race course ${state.trackId}; recreate GameRenderer`);
@@ -264,6 +328,7 @@ export class GameRenderer {
       this.boxCubes.setMatrixAt(i, this.transform.matrix);
       this.boxCores.setMatrixAt(i, this.transform.matrix);
     });
+    this.boxCubes.count = this.boxCores.count = Math.min(state.boxes.length, this.boxCubes.instanceMatrix.count);
     this.boxCubes.instanceMatrix.needsUpdate = true;
     this.boxCores.instanceMatrix.needsUpdate = true;
     const active = new Set<number>();

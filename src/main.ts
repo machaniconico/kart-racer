@@ -1,6 +1,9 @@
 import './style.css';
 import { AudioEngine } from './audio/AudioEngine';
 import { Controls } from './input/Controls';
+import { GhostPlayer } from './ghost/player';
+import { CHECKPOINT_INTERVAL, GhostRecorder } from './ghost/record';
+import { loadBestLap, loadGhost, saveBestLap, saveGhost } from './ghost/storage';
 import { GuestSession } from './net/guestSession';
 import { HostSession, RendererRebuild } from './net/hostSession';
 import { generateRoomCode } from './net/roomCode';
@@ -8,6 +11,7 @@ import type { Transport } from './net/transport';
 import { GameRenderer } from './render/GameRenderer';
 import { kartRotationZ } from './render/kartRoll';
 import { captureRenderSnapshot } from './render/snapshot';
+import type { RenderSnapshot } from './render/snapshot';
 import { createGrandPrix, CUPS, isComplete, nextTrack, recordRace, standings } from './gp/grandPrix';
 import type { GrandPrix } from './gp/grandPrix';
 import { createRace, FIXED_DT, getAIInput, getTrack, projectToTrack, rollAt, sampleTrack, slopeAt, stepRace, surfaceHeightAt, TRACK_IDS } from './sim';
@@ -117,6 +121,12 @@ let mode: 'solo' | 'host' | 'guest' = 'solo';
 let localId = 0;
 let host: HostSession | null = null;
 let guest: GuestSession | null = null;
+// Time attack only: the kart-0 input recorder and the best run's replay.
+let recorder: GhostRecorder | null = null;
+let lastCheckpointTick = -1;
+let ghost: GhostPlayer | null = null;
+let ghostPrevious: RenderSnapshot | null = null;
+let ghostRecordTime: number | null = null;
 /** Invalidates a pending create/join when the player cancels or leaves. */
 let netGeneration = 0;
 /** A create/join is awaiting the transport (no session object exists yet). */
@@ -146,11 +156,53 @@ function start(): void {
   cancelOnline(); // A room being created or joined must not take over the solo race.
   if (playMode === 'gp') {
     gp = createGrandPrix(cupId, soloLaps, cpuLevel);
+    clearTimeAttack();
+    inputSources = soloSources;
     launch(createRace(seed(), { trackId: nextTrack(gp)!, laps: soloLaps, cpuLevel }));
+  } else if (playMode === 'timeattack') {
+    gp = null;
+    const raceSeed = seed();
+    const next = createRace(raceSeed, { trackId: course, laps: soloLaps, karts: 1, itemBoxes: false });
+    const layout = getTrack(course).def.layoutVersion ?? 1;
+    recorder = new GhostRecorder({ trackId: course, layout, laps: soloLaps, seed: raceSeed });
+    recorder.checkpoint(next.tick, next);
+    lastCheckpointTick = next.tick;
+    const record = loadGhost(course, layout, soloLaps);
+    ghost = null;
+    ghostRecordTime = null;
+    if (record) {
+      try {
+        ghost = new GhostPlayer(record);
+        ghostRecordTime = record.time;
+      } catch (error) { console.warn('The saved ghost could not be replayed.', error); }
+    }
+    ghostPrevious = ghost && captureRenderSnapshot(ghost.state);
+    inputSources = [controls];
+    launch(next);
+    renderer?.setRoster(next.karts);
+    renderer?.setGhost(ghost !== null);
   } else {
     gp = null;
+    clearTimeAttack();
+    inputSources = soloSources;
     launch(createRace(seed(), { trackId: course, laps: soloLaps, cpuLevel }));
   }
+}
+
+function clearTimeAttack(): void {
+  recorder = null;
+  lastCheckpointTick = -1;
+  ghost = null;
+  ghostPrevious = null;
+  ghostRecordTime = null;
+  renderer?.setGhost(false);
+}
+
+/** Time attack's title record line; the other modes keep loadBest from setCourse / setLaps. */
+function showTimeAttackBest(): void {
+  if (playMode !== 'timeattack') return;
+  const layout = getTrack(course).def.layoutVersion ?? 1;
+  ui.setTimeAttackBest(loadGhost(course, layout, soloLaps)?.time ?? null, loadBestLap(course, layout));
 }
 
 /** Results -> Grand Prix standings. */
@@ -234,20 +286,23 @@ function title(): void {
     lobby.render(null, 'idle');
   }
   ui.hideDisconnected();
+  clearTimeAttack();
   gp = null;
   gpUi.hide();
   leaving = false;
   screen = 'title';
   paused = false;
   accumulator = 0;
+  const previousKarts = state.karts.length;
   state = createRace(seed(), { trackId: titleTrack(), laps: soloLaps, cpuLevel });
   previous = captureRenderSnapshot(state);
   if (renderer && !fatal && renderer.getTrackId() !== state.trackId) recreateRenderer(localId);
-  else if (wasOnline) renderer?.setRoster(state.karts);
+  else if (wasOnline || previousKarts !== state.karts.length) renderer?.setRoster(state.karts);
   controls.setEnabled(false);
   audio.suspend();
   ui.setPaused(false);
   ui.setCourse(course, loadBest(course, getTrack(course).def.layoutVersion ?? 1, state.laps));
+  showTimeAttackBest();
   ui.show('title');
 }
 
@@ -259,6 +314,7 @@ function selectCourse(id: TrackId): void {
   previous = captureRenderSnapshot(state);
   if (renderer && renderer.getTrackId() !== state.trackId) recreateRenderer(localId);
   ui.setCourse(course, loadBest(course, getTrack(course).def.layoutVersion ?? 1, state.laps));
+  showTimeAttackBest();
 }
 
 /** Title background: the selected course, or the cup's first course in Grand Prix. */
@@ -278,6 +334,8 @@ function setPlayMode(next: PlayMode): void {
   playMode = next;
   for (const input of root.querySelectorAll<HTMLInputElement>('#mode-select input')) input.checked = input.value === next;
   ui.setPlayMode(next);
+  if (next === 'timeattack') showTimeAttackBest();
+  else ui.setLaps(soloLaps, loadBest(course, getTrack(course).def.layoutVersion ?? 1, soloLaps));
   showTitleTrack();
 }
 
@@ -300,6 +358,11 @@ function finish(): void {
   controls.setEnabled(false);
   audio.finishRace();
   const time = state.karts.find((kart) => kart.id === localId)?.finishTime ?? null;
+  if (recorder) {
+    finishTimeAttack();
+    ui.show('results');
+    return;
+  }
   const previousBest = loadBest(state.trackId, getTrack(state.trackId).def.layoutVersion ?? 1, state.laps);
   // Online races never update the personal best.
   const isRecord = mode === 'solo' && time !== null && (previousBest === null || time < previousBest);
@@ -308,6 +371,22 @@ function finish(): void {
   if (gp && mode === 'solo') gp = recordRace(gp, state);
   ui.showResults(state, isRecord ? time : previousBest, isRecord);
   ui.show('results');
+}
+
+/** Time attack never touches best.v4: it keeps its own record (the ghost) and best lap. */
+function finishTimeAttack(): void {
+  const layout = getTrack(state.trackId).def.layoutVersion ?? 1;
+  const record = recorder!.finish(state);
+  recorder = null;
+  const previousBest = loadGhost(state.trackId, layout, state.laps)?.time ?? null;
+  const isRecord = record !== null && (previousBest === null || record.time < previousBest);
+  if (isRecord) saveGhost(record);
+  const lapTimes = state.karts[0]!.lapTimes;
+  const lap = lapTimes.length > 0 ? Math.min(...lapTimes) : null;
+  const previousLap = loadBestLap(state.trackId, layout);
+  const isLapRecord = lap !== null && (previousLap === null || lap < previousLap);
+  if (isLapRecord) saveBestLap(state.trackId, layout, lap);
+  ui.showResults(state, isRecord ? record.time : previousBest, isRecord, { bestLap: isLapRecord ? lap : previousLap, isLapRecord });
 }
 
 const bind = (id: string, handler: () => void) => root.querySelector(`#${id}`)?.addEventListener('click', handler);
@@ -371,7 +450,20 @@ function rendererScreen(): 'title' | 'lobby' | 'race' | 'results' {
 
 /** One fixed simulation tick; frame() and the debug advance() both go through here. */
 function stepOnce(inputs: InputFrame[]): void {
+  if (recorder) {
+    // Time attack: kart 0 drives the quantized input the ghost will replay. quantizeInput does not clamp.
+    const own = inputs[0]!;
+    inputs = [recorder.push({ ...own, steer: Math.max(-1, Math.min(1, own.steer)), throttle: Math.max(0, Math.min(1, own.throttle)) }), ...inputs.slice(1)];
+  }
   stepRace(state, inputs);
+  if (recorder && state.tick % CHECKPOINT_INTERVAL === 0 && state.tick > lastCheckpointTick) {
+    recorder.checkpoint(state.tick, state);
+    lastCheckpointTick = state.tick;
+  }
+  if (ghost) {
+    ghostPrevious = captureRenderSnapshot(ghost.state);
+    ghost.step();
+  }
   // Every tick: HostSession counts ticks to schedule snapshots.
   if (mode === 'host') host?.afterTick(state);
 }
@@ -563,6 +655,7 @@ root.querySelector('#laps-select')?.addEventListener('change', (event) => {
   state = createRace(seed(), { trackId: titleTrack(), laps: soloLaps, cpuLevel });
   previous = captureRenderSnapshot(state);
   ui.setLaps(laps, loadBest(course, getTrack(course).def.layoutVersion ?? 1, state.laps));
+  showTimeAttackBest();
 });
 
 root.querySelector('#mode-select')?.addEventListener('change', (event) => {
@@ -677,7 +770,10 @@ function frame(now: number): void {
   });
   if (!fatal && renderer && draw) {
     const alpha = mode === 'guest' ? guestAlpha : accumulator / FIXED_DT;
-    renderer.update(state, previous, screen === 'race' && !paused ? alpha : 1, paused ? 0 : elapsed, rendererScreen());
+    const drawAlpha = screen === 'race' && !paused ? alpha : 1;
+    const showGhost = ghost && !ghost.diverged && screen === 'race';
+    renderer.updateGhost(showGhost ? ghost!.state.karts[0]! : null, showGhost ? ghostPrevious?.karts[0] ?? null : null, drawAlpha);
+    renderer.update(state, previous, drawAlpha, paused ? 0 : elapsed, rendererScreen());
   }
   frameId = requestAnimationFrame(frame);
 }
@@ -721,6 +817,17 @@ function createDebugBridge() {
     selectCourse,
     get playMode() { return playMode; },
     get cpuLevel() { return cpuLevel; },
+    get ghost() {
+      return ghost && {
+        active: !ghost.diverged && !ghost.finished, diverged: ghost.diverged, tick: ghost.state.tick,
+        finished: ghost.finished, finishTime: ghost.finishTime, recordTime: ghostRecordTime,
+      };
+    },
+    timeAttackRecord(trackId: TrackId, laps: number) {
+      if (!TRACK_IDS.includes(trackId)) return null;
+      const record = loadGhost(trackId, getTrack(trackId).def.layoutVersion ?? 1, laps);
+      return record && { time: record.time, ticks: record.ticks };
+    },
     get gp() { return gp && { cupId: gp.cupId, raceIndex: gp.raceIndex, standings: standings(gp) }; },
     setPlayMode,
     setCpuLevel,
@@ -755,6 +862,7 @@ function createDebugBridge() {
         stepOnce(state.karts.map((kart) => autopilot || kart.id > 0 ? getAIInput(state, kart.id) : controls.sample(state, kart.id)));
       }
       previous = captureRenderSnapshot(state);
+      if (ghost) ghostPrevious = captureRenderSnapshot(ghost.state);
       ui.update(state);
       if (state.phase === 'finished' && screen === 'race') finish();
     },
