@@ -592,7 +592,7 @@ test('C-010: sixteen course switches keep renderer geometry memory bounded', asy
         trackId: window.__kartDebug.render.trackId,
         geometries: window.__kartDebug.rendererInfo!.memory.geometries,
         textures: window.__kartDebug.rendererInfo!.memory.textures,
-        programs: window.__kartDebug.render.programCount,
+        programs: window.__kartDebug.render.programCount ?? 0,
       };
     }, id);
     expect(sample.trackId).toBe(id);

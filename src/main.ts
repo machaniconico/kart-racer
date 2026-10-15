@@ -8,6 +8,7 @@ import { GuestSession } from './net/guestSession';
 import { HostSession, RendererRebuild } from './net/hostSession';
 import { generateRoomCode } from './net/roomCode';
 import type { Transport } from './net/transport';
+import type { ImpairingTransport, ImpairmentProfile } from './net/impairedLink';
 import { GameRenderer } from './render/GameRenderer';
 import { kartRotationZ } from './render/kartRoll';
 import { captureRenderSnapshot } from './render/snapshot';
@@ -121,6 +122,20 @@ let mode: 'solo' | 'host' | 'guest' = 'solo';
 let localId = 0;
 let host: HostSession | null = null;
 let guest: GuestSession | null = null;
+/** Debug builds only: the current session's transport wrapper and the profile set through __kartDebug.net.impair. */
+let impairing: ImpairingTransport | null = null;
+let impairment: ImpairmentProfile | null = null;
+/** Guest: times the current session went from not stalled to stalled (debug counter, reset per session). */
+let stallCount = 0;
+let wasStalled = false;
+/** Each online session (host or guest) and the return to solo starts the stall counter over. */
+function resetStallCount(): void {
+  stallCount = 0;
+  wasStalled = false;
+}
+/** Longest gap between consecutive rAF timestamps since the last reset (debug, always measured). */
+let frameGapMax = 0;
+let frameGapLast: number | null = null;
 // Time attack only: the kart-0 input recorder and the best run's replay.
 let recorder: GhostRecorder | null = null;
 let lastCheckpointTick = -1;
@@ -283,6 +298,7 @@ function title(): void {
   if (wasOnline) {
     inputSources = soloSources;
     setLocal('solo', 0);
+    resetStallCount();
     lobby.render(null, 'idle');
   }
   ui.hideDisconnected();
@@ -489,7 +505,15 @@ function stepOnce(inputs: InputFrame[]): void {
 async function loadTransport(): Promise<Transport> {
   // Keep peerjs out of the single-player initial chunk.
   const { PeerJsTransport } = await import('./net/peerjsTransport');
-  return new PeerJsTransport();
+  const transport = new PeerJsTransport();
+  // Statically false in production, so the impairment module is never bundled there.
+  if (import.meta.env.DEV || import.meta.env.VITE_KART_DEBUG === '1') {
+    const { ImpairingTransport } = await import('./net/impairedLink');
+    impairing = new ImpairingTransport(transport);
+    impairing.setProfile(impairment);
+    return impairing;
+  }
+  return transport;
 }
 
 async function createRoom(): Promise<void> {
@@ -508,6 +532,7 @@ async function createRoom(): Promise<void> {
   if (generation !== netGeneration) { session.close(); return; }
   pendingNet = false;
   host = session;
+  resetStallCount();
   session.setCourse(course);
   setLocal('host', 0);
   session.onChange(() => { if (host === session && screen === 'lobby') renderLobby(); });
@@ -530,11 +555,14 @@ async function joinRoom(code: string): Promise<void> {
   pendingNet = false;
   const session = new GuestSession(transport);
   guest = session;
+  resetStallCount();
   session.onChange(() => { if (guest === session) guestChanged(session); });
   await session.join(code);
 }
 
 function guestChanged(session: GuestSession): void {
+  if (session.stalled && !wasStalled) stallCount++;
+  wasStalled = session.stalled;
   switch (session.phase) {
     case 'lobby':
       if (screen === 'lobby') renderLobby();
@@ -740,6 +768,8 @@ ui.canvas.addEventListener('webglcontextlost', (event) => {
 function frame(now: number): void {
   if (disposed) return;
   perf?.sample(now);
+  if (frameGapLast !== null) frameGapMax = Math.max(frameGapMax, now - frameGapLast);
+  frameGapLast = now;
   const elapsed = Math.min(Math.max((now - lastTime) / 1000, 0), 0.1);
   lastTime = now;
   if (mode === 'guest') {
@@ -831,7 +861,7 @@ function createDebugBridge() {
       get drawCalls() { return renderer?.getDrawCalls() ?? 0; },
       get triangles() { return renderer?.renderer.info.render.triangles ?? 0; },
       get trackId() { return renderer?.getTrackId() ?? null; },
-      get programCount() { return renderer?.programCount ?? 0; },
+      get programCount() { return renderer?.programCount ?? null; },
     },
     selectCourse,
     get playMode() { return playMode; },
@@ -863,12 +893,36 @@ function createDebugBridge() {
       get offset() { return guest?.offset ?? null; },
       get lead() { return guest?.lead ?? null; },
       get stalled() { return guest?.stalled ?? false; },
+      /** Guest: times this session became stalled; reset when a new session joins. */
+      get stallCount() { return stallCount; },
+      /** Guest: current (adaptive) interpolation delay and render-time regressions. */
+      get renderDelayMs() { return guest?.renderDelayMs ?? null; },
+      get renderTimeRegressions() { return guest?.renderTimeRegressions ?? null; },
+      /** Impairs the current and later transports' links; null restores a clean link. */
+      async impair(profile: ImpairmentProfile | null) {
+        if (!(import.meta.env.DEV || import.meta.env.VITE_KART_DEBUG === '1')) return;
+        const { ImpairingTransport } = await import('./net/impairedLink');
+        // setProfile validates and throws on an invalid profile, so nothing invalid is stored for later
+        // transports. Without a live wrapper, an unattached one validates (it never touches its inner transport).
+        (impairing ?? new ImpairingTransport(null as unknown as Transport)).setProfile(profile);
+        // A copy, so later caller mutations cannot reach transports created afterwards.
+        impairment = profile && { ...profile, bursts: profile.bursts && { ...profile.bursts } };
+      },
+      /** Blocks the main thread (a simulated hitch), capped at 10 s. */
+      busyWait(ms: number) {
+        const end = performance.now() + Math.min(Math.max(ms, 0), 10_000);
+        while (performance.now() < end) { /* spin */ }
+      },
       /** Prediction correction still being blended out, and the last replay length. */
       get correction() {
         if (!guest) return null;
         const { x, y, z } = guest.visualOffset;
         return { x, y, z, meters: Math.hypot(x, y, z), replayTicks: guest.replayTicks };
       },
+    },
+    frameGap: {
+      get maxMs() { return frameGapMax; },
+      reset() { frameGapMax = 0; },
     },
     start,
     clearItems() {
