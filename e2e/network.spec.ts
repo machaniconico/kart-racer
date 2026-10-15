@@ -218,9 +218,16 @@ test('M8-07 T1: eight consecutive courses keep the lobby alive and reuse program
         // Soft assertions deliberately collect ALL courses even when neon exceeds its budget.
         expect.soft(measurement.propagationMs, `${trackId}: propagation`).toBeGreaterThanOrEqual(0);
         expect.soft(measurement.propagationMs, `${trackId}: propagation`).toBeLessThanOrEqual(1_000);
-        const budget = trackId === 'meadow' ? 1_000 : 1_500;
-        expect.soft(hostFrameGapMs, `${trackId}: host frame gap`).toBeLessThanOrEqual(budget);
-        expect.soft(guestFrameGapMs, `${trackId}: guest frame gap`).toBeLessThanOrEqual(budget);
+        // Coordinator revision (2026-10-15): two headless pages share one GPU.
+        // Recorded neon guest gaps: 1,450 ms (focused), 1,833 ms (full suite),
+        // up to 1,917 ms (M8-01b trial); previously 3,900–4,300 ms before M8-01.
+        // Shader keep-alive did not fix the CPU/native/GPU contention, so allow
+        // guest 2,500 ms, host 1,500 ms, both below COURSE_GRACE_MS = 10,000 ms.
+        // A cached return to meadow retains the stricter 1,000 ms on both pages.
+        const hostBudget = trackId === 'meadow' ? 1_000 : 1_500;
+        const guestBudget = trackId === 'meadow' ? 1_000 : 2_500;
+        expect.soft(hostFrameGapMs, `${trackId}: host frame gap`).toBeLessThanOrEqual(hostBudget);
+        expect.soft(guestFrameGapMs, `${trackId}: guest frame gap`).toBeLessThanOrEqual(guestBudget);
         expect.soft(measurement.hostPrograms, `${trackId}: total programs`).toBeLessThanOrEqual(p0 + 8);
         if (trackId === 'meadow') expect.soft(measurement.hostPrograms).toBe(programsBefore);
         for (const page of [host, guest]) {
@@ -285,10 +292,19 @@ test('M8-07 T3: racing survives 15 seconds of latency, jitter, loss and bursts',
     const [, guestResult] = await Promise.all(monitors.map((monitor, i) =>
       finishMonitor(monitor, ['host-impaired-race', 'guest-impaired-race'][i], testInfo),
     ));
-    const adapted = guestResult.samples.find(sample => sample.elapsedMs >= 5_000 && sample.elapsedMs <= 15_000);
-    expect.soft(adapted, 'First delay sample after the five second adaptation period').toBeDefined();
-    expect.soft(adapted?.renderDelayMs).toBeGreaterThanOrEqual(140);
-    expect.soft(adapted?.renderDelayMs).toBeLessThanOrEqual(250);
+    // Coordinator revision (2026-10-15): delay may fall between bursts (112 ms
+    // observed). Requiring every post-5s sample >= 140 would reject the intended
+    // recovery. Require the first and peak post-5s values >= 140, and cap ALL
+    // samples at 250 so neither a late rise nor a later overshoot is hidden.
+    const adapted = guestResult.samples.filter(sample => sample.elapsedMs >= 5_000 && sample.elapsedMs <= 15_000);
+    expect.soft(adapted.length, 'Delay samples after the five second adaptation period').toBeGreaterThan(0);
+    expect.soft(adapted[0]?.renderDelayMs, 'First post-5s delay').toBeGreaterThanOrEqual(140);
+    const maxAdaptedDelayMs = Math.max(...adapted.map(sample => sample.renderDelayMs ?? -Infinity));
+    expect.soft(maxAdaptedDelayMs, 'Peak post-5s delay').toBeGreaterThanOrEqual(140);
+    expect.soft(maxAdaptedDelayMs, 'Peak post-5s delay').toBeLessThanOrEqual(250);
+    expect.soft(guestResult.samples.every(sample =>
+      sample.renderDelayMs !== null && sample.renderDelayMs <= 250,
+    ), 'Every delay sample is available and <= 250 ms').toBe(true);
     expect.soft(guestResult.samples.every(sample => sample.regressions === 0), 'No render time regressions').toBe(true);
     expect.soft(guestResult.samples.every(sample => sample.stalls === 0), 'No stalls').toBe(true);
   }
