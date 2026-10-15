@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { test, expect, type TestInfo } from '@playwright/test';
 import type { KartDebug } from '../src/main';
-import { getTrack } from '../src/sim/tracks';
+import { getTrack, TRACK_IDS } from '../src/sim/tracks';
 import { sampleTrack } from '../src/sim/track';
 import { findHairpins } from '../src/sim/tracks/shapeMetrics';
 import { KART_RADIUS, widthAt } from '../src/sim/corridor';
@@ -222,13 +222,18 @@ for (const { id, name, drawCalls: baselineDrawCalls, triangles: baselineTriangle
   });
 }
 
-test('C-010: title shows the eight-course picker', async ({ page }, testInfo) => {
+test('C-010: title shows the sixteen-course picker', async ({ page }, testInfo) => {
   await page.goto('./');
   await expect(page.locator('#title-screen')).toBeVisible();
-  await expect(page.locator('#course-select input')).toHaveCount(8);
-  if (goldenPresent(testInfo, 'title-eight-courses.png')) {
+  await expect(page.locator('#course-select input')).toHaveCount(16);
+  const layout = await page.evaluate(() => ({
+    contentBottom: document.querySelector('.title-content')!.getBoundingClientRect().bottom,
+    stripTop: document.querySelector('.course-strip')!.getBoundingClientRect().top,
+  }));
+  expect(layout.stripTop).toBeGreaterThanOrEqual(layout.contentBottom);
+  if (goldenPresent(testInfo, 'title-sixteen-courses.png')) {
     await page.addStyleTag({ content: 'canvas { visibility: hidden !important; }' });
-    await expect(page.locator('#title-screen')).toHaveScreenshot('title-eight-courses.png', {
+    await expect(page.locator('#title-screen')).toHaveScreenshot('title-sixteen-courses.png', {
       animations: 'disabled',
       ...GOLDEN_THRESHOLD,
     });
@@ -599,12 +604,13 @@ for (const missedBoost of [false, true]) {
   });
 }
 
-test('C-010: sixteen course switches keep renderer geometry memory bounded', async ({ page }, testInfo) => {
+test('C-010: sixteen-course 32 switches keep renderer geometry memory bounded', async ({ page }, testInfo) => {
   await page.goto('./');
   await page.waitForFunction(() => !!window.__kartDebug?.rendererInfo);
-  // Canyon still has the largest measured geometry count (90); visit all eight courses twice.
-  const lap = ['canyon', 'snowpeak', 'neon', 'meadow', 'harbor', 'forest', 'volcano', 'skyline'] as const;
+  // Visit all sixteen courses twice (32 switches).
+  const lap = TRACK_IDS;
   const sequence = [...lap, ...lap];
+  expect(sequence).toHaveLength(32);
   const samples = [];
   for (const id of sequence) {
     const sample = await page.evaluate(async trackId => {
@@ -628,10 +634,11 @@ test('C-010: sixteen course switches keep renderer geometry memory bounded', asy
   console.info('M6-05 geometry memory', JSON.stringify(samples));
   // M8-01: rebuilds reuse one WebGLRenderer (shared info), so a leak shows up as growth here, not as a
   // non-empty old renderer. Lap 2 must match lap 1 exactly: geometry, texture and program counts.
+  const maxGeometries = Math.max(...samples.slice(0, lap.length).map(sample => sample.geometries));
   const maxTextures = Math.max(...samples.slice(0, lap.length).map(sample => sample.textures));
   const maxPrograms = Math.max(...samples.slice(0, lap.length).map(sample => sample.programs));
   for (const [index, sample] of samples.entries()) {
-    expect(sample.geometries).toBeLessThanOrEqual(samples[0].geometries);
+    expect(sample.geometries).toBeLessThanOrEqual(maxGeometries);
     expect(sample.textures).toBeLessThanOrEqual(maxTextures);
     expect(sample.programs).toBeLessThanOrEqual(maxPrograms);
     if (index >= lap.length) {

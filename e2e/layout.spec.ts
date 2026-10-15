@@ -48,7 +48,7 @@ for (const vp of viewports) {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
     const targets = page.locator('.course-option, .mode-option, #start-race');
-    expect(await page.locator('.course-option').count()).toBe(8);
+    expect(await page.locator('.course-option').count()).toBe(16);
     expect(await page.locator('.mode-option').count()).toBe(3);
     expect(await page.locator('#start-race').count()).toBe(1);
     // Scroll each target into view; the title scrolls inside .title-screen on portrait phones.
@@ -61,6 +61,21 @@ for (const vp of viewports) {
       });
       expect(box.width, box.html).toBeGreaterThanOrEqual(MIN_TARGET);
       expect(box.height, box.html).toBeGreaterThanOrEqual(MIN_TARGET);
+    }
+
+    // The sixteen course options must not overlap each other.
+    const rects = await page.locator('.course-option').evaluateAll(els => els.map(el => {
+      const r = el.getBoundingClientRect();
+      return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+    }));
+    expect(rects).toHaveLength(16);
+    for (let i = 0; i < rects.length; i++) {
+      for (let j = i + 1; j < rects.length; j++) {
+        const a = rects[i];
+        const b = rects[j];
+        const intersects = a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+        expect(intersects, `course-option ${i} intersects ${j}`).toBe(false);
+      }
     }
   });
 }

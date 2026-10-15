@@ -176,7 +176,11 @@ for (const viewport of [{ width: 360, height: 640 }, { width: 390, height: 844 }
         await expectTouchTargets(page.locator('.cpu-option'), 3);
       }
       if (mode === 'gp') {
-        await expectTouchTargets(page.locator('.cup-option'), 2);
+        await expectTouchTargets(page.locator('.cup-option'), 4);
+        for (const name of [/ZENITH CUP/, /ECLIPSE CUP/]) {
+          await page.getByRole('radio', { name }).check();
+          await expect(page.getByRole('radio', { name })).toBeChecked();
+        }
         await page.getByRole('radio', { name: /SUNRISE CUP/ }).check();
       }
       // A real click must succeed, including Playwright's normal scrolling into view.

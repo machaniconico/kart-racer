@@ -237,7 +237,7 @@ h1 span { color: var(--lime); }
 }
 
 @media (max-height: 800px) and (min-width: 701px) {
-  .title-screen { padding-top: 105px; padding-bottom: 190px; }
+  .title-screen { padding-top: 96px; padding-bottom: 230px; }
   h1 { font-size: 74px; margin: 18px 0; }
   .title-description { display: none; }
   .title-tagline { font-size: 20px; }
@@ -251,6 +251,16 @@ h1 span { color: var(--lime); }
   .finish-summary { padding: 12px 0; margin-top: 10px; }
   .leaderboard-row { min-height: 35px; }
   .result-actions { margin-top: 14px; }
+}
+
+/* M10-09: sixteen courses make two rows of eight; on desktop the laps/mode options sit beside the grid so the strip stays short. */
+@media (min-width: 701px) and (min-height: 481px) {
+  .course-strip > .course-picker { display: grid; grid-template-columns: 394px auto; column-gap: 24px; row-gap: 6px; align-items: start; }
+  .course-picker > small { grid-column: 1 / -1; }
+  .course-picker > #course-select { grid-column: 1; }
+  .course-picker > #laps-select { grid-column: 2; }
+  .course-picker > #laps-select .laps-options { flex-wrap: nowrap; }
+  .course-picker > .title-options { grid-column: 1 / -1; }
 }
 
 @media (max-width: 700px) and (orientation: portrait) {
