@@ -188,7 +188,9 @@ for (const { id, name, drawCalls: baselineDrawCalls, triangles: baselineTriangle
     }, id);
     await page.locator('#resume-race').click();
     await expect(page.locator('#race-screen')).toBeVisible();
-    await expect.poll(() => page.evaluate(() => window.__kartDebug.state.phase)).toBe('racing');
+    // The countdown runs on real frames; software GL (CI SwiftShader) or a loaded machine can take
+    // well over the 10 s default to finish it on the heavier courses.
+    await expect.poll(() => page.evaluate(() => window.__kartDebug.state.phase), { timeout: 30_000 }).toBe('racing');
     await page.evaluate(() => {
       const debug = window.__kartDebug;
       for (let second = 0; second < 420 && debug.state.phase !== 'finished'; second++) {
