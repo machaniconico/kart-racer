@@ -1024,3 +1024,18 @@ describe('kart contact impulses', () => {
     }
   });
 });
+
+describe('sim fingerprint', () => {
+  // M7-00 着手前の値: an eight-CPU race must stay bit-exact while CPU levels and race options land.
+  function fnv1a(value: unknown): number {
+    let hash = 0x811c9dc5;
+    for (const byte of new TextEncoder().encode(JSON.stringify(value))) hash = Math.imul(hash ^ byte, 0x01000193) >>> 0;
+    return hash;
+  }
+
+  it.each([['meadow', 1966540717], ['neon', 1211865273]] as const)('%s seed 7 stays bit-exact for 1800 ticks', (trackId, pinned) => {
+    const state = createRace(7, { trackId, racers: [] });
+    for (let i = 0; i < 1800; i++) stepRace(state, state.karts.map((kart) => getAIInput(state, kart.id)));
+    expect(fnv1a(state.karts.map((k) => [k.x, k.z, k.speed, k.trackDistance, k.heading]))).toBe(pinned);
+  });
+});
