@@ -101,9 +101,9 @@ export class GrandPrixUI {
     name.append(label);
     if (player) name.append(element('small', 'standings-you', 'YOU'));
     const points = element('strong', 'standings-points', String(row.points));
-    points.setAttribute('aria-label', `合計 ${row.points} ポイント`);
+    points.append(element('span', 'gp-sr-only', ` 合計 ${row.points} ポイント`));
     const gained = element('span', 'standings-gained', `+${row.gained}`);
-    gained.setAttribute('aria-label', `今回 ${row.gained} ポイント獲得`);
+    gained.append(element('span', 'gp-sr-only', ` 今回 ${row.gained} ポイント獲得`));
     item.append(element('span', 'standings-position', String(index + 1).padStart(2, '0')),
       swatch(row.color), name, points, gained);
     return item;

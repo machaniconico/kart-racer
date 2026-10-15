@@ -79,6 +79,7 @@ test('M7-07: SUNRISE CUP runs four races, totals points and shows the podium', a
   await page.locator('#mode-select input[value="gp"]').check();
   await page.getByRole('radio', { name: /SUNRISE CUP/ }).check();
   await page.locator('#laps-select input[value="1"]').check();
+  await page.locator('#cpu-select input[value="hard"]').check();
   await page.locator('#start-race').click();
 
   const tracks = ['meadow', 'canyon', 'snowpeak', 'neon'];
@@ -87,13 +88,14 @@ test('M7-07: SUNRISE CUP runs four races, totals points and shows the podium', a
     await test.step(`Race ${index + 1}: ${trackId}`, async () => {
       await page.waitForFunction(() => window.__kartDebug.state.phase === 'racing');
       expect(await page.evaluate(() => window.__kartDebug.state.trackId)).toBe(trackId);
+      expect(await page.evaluate(() => window.__kartDebug.state.cpuLevel)).toBe('hard');
       await finishRace(page);
       await expect(page.locator('#retry-race')).toHaveText('順位表へ');
       await page.locator('#retry-race').click();
       await expect(page.locator('#standings-screen')).toBeVisible();
       await expect(page.locator('#gp-cup')).toHaveText('SUNRISE CUP');
       await expect(page.locator('.standings-row')).toHaveCount(8);
-      const points = (await page.locator('.standings-row .standings-points').allTextContents()).map(Number);
+      const points = (await page.locator('.standings-row .standings-points').allTextContents()).map(text => parseInt(text, 10));
       expect(points.reduce((sum, value) => sum + value, 0)).toBe(pointsPerRace * (index + 1));
       const gp = await page.evaluate(() => window.__kartDebug.gp);
       expect(gp?.raceIndex).toBe(index + 1);

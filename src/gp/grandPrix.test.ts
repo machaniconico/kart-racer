@@ -85,6 +85,19 @@ describe('Grand Prix', () => {
     expect(gp).toEqual(snapshot);
   });
 
+  it('rejects a final state whose track, phase or lap count does not match the Grand Prix', () => {
+    const gp = createGrandPrix('sunrise', 1, 'normal');
+    expect(() => recordRace(gp, finalRace('canyon'))).toThrow(/meadow.*canyon/);
+    const racing = finalRace('meadow');
+    racing.phase = 'racing';
+    expect(() => recordRace(gp, racing)).toThrow(/finished.*racing/);
+    const threeLaps = finalRace('meadow');
+    threeLaps.laps = 3;
+    expect(() => recordRace(gp, threeLaps)).toThrow(/1-lap.*3 laps/);
+    expect(gp.results).toHaveLength(0);
+    expect(recordRace(gp, finalRace('meadow')).results).toHaveLength(1);
+  });
+
   it('uses results length, rather than raceIndex, to determine completion', () => {
     const gp = createGrandPrix('sunrise', 1, 'normal');
     expect(isComplete({ ...gp, raceIndex: 4 })).toBe(false);

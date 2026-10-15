@@ -1,10 +1,14 @@
 import type { InputFrame } from '../sim/types';
 
+function clamp(value: number, min: number, max: number): number {
+  return Number.isNaN(value) ? 0 : Math.min(max, Math.max(min, value));
+}
+
 export function quantizeInput(frame: InputFrame): InputFrame {
   return {
     // Integer bytes have only one zero, so canonicalize Math.round's negative zero.
-    steer: Math.round(frame.steer * 127) / 127 || 0,
-    throttle: Math.round(frame.throttle * 255) / 255 || 0,
+    steer: Math.round(clamp(frame.steer, -1, 1) * 127) / 127 || 0,
+    throttle: Math.round(clamp(frame.throttle, 0, 1) * 255) / 255 || 0,
     brake: frame.brake, drift: frame.drift, useItem: frame.useItem,
   };
 }

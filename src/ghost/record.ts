@@ -41,6 +41,7 @@ export class GhostRecorder {
 
   /** Call after stepRace with state.tick; tick zero may also be recorded initially. */
   checkpoint(tick: number, state: RaceState): void {
+    if (tick === this.checkpoints.at(-1)?.tick) return;
     if (tick >= 0 && tick <= MAX_GHOST_TICKS && tick % CHECKPOINT_INTERVAL === 0) {
       this.checkpoints.push({ tick, distance: state.karts[0]!.trackDistance });
     }

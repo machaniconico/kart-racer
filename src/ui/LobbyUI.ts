@@ -1,4 +1,5 @@
 import type { NetPhase, RosterView } from '../net/session';
+import { LAP_CHOICES } from '../sim/laps';
 import './lobby.css';
 
 export interface LobbyUICallbacks {
@@ -29,7 +30,7 @@ export function courseView(courses: readonly CourseOption[], selectedId: string,
 }
 
 export function lapsView(selected: number, role: 'host' | 'guest'): CourseView {
-  return { editable: role === 'host', index: [1, 2, 3].indexOf(selected),
+  return { editable: role === 'host', index: LAP_CHOICES.indexOf(selected as 1 | 2 | 3),
     label: `${selected} 周${role === 'guest' ? '（ホストが選択）' : ''}` };
 }
 
@@ -163,7 +164,7 @@ export class LobbyUI {
           </div>
           <fieldset id="lobby-laps-select" class="lobby-laps">
             <legend>周回数</legend>
-            <div class="lobby-laps-options">${[1, 2, 3].map(n => `<label><input type="radio" name="lobby-laps" value="${n}"${n === 3 ? ' checked' : ''}><span>${n} 周</span></label>`).join('')}</div>
+            <div class="lobby-laps-options">${LAP_CHOICES.map(n => `<label><input type="radio" name="lobby-laps" value="${n}"${n === 3 ? ' checked' : ''}><span>${n} 周</span></label>`).join('')}</div>
           </fieldset>
           <output id="lobby-laps-name" aria-label="周回数（ホストが選択）" hidden></output>
           <form id="lobby-profile" class="lobby-profile" novalidate>
@@ -396,7 +397,7 @@ export class LobbyUI {
     if (this.phase !== 'lobby' || this.localPlayer()?.kind !== 'host' ||
       !(input instanceof HTMLInputElement) || input.name !== 'lobby-laps' || !input.checked) return;
     const laps = Number(input.value);
-    if ([1, 2, 3].includes(laps)) this.invoke(() => this.onLaps?.(laps));
+    if ((LAP_CHOICES as readonly number[]).includes(laps)) this.invoke(() => this.onLaps?.(laps));
   }
 
   /** Accepts TransportError, a session close/rejection reason, or an unknown failure. */

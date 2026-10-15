@@ -68,6 +68,16 @@ export function nextTrack(gp: GrandPrix): TrackId | null {
 
 export function recordRace(gp: GrandPrix, finalState: RaceState): GrandPrix {
   if (gp.results.length >= 4) throw new RangeError('A Grand Prix contains four races');
+  const expectedTrack = nextTrack(gp);
+  if (finalState.trackId !== expectedTrack) {
+    throw new RangeError(`Expected a ${expectedTrack} race but received ${finalState.trackId}`);
+  }
+  if (finalState.phase !== 'finished') {
+    throw new RangeError(`Expected a finished race but received phase ${finalState.phase}`);
+  }
+  if (finalState.laps !== gp.laps) {
+    throw new RangeError(`Expected a ${gp.laps}-lap race but received ${finalState.laps} laps`);
+  }
   // Match GameUI.showResults, including finish-time ties and unfinished racers.
   const order = [...finalState.karts]
     .sort((a, b) => getRank(finalState, a.id) - getRank(finalState, b.id))

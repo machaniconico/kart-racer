@@ -51,6 +51,23 @@ describe('ghost input codec', () => {
     expect(decodeFrames(encodeFrames(quantized), quantized.length)).toStrictEqual(quantized);
   });
 
+  it('clamps out-of-range and NaN inputs so finish() can still encode them', () => {
+    const wild = [
+      { ...NEUTRAL_INPUT, steer: 5, throttle: 9 },
+      { ...NEUTRAL_INPUT, steer: -5, throttle: -3 },
+      { ...NEUTRAL_INPUT, steer: NaN, throttle: NaN },
+    ];
+    expect(wild.map(quantizeInput).map(({ steer, throttle }) => [steer, throttle])).toEqual([[1, 1], [-1, 0], [0, 0]]);
+    wild.map(quantizeInput).forEach(q => expect(quantizeInput(q)).toStrictEqual(q));
+    const recorder = new GhostRecorder(options);
+    const state = createRace(options.seed, { trackId: options.trackId, laps: 1, karts: 1, itemBoxes: false });
+    wild.forEach(frame => recorder.push(frame));
+    state.karts[0]!.finishTime = 1;
+    const result = recorder.finish(state);
+    expect(result).not.toBeNull();
+    expect(decodeFrames(result!.frames, 3)).toHaveLength(3);
+  });
+
   it('round-trips every steer byte, throttle byte, and flag combination', () => {
     const frames = Array.from({ length: 256 * 8 }, (_, i) => ({
       steer: ((i % 255) - 127) / 127, throttle: (i % 256) / 255,
@@ -113,6 +130,15 @@ describe('ghost recorder and deterministic playback', () => {
     const result = recorder.finish(source);
     expect(result).not.toBeNull();
     record = result!;
+  });
+
+  it('ignores a checkpoint repeated at the same tick', () => {
+    const recorder = new GhostRecorder(options);
+    const state = createRace(options.seed, { trackId: options.trackId, laps: 1, karts: 1, itemBoxes: false });
+    recorder.checkpoint(0, state);
+    recorder.checkpoint(0, state);
+    state.karts[0]!.finishTime = 1;
+    expect(recorder.finish(state)!.checkpoints).toHaveLength(1);
   });
 
   it('replays a one-kart meadow lap with exactly equal finishTime and lapTimes', () => {

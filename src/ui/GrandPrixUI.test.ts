@@ -110,14 +110,16 @@ describe('GrandPrixUI', () => {
     expect(rows).toHaveLength(8);
     expect(rows.map(row => Number(row.dataset.kartId))).toEqual([7, 0, 6, 1, 5, 4, 3, 2]);
     expect(rows.map(row => row.querySelector('.standings-gained').textContent))
-      .toEqual(['+10', '+1', '+8', '+2', '+6', '+5', '+4', '+3']);
+      .toEqual([10, 1, 8, 2, 6, 5, 4, 3].map(n => `+${n} 今回 ${n} ポイント獲得`));
     standings(gp).forEach((standing, index) => {
       const row = rows[index];
       expect(row.tagName).toBe('li');
       expect(row.children).toHaveLength(5);
       expect(Number(row.querySelector('.standings-position').textContent)).toBe(index + 1);
       expect(row.querySelector('.standings-name').textContent).toBe(standing.name);
-      expect(row.querySelector('.standings-points').textContent).toBe(String(standing.points));
+      expect(row.querySelector('.standings-points').textContent).toBe(`${standing.points} 合計 ${standing.points} ポイント`);
+      expect(row.querySelector('.standings-points').getAttribute('aria-label')).toBeNull();
+      expect(row.querySelector('.standings-gained').getAttribute('aria-label')).toBeNull();
       expect(row.querySelector('.racer-swatch').style.backgroundColor)
         .toBe(`#${standing.color.toString(16).padStart(6, '0')}`);
     });
@@ -220,7 +222,7 @@ describe('GrandPrixUI', () => {
     gp.karts[3].name = '<img src=x onerror=alert(1)>';
     gp.karts[3].color = 0x123;
     ui.render(gp, 3);
-    expect(root.querySelectorAll('.standings-gained').map(node => node.textContent)).toEqual(Array(8).fill('+0'));
+    expect(root.querySelectorAll('.standings-gained').map(node => node.textContent)).toEqual(Array(8).fill('+0 今回 0 ポイント獲得'));
     const player = root.querySelector('.is-player');
     expect(player.querySelector('.standings-name').textContent).toBe(gp.karts[3].name);
     expect(player.querySelector('.standings-name').children).toHaveLength(0);

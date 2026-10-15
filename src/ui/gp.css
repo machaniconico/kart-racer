@@ -63,3 +63,14 @@
   .standings-cup { font-size: 26px; }
   .standings-row { gap: 6px; padding-inline: 6px; }
 }
+.gp-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
