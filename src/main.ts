@@ -8,13 +8,18 @@ import type { Transport } from './net/transport';
 import { GameRenderer } from './render/GameRenderer';
 import { kartRotationZ } from './render/kartRoll';
 import { captureRenderSnapshot } from './render/snapshot';
+import { createGrandPrix, CUPS, isComplete, nextTrack, recordRace, standings } from './gp/grandPrix';
+import type { GrandPrix } from './gp/grandPrix';
 import { createRace, FIXED_DT, getAIInput, getTrack, projectToTrack, rollAt, sampleTrack, slopeAt, stepRace, surfaceHeightAt, TRACK_IDS } from './sim';
 import { widthAt } from './sim/corridor';
 import { DEFAULT_LAPS, isLapCount } from './sim/laps';
-import type { InputFrame, InputSource, RaceState, TrackId } from './sim';
+import { isCpuLevel } from './sim';
+import type { CpuLevel, InputFrame, InputSource, RaceState, TrackId } from './sim';
 import { GameUI } from './ui/GameUI';
+import type { PlayMode } from './ui/GameUI';
+import { GrandPrixUI } from './ui/GrandPrixUI';
 import { LobbyUI } from './ui/LobbyUI';
-import { loadBest, loadMuted, loadSensitivity, loadSteerAssist, saveBest, saveMuted, saveSensitivity, saveSteerAssist } from './storage';
+import { loadBest, loadCpuLevel, loadMuted, loadSensitivity, loadSteerAssist, saveBest, saveCpuLevel, saveMuted, saveSensitivity, saveSteerAssist } from './storage';
 
 const root = document.querySelector<HTMLDivElement>('#app')!;
 const ui = new GameUI(root, 0);
@@ -67,6 +72,15 @@ ui.onRoulette = (kind) => audio.playRoulette(kind);
 /** Title selection; solo races and new rooms start on this course. */
 let course: TrackId = 'meadow';
 let soloLaps = DEFAULT_LAPS;
+const PLAY_MODES: readonly PlayMode[] = ['race', 'gp', 'timeattack'];
+/** Title play mode; not persisted. */
+let playMode: PlayMode = 'race';
+let cpuLevel: CpuLevel = loadCpuLevel();
+ui.setCpuLevel(cpuLevel);
+let cupId: string = CUPS[0].id;
+/** The Grand Prix in progress; only in memory, so a reload or return to title discards it. */
+let gp: GrandPrix | null = null;
+const gpUi = new GrandPrixUI(root, { onNext: gpNext });
 let muted = loadMuted();
 audio.setMuted(muted);
 ui.setMuted(muted);
@@ -83,14 +97,14 @@ function seed(): number {
   catch { return Date.now() >>> 0; }
 }
 
-let state = createRace(seed(), { trackId: course, laps: soloLaps });
+let state = createRace(seed(), { trackId: course, laps: soloLaps, cpuLevel });
 ui.setCourse(course, loadBest(course, getTrack(course).def.layoutVersion ?? 1, state.laps));
 const cpuSource: InputSource = { sample: getAIInput };
 const soloSources: InputSource[] = state.karts.map((kart) => kart.id === 0 ? controls : cpuSource);
 // The host swaps in HostSession.inputSource(slot); solo keeps controls + CPU.
 let inputSources = soloSources;
 let previous = captureRenderSnapshot(state);
-let screen: 'title' | 'lobby' | 'race' | 'results' = 'title';
+let screen: 'title' | 'lobby' | 'race' | 'results' | 'standings' = 'title';
 let paused = false;
 let accumulator = 0;
 let lastTime = performance.now();
@@ -130,7 +144,31 @@ try {
 function start(): void {
   if (fatal) return;
   cancelOnline(); // A room being created or joined must not take over the solo race.
-  launch(createRace(seed(), { trackId: course, laps: soloLaps }));
+  if (playMode === 'gp') {
+    gp = createGrandPrix(cupId, soloLaps, cpuLevel);
+    launch(createRace(seed(), { trackId: nextTrack(gp)!, laps: soloLaps, cpuLevel }));
+  } else {
+    gp = null;
+    launch(createRace(seed(), { trackId: course, laps: soloLaps, cpuLevel }));
+  }
+}
+
+/** Results -> Grand Prix standings. */
+function showStandings(): void {
+  if (!gp || screen !== 'results' || fatal) return;
+  gpUi.render(gp, localId);
+  gpUi.show();
+  ui.show('standings');
+  screen = 'standings';
+}
+
+/** Standings -> next race, or back to the title after the podium. */
+function gpNext(): void {
+  if (!gp || screen !== 'standings' || fatal) return;
+  const trackId = nextTrack(gp);
+  if (isComplete(gp) || trackId === null) { title(); return; }
+  gpUi.hide();
+  launch(createRace(seed(), { trackId, laps: gp.laps, cpuLevel: gp.cpuLevel }));
 }
 
 function launch(next: RaceState): void {
@@ -196,11 +234,13 @@ function title(): void {
     lobby.render(null, 'idle');
   }
   ui.hideDisconnected();
+  gp = null;
+  gpUi.hide();
   leaving = false;
   screen = 'title';
   paused = false;
   accumulator = 0;
-  state = createRace(seed(), { trackId: course, laps: soloLaps });
+  state = createRace(seed(), { trackId: titleTrack(), laps: soloLaps, cpuLevel });
   previous = captureRenderSnapshot(state);
   if (renderer && !fatal && renderer.getTrackId() !== state.trackId) recreateRenderer(localId);
   else if (wasOnline) renderer?.setRoster(state.karts);
@@ -215,10 +255,44 @@ function selectCourse(id: TrackId): void {
   if (screen !== 'title' || fatal || id === course || !TRACK_IDS.includes(id)) return;
   course = id;
   // The title background shows the selected course.
-  state = createRace(seed(), { trackId: course, laps: soloLaps });
+  state = createRace(seed(), { trackId: course, laps: soloLaps, cpuLevel });
   previous = captureRenderSnapshot(state);
   if (renderer && renderer.getTrackId() !== state.trackId) recreateRenderer(localId);
   ui.setCourse(course, loadBest(course, getTrack(course).def.layoutVersion ?? 1, state.laps));
+}
+
+/** Title background: the selected course, or the cup's first course in Grand Prix. */
+function titleTrack(): TrackId {
+  return playMode === 'gp' ? CUPS.find((cup) => cup.id === cupId)!.tracks[0] : course;
+}
+
+function showTitleTrack(): void {
+  if (state.trackId === titleTrack()) return;
+  state = createRace(seed(), { trackId: titleTrack(), laps: soloLaps, cpuLevel });
+  previous = captureRenderSnapshot(state);
+  if (renderer && !fatal && renderer.getTrackId() !== state.trackId) recreateRenderer(localId);
+}
+
+function setPlayMode(next: PlayMode): void {
+  if (screen !== 'title' || fatal || !PLAY_MODES.includes(next)) return;
+  playMode = next;
+  for (const input of root.querySelectorAll<HTMLInputElement>('#mode-select input')) input.checked = input.value === next;
+  ui.setPlayMode(next);
+  showTitleTrack();
+}
+
+function setCpuLevel(level: CpuLevel): void {
+  if (screen !== 'title' || fatal || !isCpuLevel(level)) return;
+  cpuLevel = level;
+  saveCpuLevel(level);
+  ui.setCpuLevel(level);
+}
+
+function setCup(id: string): void {
+  if (screen !== 'title' || fatal || !CUPS.some((cup) => cup.id === id)) return;
+  cupId = id;
+  ui.setCup(id);
+  if (playMode === 'gp') showTitleTrack();
 }
 
 function finish(): void {
@@ -231,6 +305,7 @@ function finish(): void {
   const isRecord = mode === 'solo' && time !== null && (previousBest === null || time < previousBest);
   if (isRecord) saveBest(state.trackId, time, getTrack(state.trackId).def.layoutVersion ?? 1, state.laps);
   if (mode !== 'solo') lobby.render((host ?? guest)?.roster ?? null, 'results');
+  if (gp && mode === 'solo') gp = recordRace(gp, state);
   ui.showResults(state, isRecord ? time : previousBest, isRecord);
   ui.show('results');
 }
@@ -239,6 +314,13 @@ const bind = (id: string, handler: () => void) => root.querySelector(`#${id}`)?.
 /** Recreates the local-kart-bound renderer/audio when the guest slot differs. */
 function setLocal(next: typeof mode, id: number): void {
   mode = next;
+  // Online is always a plain race; returning to solo restores the title's selected mode.
+  // Before setMode so the retry label follows the restored play mode.
+  if (next !== 'solo') {
+    gp = null;
+    gpUi.hide();
+  }
+  ui.setPlayMode(next === 'solo' ? playMode : 'race');
   ui.setMode(next, id);
   if (id === localId) return;
   localId = id;
@@ -260,7 +342,7 @@ function recreateRenderer(id: number): void {
   try {
     renderer = new GameRenderer(ui.canvas, state, id);
     // Draw once now so shader compilation happens inside this one main-thread stall.
-    renderer.update(state, captureRenderSnapshot(state), 1, 0, screen);
+    renderer.update(state, captureRenderSnapshot(state), 1, 0, rendererScreen());
     const gl2 = renderer.renderer.getContext();
     if (gl2 instanceof WebGL2RenderingContext) {
       // Drawing before this fence signals would block the main thread on the GPU.
@@ -280,6 +362,18 @@ function recreateRenderer(id: number): void {
   }
   // The rebuild blocked PONG/snapshot handling; it must not read as host silence.
   guest?.excuseStall();
+}
+
+/** GameRenderer has no standings view; it keeps the results camera there. */
+function rendererScreen(): 'title' | 'lobby' | 'race' | 'results' {
+  return screen === 'standings' ? 'results' : screen;
+}
+
+/** One fixed simulation tick; frame() and the debug advance() both go through here. */
+function stepOnce(inputs: InputFrame[]): void {
+  stepRace(state, inputs);
+  // Every tick: HostSession counts ticks to schedule snapshots.
+  if (mode === 'host') host?.afterTick(state);
 }
 
 async function loadTransport(): Promise<Transport> {
@@ -466,13 +560,26 @@ root.querySelector('#laps-select')?.addEventListener('change', (event) => {
   const laps = Number(event.target.value);
   if (!isLapCount(laps)) return;
   soloLaps = laps;
-  state = createRace(seed(), { trackId: course, laps: soloLaps });
+  state = createRace(seed(), { trackId: titleTrack(), laps: soloLaps, cpuLevel });
   previous = captureRenderSnapshot(state);
   ui.setLaps(laps, loadBest(course, getTrack(course).def.layoutVersion ?? 1, state.laps));
 });
 
+root.querySelector('#mode-select')?.addEventListener('change', (event) => {
+  if (event.target instanceof HTMLInputElement) setPlayMode(event.target.value as PlayMode);
+});
+
+root.querySelector('#cup-select')?.addEventListener('change', (event) => {
+  if (event.target instanceof HTMLInputElement) setCup(event.target.value);
+});
+
+root.querySelector('#cpu-select')?.addEventListener('change', (event) => {
+  if (event.target instanceof HTMLInputElement) setCpuLevel(event.target.value as CpuLevel);
+});
+
 bind('start-race', start);
-bind('retry-race', () => { if (mode === 'host') rematch(); else if (mode === 'solo') start(); });
+// Grand Prix: the results' primary action leads to the standings instead of a retry.
+bind('retry-race', () => { if (mode === 'host') rematch(); else if (mode === 'solo') { if (gp) showStandings(); else start(); } });
 bind('pause-race', () => pause(true));
 bind('resume-race', () => pause(false));
 bind('back-title', exitToTitle);
@@ -554,9 +661,7 @@ function frame(now: number): void {
     while (accumulator >= FIXED_DT && state.phase !== 'finished') {
       previous = captureRenderSnapshot(state);
       const inputs: InputFrame[] = state.karts.map((kart) => inputSources[kart.id].sample(state, kart.id));
-      stepRace(state, inputs);
-      // Every tick: HostSession counts ticks to schedule snapshots.
-      if (mode === 'host') host?.afterTick(state);
+      stepOnce(inputs);
       audio.playEvents(state.events);
       accumulator -= FIXED_DT;
     }
@@ -572,7 +677,7 @@ function frame(now: number): void {
   });
   if (!fatal && renderer && draw) {
     const alpha = mode === 'guest' ? guestAlpha : accumulator / FIXED_DT;
-    renderer.update(state, previous, screen === 'race' && !paused ? alpha : 1, paused ? 0 : elapsed, screen);
+    renderer.update(state, previous, screen === 'race' && !paused ? alpha : 1, paused ? 0 : elapsed, rendererScreen());
   }
   frameId = requestAnimationFrame(frame);
 }
@@ -614,6 +719,12 @@ function createDebugBridge() {
       get trackId() { return renderer?.getTrackId() ?? null; },
     },
     selectCourse,
+    get playMode() { return playMode; },
+    get cpuLevel() { return cpuLevel; },
+    get gp() { return gp && { cupId: gp.cupId, raceIndex: gp.raceIndex, standings: standings(gp) }; },
+    setPlayMode,
+    setCpuLevel,
+    setCup,
     // PeerJsTransport appends its channels here (DEV only).
     net: {
       channels: [] as unknown[],
@@ -641,8 +752,7 @@ function createDebugBridge() {
     },
     advance(ticks: number, autopilot = false) {
       for (let i = 0; i < Math.min(ticks, 60 * 600) && state.phase !== 'finished'; i++) {
-        stepRace(state, state.karts.map((kart) => autopilot || kart.id > 0 ? getAIInput(state, kart.id) : controls.sample(state, kart.id)));
-        if (mode === 'host') host?.afterTick(state);
+        stepOnce(state.karts.map((kart) => autopilot || kart.id > 0 ? getAIInput(state, kart.id) : controls.sample(state, kart.id)));
       }
       previous = captureRenderSnapshot(state);
       ui.update(state);
@@ -663,6 +773,7 @@ if (import.meta.hot) import.meta.hot.dispose(() => {
   host?.close();
   guest?.close();
   lobby.destroy();
+  gpUi.destroy();
   controls.dispose();
   audio.dispose();
   renderer?.dispose();
