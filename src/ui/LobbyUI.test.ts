@@ -304,14 +304,14 @@ describe('LobbyUI course view model', () => {
   });
 
   it.each(TRACK_IDS.map((id, index) => [id, index] as const))('numbers %s by registry order', (id, index) => {
-    expect(courseView(courses, id, 'guest')).toMatchObject({ index, label: `0${index + 1} ${getTrack(id).def.name}` });
+    expect(courseView(courses, id, 'guest')).toMatchObject({ index, label: `${String(index + 1).padStart(2, '0')} ${getTrack(id).def.name}` });
   });
 
-  it('lists all 8 courses for the host select and shows the 8th by number and name to the guest', () => {
-    expect(courses).toHaveLength(8);
-    const last = courses[7];
-    expect(courseView(courses, last.id, 'guest')).toEqual({ editable: false, index: 7, label: `08 ${last.name}` });
-    expect(courseView(courses, last.id, 'host').label).toBe('08 STRATOS CITY');
+  it('lists all 16 courses for the host select and shows the 16th by number and name to the guest', () => {
+    expect(courses).toHaveLength(16);
+    const last = courses[15];
+    expect(courseView(courses, last.id, 'guest')).toEqual({ editable: false, index: 15, label: `16 ${last.name}` });
+    expect(courseView(courses, last.id, 'host').label).toBe('16 LUNAR BASIN');
   });
 
   it.each(['', 'unknown', 'MEADOW', '__proto__'])('marks an unknown course %j without guessing one', id => {

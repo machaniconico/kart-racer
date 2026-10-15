@@ -532,7 +532,7 @@ describe('aura and storm', () => {
 });
 
 describe('effect snapshot compatibility and deterministic replay', () => {
-  it('registers every effect field and matches the protocol v7 fingerprint', () => {
+  it('registers every effect field and matches the protocol v18 fingerprint', () => {
     expect(KART_EFFECT_LAYOUT.map(({ field }) => field).sort()).toEqual(Object.keys(createKartEffects()).sort());
     for (const field of ['charges', 'rapidTime', 'auraTime', 'shrinkTime']) {
       expect(KART_EFFECT_LAYOUT.some((entry) => entry.field === field)).toBe(true);
@@ -542,7 +542,7 @@ describe('effect snapshot compatibility and deterministic replay', () => {
       hash = Math.imul(hash ^ character.charCodeAt(0), 0x01000193) >>> 0;
     }
     expect(hash.toString(16).padStart(8, '0')).toBe(LAYOUT_FINGERPRINT);
-    expect(PROTOCOL_VERSION).toBe(17);
+    expect(PROTOCOL_VERSION).toBe(18);
     const state = race();
     state.karts[0]!.item = 'rapidDash';
     press(state, state.karts[0]!);
