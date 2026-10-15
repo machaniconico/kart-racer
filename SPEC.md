@@ -935,3 +935,90 @@ M5 の「M6 必須」だった、ロビーのコース変更でホストの再�
 
 ### M7 に送ったもの
 `.omc/followups.md` の「v6 M6 後回し一覧」のとおり。
+
+## v6 M7（モード・CPU 難易度・ゴースト・プロトコル v17）
+1 人用に 3 つのモード（レース / グランプリ / タイムアタック）と CPU 難易度（やさしい / ふつう / つよい）を足した。通信の版は v17 に上がった。数値は実ファイル（`src/net/protocol.ts`、`src/sim/*.ts`、`src/gp/grandPrix.ts`、`src/ghost/*.ts`、`src/storage.ts`）と、`243ceff`（M7-00）のコメントから取った。計測は darwin-arm64。
+
+### プロトコル v17 と pin
+- `PROTOCOL_VERSION` は 17、`ROOM_PREFIX` は `pcircuit-v17-`（`src/net/protocol.ts`）。**対戦は両者とも新ページが必要**（v16 のルームは拒否する）。
+- 上げた理由は `isRaceState` が `RaceState` のキー集合を完全一致で見ること。`race_end.finalState` に `cpuLevel`（`'easy' | 'normal' | 'hard'`、必須）が載るので wire の形が変わる。Course / Welcome / RaceStart は変えていない。
+- オンラインの部屋は常に `normal` の CPU とレース UI で走る。ホストもゲストも `createRace` に `cpuLevel` を渡さない。難易度を対戦に載せるのは v18 以降。
+- `LAYOUT_FINGERPRINT` は **`aa03c454` のまま**（`snapshotCodec.test.ts` に `16: 'aa03c454'`、v17 も同値）。スナップショットのバイトは変えていない。
+- `COURSE_FINGERPRINT` の pin は `pinned[17] = 513548114`（= `pinned[16]`。M7 はコース定義を変えていない）。`pinned[16]` 以前は残す。
+
+### sim 指紋 pin
+`sim.test.ts` の `sim fingerprint` は、M7-00 着手前のツリーで採った値を先にコミット（`f072d50`）してから実装した。normal の CPU が従来の経路と bit-exact であることの証明になる。
+
+- 条件: seed 7、8 CPU（`racers: []`）、`getAIInput` で 1800 tick。
+- 指紋: 全 karts の `[x, z, speed, trackDistance, heading]` を `JSON.stringify` し、FNV-1a（32 bit）にかけた値。
+- 値: meadow `1966540717`、neon `1211865273`。
+
+### CPU 難易度（`src/sim/race.ts`、`src/sim/ai.ts`）
+`RaceState.cpuLevel` に持つ。人間のカートは影響を受けない。**normal は従来のコードをそのまま通り、×1 の乗算もしない**（bit-exact）。
+
+| 項目 | easy | normal | hard |
+| --- | --- | --- | --- |
+| CPU の基準速度の係数（`CPU_SPEED_EASY` / `CPU_SPEED_HARD`） | ×0.93 | なし | ×1.04 |
+| ラバーバンドの clamp（人間との進行差 / 1800 に掛ける補正） | −0.04 〜 0 | −0.02 〜 +0.04 | −0.01 〜 +0.06 |
+| ドリフト窓（`driftWindow <` の値、窓の周期は 220） | 70 | 115 | 150 |
+
+- 基準速度は `30.2 + (id % 3) × 0.35` に係数を掛け、その後にラバーバンドを掛ける。easy は人間に追いつかない（上限 0）。hard は人間の後ろに付いたとき最大 +6%。
+- 実測（H7、`handling.test.ts`。8 CPU、seed 1 / 42 / 98765、3 周の meanLap。かっこ内は normal の BASELINE との比）:
+
+| コース | easy | hard |
+| --- | --- | --- |
+| meadow | 73.0414 s（1.0663） | 66.6086 s（0.9724） |
+| skyline | 72.5565 s（1.0773） | 64.7785 s（0.9618） |
+
+  受け入れは easy ≥ 1.04 × BASELINE、hard ≤ 0.975 × BASELINE、壁・帯ヒット各 ≤ 6（skyline は落とし穴も ≤ 6）。skyline hard は壁 1 回。normal の BASELINE（v15 / v16 の 8 本）は動かしていない。
+- 難易度は 1 人用のレースとグランプリで効く。タイムアタックは CPU がいない。
+
+### `createRace` の options
+- `karts`（1〜8、既定 8）: カート台数。範囲外・非整数は `RangeError`。`racers` が `karts` を超えても `RangeError`。
+- `itemBoxes`（既定 true）: false で箱を置かない。
+- `cpuLevel`（既定 `'normal'`）。未知の値は `RangeError`。
+- タイムアタックは `{ karts: 1, itemBoxes: false }`。レンダラーは `boxSlots = max(initial.boxes.length, track.boxPoses.length)` でアイテムボックスのインスタンスを確保する（箱の無いレースで作ったレンダラーを、次の箱ありレースが再利用するため）。
+
+### グランプリ（`src/gp/grandPrix.ts`）
+- **オフライン専用で、永続化しない**（再読み込みで破棄）。オンラインでは選べない。
+- カップは 2 本、各 4 コース（周回数はタイトルで選んだ値）。
+
+| カップ | コース |
+| --- | --- |
+| SUNRISE CUP | meadow、canyon、snowpeak、neon |
+| HORIZON CUP | harbor、forest、volcano、skyline |
+
+- 得点 `GP_POINTS = [10, 8, 6, 5, 4, 3, 2, 1]`（1 位から 8 位）。順位は既存の `getRank` を使う（結果画面と同じ。完走者はゴール時間順、未完走者は進行順）。未完走（DNF）の車も、その順位位置の得点を受ける。
+- 総合順位のタイブレーク: 総得点の多い順 → 直近のレースの順位が良い順 → kart ID が小さい順。
+- `recordRace` は 5 レース目を `RangeError` で拒否する。4 レース終わると `isComplete` が true。
+- レース・グランプリのベストは `best.v4` を難易度に関係なく更新する（1 人用のみ）。
+
+### タイムアタック（`src/ghost/*`、`src/main.ts`）
+- 1 台・箱なしの sim（上の `createRace` options）。並走する「ゴースト」は、保存した入力を第 2 の `RaceState`（同じ seed、`karts: 1`、`itemBoxes: false`）に毎 tick 流して再生する。座標は保存しない。
+- **入力量子化**: タイムアタック中は kart 0 の入力を `stepRace` に渡す前に `quantizeInput` し、記録 = 実際に sim へ入った値にする（steer は `round(×127)/127`、throttle は `round(×255)/255`）。`main.ts` の `stepOnce` が recorder 経由で 1 本化している（debug の `advance()` も同じ経路）。通常レースは量子化しない。
+- **形式**（`GhostRecord`、`GHOST_FORMAT = 1`）: `format`、`trackId`、`layout`、`laps`、`seed`、`time`、`lapTimes`、`ticks`、`frames`、`checkpoints: { tick, distance }[]`。
+- **RLE codec**（`codec.ts`）: 同じ入力が続く間を 1 つの run にし、run は 3 バイト + 長さ。steer は int8（−127〜127、−128 は不正）、throttle は uint8、flags は bit0 = brake、bit1 = drift、bit2 = useItem（> 7 は不正）、長さは符号なし LEB128。全体を base64 にする。復号は不正な run・長さ 0・総 tick 数との不一致を拒否する。
+- **チェックポイント**: `CHECKPOINT_INTERVAL = 600` tick（10 s）ごとの kart 0 の `trackDistance`。ゴースト再生中に値が 1 つでも違うと `diverged` を立て、ゴーストを描かない。
+- **上限**: `MAX_GHOST_TICKS = 36000`（10 分）。超えた走行は保存しない（`finish()` が null）。localStorage の容量超過は握りつぶす。
+- **保存の規則**（`finishTimeAttack`）: ゴールタイムが保存済みのゴーストより速いときだけ `saveGhost`。ベストラップ（`lapTimes` の最小）も別に、速いときだけ `saveBestLap`。`best.v4` には触れない。コースの `layout`（layoutVersion）と周回数が一致しない記録は読まない。
+- **ゴーストの描画**: 本体の半透明（不透明度 0.4、`depthWrite: false`）のコピー。ロスターの外にあり、**ミニマップにも影にも出さない**。コース再構築で破棄される。
+
+### 保存（localStorage）
+| キー | 内容 |
+| --- | --- |
+| `pocket-circuit.best.v4` | 1 人用レースのコース別・周回数別ベスト合計タイム |
+| `pocket-circuit.timeattack.v1` | タイムアタックのゴースト（`trackId` → 周回数 → `GhostRecord`） |
+| `pocket-circuit.bestlap.v1` | タイムアタックのコース別ベストラップ（`{ time, layout }`） |
+| `pocket-circuit.cpu-level.v1` | CPU 難易度（`easy` / `normal` / `hard`、不正値は `normal`） |
+
+ミュート（`muted.v1`）・ステア感度（`steer-sensitivity.v1`）・ハンドルアシスト（`steer-assist.v1`）は M7 以前から。
+
+### タイトルのレイアウト（`src/style.css` 末尾）
+- モード行（レース / グランプリ / タイムアタック）、グランプリ時のカップ行、CPU 難易度行を足した。
+- 縦画面のスマホ（`max-width: 700px` かつ portrait）: `.title-description` を隠し、`.title-screen` を縦スクロール（`overflow-y: auto`、`overflow-x: hidden`、`touch-action: pan-y`）にして、すべての選択肢と開始ボタンに届くようにした。オンラインのパネルは下端に固定する。
+- 短い横画面（`max-height: 480px` かつ landscape）: 同様に縦スクロール。コースの帯は文書の流れに入れる。
+- 実機での見た目は人の目視が要る（followups の M7 節）。
+
+### M8 に送ったもの
+`.omc/followups.md` の「v6 M7」節のとおり。M8 はオンラインの安定化、M9 は保守。
+
