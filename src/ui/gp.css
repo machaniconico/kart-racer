@@ -1,0 +1,65 @@
+#standings-screen {
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  background: #0a2d22c4;
+  touch-action: pan-y;
+}
+#standings-screen[hidden] { display: none !important; }
+#standings-screen, #standings-screen * { box-sizing: border-box; }
+.standings-content {
+  width: 590px;
+  max-width: 100%;
+  min-width: 0;
+  max-height: 100%;
+  overflow-y: auto;
+  touch-action: pan-y;
+  overscroll-behavior-y: contain;
+  padding: 28px 32px;
+  border-radius: 7px;
+  background: var(--white, #f6fff7);
+  color: var(--ink, #173d35);
+  box-shadow: 0 12px 55px #06231530;
+}
+.standings-heading { margin-bottom: 20px; }
+.standings-progress { margin: 0 0 6px; color: #56756a; font-size: 10px; font-weight: 750; letter-spacing: 1.8px; }
+.standings-cup { margin: 0; font-size: 32px; font-weight: 900; line-height: 1.15; }
+.standings-next-course { margin: 10px 0 0; color: #547465; font-size: 11px; font-weight: 650; overflow-wrap: anywhere; }
+.standings-list { list-style: none; padding: 12px 0 0; margin: 0; border-top: 1px solid #173d352b; }
+.standings-row {
+  display: grid;
+  grid-template-columns: 24px 12px 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 42px;
+  padding: 8px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.standings-row.is-player { background: #e1f4d3; border-radius: 4px; font-weight: 750; }
+.standings-position { color: #5c776b; font-size: 11px; font-variant-numeric: tabular-nums; }
+#standings-screen .racer-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; box-shadow: inset 0 0 0 1px #173d3520; }
+#standings-screen .racer-name { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.standings-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#standings-screen .standings-you { flex-shrink: 0; padding: 3px 4px; border-radius: 2px; background: var(--ink, #173d35); color: var(--lime, #d8ff75); font-size: 7px; letter-spacing: .5px; }
+.standings-points, .standings-gained { font-variant-numeric: tabular-nums; text-align: right; }
+.standings-gained { min-width: 26px; color: #547465; font-size: 11px; }
+#standings-screen .podium { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; list-style: none; padding: 0; margin: 0 0 20px; }
+.podium-place { display: flex; flex-direction: column; align-items: center; gap: 7px; min-width: 0; padding: 12px 6px; border-top: 3px solid #87e9bf; background: #173d3508; }
+.podium-place:first-child { border-color: var(--ink, #173d35); background: var(--lime, #d8ff75); }
+.podium-position { font-size: 18px; font-weight: 850; }
+.podium-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 750; }
+.podium-points { font-size: 14px; font-variant-numeric: tabular-nums; }
+#gp-next { width: 100%; min-height: 47px; margin-top: 20px; padding: 12px 16px; border: 1px solid var(--lime, #d8ff75); border-radius: 5px; background: var(--lime, #d8ff75); color: var(--ink, #173d35); font: inherit; font-size: 12px; font-weight: 800; cursor: pointer; touch-action: manipulation; }
+#gp-next:hover { background: #e5ffa8; }
+#gp-next:focus-visible { outline: 3px solid var(--ink, #173d35); outline-offset: 3px; }
+#gp-next:active { transform: translateY(1px); }
+@media (max-width: 480px) {
+  #standings-screen { padding: 16px 12px; }
+  .standings-content { padding: 22px 16px; }
+  .standings-cup { font-size: 26px; }
+  .standings-row { gap: 6px; padding-inline: 6px; }
+}
