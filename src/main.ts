@@ -410,18 +410,29 @@ function setLocal(next: typeof mode, id: number): void {
   recreateRenderer(id);
 }
 
-/** Disposes and rebuilds the renderer for the current state's course and the given local kart. */
+/**
+ * Rebuilds the renderer for the current state's course and the given local kart on the same WebGLRenderer.
+ * Order matters: build the new scene and draw it once while the old scene still holds its programs, then
+ * dispose the old scene. Disposing first would drop program usedTimes to 0 and force a full recompile.
+ * disposeScene() keeps itemVisuals' module-scope shared materials (see GameRenderer.disposeScene).
+ */
 function recreateRenderer(id: number): void {
   if (!renderer || fatal) return;
-  // The new renderer shares the canvas context and assumes default unpack state.
+  // Kept although the WebGLRenderer is now reused (so its unpack state is three's own): resetting
+  // to the defaults three assumes is harmless and guards against anything else touching the context.
   const gl = renderer.renderer.getContext();
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
   gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
-  renderer.dispose();
+  const old = renderer;
+  let next: GameRenderer | undefined;
   try {
-    renderer = new GameRenderer(ui.canvas, state, id);
-    // Draw once now so shader compilation happens inside this one main-thread stall.
-    renderer.update(state, captureRenderSnapshot(state), 1, 0, rendererScreen());
+    next = new GameRenderer(ui.canvas, state, id, { webgl: old.renderer });
+    // Draw once now so any remaining shader compilation happens inside this one main-thread stall.
+    next.update(state, captureRenderSnapshot(state), 1, 0, rendererScreen());
+    // The current GameRenderer always owns the WebGLRenderer, so HMR/page-exit dispose() frees it.
+    old.transferRendererTo(next);
+    renderer = next;
+    old.disposeScene();
     const gl2 = renderer.renderer.getContext();
     if (gl2 instanceof WebGL2RenderingContext) {
       // Drawing before this fence signals would block the main thread on the GPU.
@@ -435,6 +446,13 @@ function recreateRenderer(id: number): void {
       });
     }
   } catch (error) {
+    // Exactly one GameRenderer owns the WebGLRenderer: old before the transfer, next after it.
+    if (renderer === old) {
+      next?.disposeScene();
+      old.dispose();
+    } else {
+      renderer?.dispose();
+    }
     renderer = undefined;
     console.error('The 3D renderer could not restart.', error);
     fail('3D 表示を開始できませんでした。ページを再読み込みしてください。');
@@ -813,6 +831,7 @@ function createDebugBridge() {
       get drawCalls() { return renderer?.getDrawCalls() ?? 0; },
       get triangles() { return renderer?.renderer.info.render.triangles ?? 0; },
       get trackId() { return renderer?.getTrackId() ?? null; },
+      get programCount() { return renderer?.programCount ?? 0; },
     },
     selectCourse,
     get playMode() { return playMode; },

@@ -586,27 +586,37 @@ test('C-010: sixteen course switches keep renderer geometry memory bounded', asy
   const samples = [];
   for (const id of sequence) {
     const sample = await page.evaluate(async trackId => {
-      const oldInfo = window.__kartDebug.rendererInfo!;
       window.__kartDebug.selectCourse(trackId);
       await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
       return {
         trackId: window.__kartDebug.render.trackId,
         geometries: window.__kartDebug.rendererInfo!.memory.geometries,
-        disposedGeometries: oldInfo.memory.geometries,
+        textures: window.__kartDebug.rendererInfo!.memory.textures,
+        programs: window.__kartDebug.render.programCount,
       };
     }, id);
     expect(sample.trackId).toBe(id);
     expect(sample.geometries).toBeGreaterThan(0);
-    expect(sample.disposedGeometries).toBe(0);
+    expect(sample.programs).toBeGreaterThan(0);
     samples.push(sample);
   }
   await testInfo.attach('geometry-memory', {
     body: JSON.stringify(samples), contentType: 'application/json',
   });
   console.info('M6-05 geometry memory', JSON.stringify(samples));
+  // M8-01: rebuilds reuse one WebGLRenderer (shared info), so a leak shows up as growth here, not as a
+  // non-empty old renderer. Lap 2 must match lap 1 exactly: geometry, texture and program counts.
+  const maxTextures = Math.max(...samples.slice(0, lap.length).map(sample => sample.textures));
+  const maxPrograms = Math.max(...samples.slice(0, lap.length).map(sample => sample.programs));
   for (const [index, sample] of samples.entries()) {
     expect(sample.geometries).toBeLessThanOrEqual(samples[0].geometries);
-    if (index >= lap.length) expect(sample.geometries).toBe(samples[index - lap.length].geometries);
+    expect(sample.textures).toBeLessThanOrEqual(maxTextures);
+    expect(sample.programs).toBeLessThanOrEqual(maxPrograms);
+    if (index >= lap.length) {
+      const previous = samples[index - lap.length];
+      expect({ geometries: sample.geometries, textures: sample.textures, programs: sample.programs })
+        .toEqual({ geometries: previous.geometries, textures: previous.textures, programs: previous.programs });
+    }
   }
   const neonLoads = samples.filter(sample => sample.trackId === 'neon');
   expect(neonLoads).toHaveLength(2);

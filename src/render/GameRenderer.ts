@@ -67,12 +67,17 @@ export class GameRenderer {
   private cameraReady = false;
   private lastMode = '';
   private reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  /** False when the WebGLRenderer was passed in; dispose() then leaves it (and its program cache) to the owner. */
+  private owned: boolean;
 
-  constructor(private readonly canvas: HTMLCanvasElement, initial: RaceState, private readonly localKartId: number) {
+  /** Pass `options.webgl` to reuse a live WebGLRenderer, so a rebuild hits its compiled-program cache. */
+  constructor(private readonly canvas: HTMLCanvasElement, initial: RaceState, private readonly localKartId: number,
+    options?: { webgl?: THREE.WebGLRenderer }) {
     this.track = getTrack(initial.trackId);
     const theme = themes[this.track.def.themeId];
     const mobile = window.matchMedia('(pointer: coarse)').matches;
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: !mobile, powerPreference: 'high-performance' });
+    this.owned = !options?.webgl;
+    this.renderer = options?.webgl ?? new THREE.WebGLRenderer({ canvas, antialias: !mobile, powerPreference: 'high-performance' });
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = mobile ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -403,10 +408,41 @@ export class GameRenderer {
     return this.renderer.info.render.calls;
   }
 
-  dispose(): void {
+  /** Live compiled shader programs in the (possibly shared) WebGLRenderer. */
+  get programCount(): number {
+    return this.renderer.info.programs?.length ?? 0;
+  }
+
+  /**
+   * Disposes everything this instance built except the WebGLRenderer.
+   * Module-scope resources shared across GameRenderer instances must keep their materials:
+   * material.dispose() releases its program, and three deletes a program whose usedTimes reaches 0.
+   * Shared today (src/render/itemVisuals.ts):
+   * - `looks`: one geometry + material per entity kind (bolt/trap/seeker/skycomet/bomb/decoy/orbit),
+   *   used by createEntityMesh() for projectiles/traps and each kart's orbit/held meshes. Detached
+   *   here without disposal (marked by userData.pose, which only createEntityMesh sets).
+   * - `flameGeometry`: geometry only; disposing it is harmless (re-uploaded on next use), so the
+   *   kart flame mesh is disposed with the tree as before.
+   */
+  disposeScene(): void {
+    const shared: THREE.Object3D[] = [];
+    this.scene.traverse((object) => { if (object instanceof THREE.Mesh && object.userData.pose) shared.push(object); });
+    shared.forEach((object) => object.removeFromParent());
+    this.entities.clear();
     this.course.dispose();
     disposeObjectTree(this.scene);
     this.sun.dispose();
-    this.renderer.dispose();
+  }
+
+  /** Hands the shared WebGLRenderer's ownership to `next`, so the current GameRenderer's dispose() frees it. */
+  transferRendererTo(next: GameRenderer): void {
+    if (next.renderer !== this.renderer) throw new Error('transferRendererTo: next does not share this WebGLRenderer');
+    next.owned = this.owned;
+    this.owned = false;
+  }
+
+  dispose(): void {
+    this.disposeScene();
+    if (this.owned) this.renderer.dispose();
   }
 }
