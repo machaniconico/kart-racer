@@ -1,7 +1,7 @@
 /**
- * M10-07 fix-pass measurements (Node 25, macOS, concurrent story load):
+ * M10-07 re-review measurements (Node 25, macOS, focused course test run):
  * Rendering: 28 meshes, 113,488 shadow-weighted triangles; five-build median
- * 245.457 ms (133,488 including karts < 169,715.715 cap).
+ * 21.837 ms (133,488 including karts < 169,715.715 cap).
  * CPU: 8 CPUs × seeds [1, 42, 98765] × 3 laps = 72; meanLap 68.323843 s,
  * wallHits 1, bandHits 0, pitFalls 0 (handling.test.ts event classification).
  *
@@ -11,27 +11,37 @@
  * so the grass-braking escape band is inaccessible. No barriers/sim edits.
  * The opposite turns now have distinct minimum radii: 11.043 / 11.937 m.
  *
- * Scripts over [from - 20, to + 20], time s / maximum speed m/s / hit count:
+ * Scripts over [from - 20, to + 80], time s / maximum speed m/s / hit count:
+ * The interval includes the earned exit turbo (2026-10-16 route decision).
  *                 A                         B                         C
- * Lower: 2.900000 / 36.643253 / 1   2.733333 / 50.705945 / 0   5.450000 / 32.135804 / 0
- * Upper: 3.000000 / 36.643287 / 1   2.766667 / 50.425655 / 0   5.833333 / 32.001556 / 0
- * B mean speeds 37.992696 / 37.891724; exit driftTime 2.000000 / 2.050000 s;
+ * Lower: 4.483333 / 37.222486 / 1   3.883333 / 54.666712 / 0   7.066667 / 37.217359 / 0
+ * Upper: 4.600000 / 36.643332 / 1   3.916667 / 54.476728 / 0   7.466667 / 36.637959 / 0
+ * A - B: 0.600000 / 0.683333 s; a hit now also requires >= 0.5 s lost.
+ * C - B: 3.183333 / 3.550000 s; C remains asserted, with no downgrade.
+ * B mean speeds 41.872560 / 41.770624; exit driftTime 2.000000 / 2.050000 s;
  * inward steering 1.450000 / 1.400000 s. C entry speeds 15.730504 / 15.603333.
- * B and C have zero rail touches, including the approach. C remains asserted. B's peak includes its earned exit turbo. Acceleration
- * before soft speed-cap drag allows full throttle to exceed the nominal 32.
+ * B and C have zero rail touches, including the approach and extended exit.
+ * Acceleration before soft speed-cap drag allows throttle to exceed nominal 32.
  * All scripts share the outside target 3 m, look-ahead 8 m, heading gain 8,
  * lateral gain 0.6; B converts requested yaw through the drift steering formula.
  *
- * Sweep: 324 controllers per bend × (full throttle, drift, eight brake targets
- * 15.5/18/21/24/27/30/33/36 m/s). All modes share each controller and start pose;
+ * Sweep: all 324 controllers per bend × full throttle, drift and 320 slowing
+ * schedules: start 40/25/15/8/3 m before entry × release at entry/quarter/apex/exit
+ * × target 12/14/15.5/17/18.5/20/22/25 m/s × brake/coast (103,680 slowing runs).
+ * This applies the critic's p5.ts grid to every controller, without its subset.
+ * Coast means throttle 0 above target within the window, then full throttle.
+ * All modes share each controller and start pose;
  * incomplete runs or approach/interval hits cannot win. Drifts also need zero
  * rail touches; non-drifts may graze rails, making their comparison more lenient.
  * Clean full throttle:
  * 0/324 (0%) on both. Best clean brake / drift / advantage in seconds:
- * lower 3.300000 / 2.600000 / 0.700000; upper 3.433333 / 2.600000 / 0.833333.
+ * lower 4.466667 / 3.750000 / 0.716667; upper 4.583333 / 3.750000 / 0.833333.
+ * These replace the narrower sweep's overstated to+20 advantages 0.700/0.833.
  * Best drift controllers (outside offset, look-ahead, heading/lateral gain):
- * lower (3, 12, 4, 0.3), upper (3, 12, 8, 0.6). Both beat the fastest clean
- * non-drift run by >= 0.5 s, including faster braking than script C.
+ * lower (3, 12, 4, 0.3), upper (3, 12, 8, 0.6). Best non-drift settings:
+ * lower (2, 12, 4, 0.1), start -3 m, release apex, brake to 25 m/s;
+ * upper (0, 6, 8, 0.1), start -3 m, release quarter, brake to 12 m/s.
+ * Both drift winners beat the fastest clean non-drift run by >= 0.5 s.
  * ai.ts:45 already brakes for curvature > 0.62 rad / 12 m above 21 m/s.
  * A 1.5 m inside racingLine keeps the CPU's exit turbo clear of the rails;
  * the human scripts do not read racingLine. No AI or physics changes needed.
@@ -65,9 +75,17 @@ interface Controller {
 }
 const scriptController: Controller = { offset: 3, lookAhead: 8, headingGain: 8, lateralGain: 0.6 };
 
+interface Braking {
+  startBefore: number;
+  release: 'entry' | 'quarter' | 'apex' | 'exit';
+  targetSpeed: number;
+  coast: boolean;
+}
+const scriptBraking: Braking = { startBefore: 40, release: 'exit', targetSpeed: 15.5, coast: false };
+
 /** Same seed, pose, speed and P controller for every mode; only the inputs differ. */
 function scripted(bend: Hairpin, script: 'A' | 'B' | 'C', controller = scriptController,
-  brakeTo = 15.5, stopOnHit = false) {
+  braking = scriptBraking, stopOnHit = false) {
   const state = createRace(1, { trackId: 'serpentine', karts: 1, itemBoxes: false });
   const kart = state.karts[0]!;
   state.phase = 'racing'; state.countdown = 0;
@@ -75,12 +93,18 @@ function scripted(bend: Hairpin, script: 'A' | 'B' | 'C', controller = scriptCon
   Object.assign(kart, { x: start.x, y: start.y, z: start.z, heading: Math.atan2(start.tx, start.tz),
     trackDistance: start.distance, lateralOffset: 0, speed: 32 });
   const direction = -Math.sign(profile.find(point => point.distance >= bend.at)!.curvature);
+  const brakeRelease = { entry: bend.from, quarter: bend.from + (bend.to - bend.from) / 4,
+    apex: bend.at, exit: bend.to }[braking.release];
+  // Include the exit turbo and count collisions throughout the same interval.
+  const finish = bend.to + 80;
   let railTouches = 0, ticks = 0, hits = 0, maxSpeed = 0, speedSum = 0, exitDrift = 0, entrySpeed = Infinity;
   let crossedExit = false, inwardSteers = 0, approachHits = 0;
-  for (let tick = 0; tick < 1200 && kart.trackDistance < bend.to + 20; tick++) {
+  for (let tick = 0; tick < 1200 && kart.trackDistance < finish; tick++) {
     const d = kart.trackDistance;
     const drift = script === 'B' && d >= bend.from - 10 && d <= bend.to;
-    const brake = script === 'C' && d >= bend.from - 40 && d <= bend.to && kart.speed > brakeTo;
+    const slowing = script === 'C' && d >= bend.from - braking.startBefore && d <= brakeRelease && kart.speed > braking.targetSpeed;
+    const brake = slowing && !braking.coast;
+    const throttle = slowing && braking.coast ? 0 : 1;
     const target = sampleTrack(track, d + controller.lookAhead);
     const slip = kart.driftDirection * Math.min(0.23, kart.driftTime * 0.35);
     const angle = Math.atan2(target.tx, target.tz) - kart.heading + slip;
@@ -91,7 +115,7 @@ function scripted(bend: Hairpin, script: 'A' | 'B' | 'C', controller = scriptCon
     else if (drift) steer = (steer - direction * 0.75) / 0.6;
     steer = Math.max(-1, Math.min(1, steer));
     if (drift && d >= bend.from && d <= bend.to && steer * direction > 0) inwardSteers++;
-    stepRace(state, [{ steer, throttle: 1, brake, drift, useItem: false }]);
+    stepRace(state, [{ steer, throttle, brake, drift, useItem: false }]);
     if (d < bend.from && kart.trackDistance >= bend.from) entrySpeed = kart.speed;
     if (!crossedExit && kart.trackDistance >= bend.to) { crossedExit = true; exitDrift = kart.driftTime; }
     // Wall projection clamps the offset even when a glancing touch emits no hit.
@@ -100,16 +124,15 @@ function scripted(bend: Hairpin, script: 'A' | 'B' | 'C', controller = scriptCon
     if (Math.abs(kart.lateralOffset) >= railLimit - 1e-6) railTouches++;
     const frameHits = state.events.filter(event => event.type === 'hit').length;
     if (d < bend.from - 20) approachHits += frameHits;
-    if (d >= bend.from - 20 && d <= bend.to + 20) {
+    if (d >= bend.from - 20 && d <= finish) {
       ticks++; maxSpeed = Math.max(maxSpeed, kart.speed); speedSum += kart.speed;
       hits += frameHits;
     }
     if (stopOnHit && (hits > 0 || approachHits > 0)) break;
   }
-  expect(kart.human).toBe(true);
-  expect(state.boxes).toHaveLength(0);
-  const completed = crossedExit && kart.trackDistance >= bend.to + 20;
-  return { completed, approachHits, railTouches, time: ticks / 60, maxSpeed, hits, meanSpeed: speedSum / ticks, exitDrift, entrySpeed, inwardTime: inwardSteers / 60 };
+  const completed = crossedExit && kart.trackDistance >= finish;
+  return { human: kart.human, boxCount: state.boxes.length, completed, approachHits, railTouches,
+    time: ticks / 60, maxSpeed, hits, meanSpeed: speedSum / ticks, exitDrift, entrySpeed, inwardTime: inwardSteers / 60 };
 }
 
 function renderCourse() {
@@ -226,9 +249,14 @@ describe('SERPENT PASS', () => {
   it.each([0, 1])('proves drift advantage through narrow hairpin %i with three deterministic scripts', index => {
     const bend = driftHairpins[index]!;
     const a = scripted(bend, 'A'), b = scripted(bend, 'B'), c = scripted(bend, 'C');
-    for (const run of [a, b, c]) { expect(run.completed).toBe(true); expect(run.approachHits).toBe(0); }
+    for (const run of [a, b, c]) {
+      expect(run.human).toBe(true);
+      expect(run.boxCount).toBe(0);
+      expect(run.completed).toBe(true);
+      expect(run.approachHits).toBe(0);
+    }
     console.info('scripts', index, { a, b, c });
-    expect(a.hits >= 1 || a.time - b.time >= 1).toBe(true);
+    expect(a.time - b.time).toBeGreaterThanOrEqual(a.hits >= 1 ? 0.5 : 1);
     expect(b.hits).toBe(0);
     expect(b.railTouches).toBe(0);
     expect(b.exitDrift).toBeGreaterThanOrEqual(DRIFT_BLUE_TIME);
@@ -241,41 +269,58 @@ describe('SERPENT PASS', () => {
     expect(c.time - b.time).toBeGreaterThanOrEqual(0.5);
   });
 
-  it.each([0, 1])('beats the best clean non-drift controller through hairpin %i', index => {
+  it.each([0, 1])('beats the best clean non-drift controller through hairpin %i including the exit turbo', index => {
     const bend = driftHairpins[index]!;
     const clean = (run: ReturnType<typeof scripted>) => run.completed && run.hits === 0 && run.approachHits === 0;
+    // Apply the critic's p5.ts braking strategies to every controller.
+    // Braking can end before the bend; coasting removes throttle without braking.
+    const brakingSettings: Braking[] = [];
+    for (const startBefore of [40, 25, 15, 8, 3]) {
+      for (const release of ['entry', 'quarter', 'apex', 'exit'] as const) {
+        for (const targetSpeed of [12, 14, 15.5, 17, 18.5, 20, 22, 25]) {
+          for (const coast of [false, true]) brakingSettings.push({ startBefore, release, targetSpeed, coast });
+        }
+      }
+    }
+    expect(brakingSettings).toHaveLength(320);
     let settings = 0, cleanFullThrottle = 0;
     let bestFullThrottle = Infinity, bestBrake = Infinity, bestDrift = Infinity;
     let bestDriftController: Controller | undefined;
+    let bestBrakeSettings: { controller: Controller; braking: Braking } | undefined;
+    let brakingRuns = 0;
     for (const offset of [-2, -1, 0, 1, 2, 3]) {
       for (const lookAhead of [2, 4, 6, 8, 12, 16]) {
         for (const headingGain of [2, 4, 8]) {
           for (const lateralGain of [0.1, 0.3, 0.6]) {
             const controller = { offset, lookAhead, headingGain, lateralGain };
             settings++;
-            const a = scripted(bend, 'A', controller, 15.5, true);
-            const b = scripted(bend, 'B', controller, 15.5, true);
+            const a = scripted(bend, 'A', controller, scriptBraking, true);
+            const b = scripted(bend, 'B', controller, scriptBraking, true);
             if (clean(a)) { cleanFullThrottle++; bestFullThrottle = Math.min(bestFullThrottle, a.time); }
             if (clean(b) && b.railTouches === 0 && b.exitDrift >= DRIFT_BLUE_TIME && b.meanSpeed >= 18 && b.time < bestDrift) {
               bestDrift = b.time; bestDriftController = controller;
             }
-            // Include faster braking targets, so C's conservative 16 m/s is not the only opponent.
-            for (const brakeTo of [15.5, 18, 21, 24, 27, 30, 33, 36]) {
-              const c = scripted(bend, 'C', controller, brakeTo, true);
-              if (clean(c)) bestBrake = Math.min(bestBrake, c.time);
+            for (const braking of brakingSettings) {
+              const c = scripted(bend, 'C', controller, braking, true);
+              brakingRuns++;
+              if (clean(c) && c.time < bestBrake) {
+                bestBrake = c.time; bestBrakeSettings = { controller, braking };
+              }
             }
           }
         }
       }
     }
     const advantage = Math.min(bestFullThrottle, bestBrake) - bestDrift;
-    console.info('sweep', index, { settings, cleanFullThrottle, bestFullThrottle, bestBrake, bestDrift, advantage, bestDriftController });
+    console.info('sweep', index, { settings, brakingRuns, cleanFullThrottle, bestFullThrottle, bestBrake,
+      bestDrift, advantage, bestDriftController, bestBrakeSettings });
     expect(settings).toBe(324);
+    expect(brakingRuns).toBe(324 * 5 * 4 * 8 * 2);
     expect(Number.isFinite(bestDrift)).toBe(true);
     expect(Number.isFinite(bestBrake)).toBe(true);
     expect(advantage).toBeGreaterThanOrEqual(0.5);
     expect(cleanFullThrottle / settings).toBeLessThanOrEqual(0.1);
-  }, 120_000);
+  }, 360_000);
 
   it('renders orange/red foliage and gray rocks outside every road within the triangle budget', () => {
     const course = renderCourse();
