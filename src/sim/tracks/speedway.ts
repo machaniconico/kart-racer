@@ -1,67 +1,54 @@
+import { buildTrack } from '../track';
 import type { TrackDef } from '../types';
 import { BASE_ROAD_HALF_WIDTH, BASE_WALL_HALF_WIDTH } from './widths';
 
-export const speedway: TrackDef = {
-  id: 'speedway',
-  name: 'THUNDER OVAL',
-  layoutVersion: 3,
+const layout: TrackDef = {
+  id: 'speedway', name: 'THUNDER OVAL', layoutVersion: 1, themeId: 'speedway',
+  // Two 752 m straights joined by broad, 112.8 m radius stadium turns.
+  // Collinear approach points keep the long straights and start seam flat.
+  // Height 5 keeps the low edge of both 0.35-radian banks above the infield.
   controlPoints: [
-    // Home straight and the east hairpin (27 m control-point radius).
-    [0, 1, 0], [80, 1, 0], [160, 1, 0], [203, 1, 0],
-    [230, 1, 0], [249.092, 1, 7.908], [257, 1, 27],
-    [249.092, 1, 46.092], [230, 1, 54], [203, 1, 54],
-    [160, 1, 54], [80, 1, 54], [10, 1, 85], [-20, 1, 140],
-    // Meadow ridge: the crest levels out before the descent.
-    [-30, 8, 215], [-90, 9, 250], [-180, 9, 250], [-250, 8, 200],
-    [-290, 3, 120], [-300, 1, 20], [-290, 1, -100], [-250, 1, -180],
-    [-220, 1, -210],
-    // Four alternating bends, then a sweeping southern compound corner.
-    [-160, 1, -200], [-110, 1, -220], [-60, 1, -200], [-10, 1, -220],
-    [50, 1, -210], [130, 1, -200], [190, 1, -150], [190, 1, -100],
-    [130, 1, -60], [40, 1, -80], [-13, 1, -80], [-40, 1, -80],
-    [-68.284, 1, -68.284], [-80, 1, -40], [-68.284, 1, -11.716],
-    [-40, 1, 0], [-13, 1, 0],
+    [-300, 5, 0], [-200, 5, 0], [-100, 5, 0], [0, 5, 0],
+    [100, 5, 0], [200, 5, 0], [300, 5, 0], [350, 5, 0], [400, 5, 0],
+    [460, 5, 16.077], [503.923, 5, 60], [520, 5, 120],
+    [503.923, 5, 180], [460, 5, 223.923], [400, 5, 240], [350, 5, 240],
+    [300, 5, 240], [200, 5, 240], [100, 5, 240], [0, 5, 240],
+    [-100, 5, 240], [-200, 5, 240], [-300, 5, 240], [-350, 5, 240], [-400, 5, 240],
+    [-460, 5, 223.923], [-503.923, 5, 180], [-520, 5, 120],
+    [-503.923, 5, 60], [-460, 5, 16.077], [-400, 5, 0], [-350, 5, 0],
   ],
-  scale: 1,
-  samplesPerSegment: 32,
-  roadHalfWidth: BASE_ROAD_HALF_WIDTH,
-  wallHalfWidth: BASE_WALL_HALF_WIDTH,
+  scale: 0.94, samplesPerSegment: 32,
+  roadHalfWidth: BASE_ROAD_HALF_WIDTH, wallHalfWidth: BASE_WALL_HALF_WIDTH,
   checkpointCount: 24,
-  boxRows: [0.02, 0.12, 0.24, 0.36, 0.47, 0.58, 0.695, 0.81],
+  boxRows: [0.04, 0.18, 0.30, 0.43, 0.56, 0.69, 0.82, 0.94],
   boxLanes: [-5.33, 0, 5.33],
-  racingLine: [
-    { distance: 0, offset: 0 },
-    { distance: 180, offset: 0 },
-    { distance: 215, offset: 3 },
-    { distance: 272, offset: -3 },
-    { distance: 330, offset: 3 },
-    { distance: 390, offset: 0 },
-    { distance: 600, offset: 0 },
-    { distance: 780, offset: 0 },
-    { distance: 1000, offset: 0 },
-    { distance: 1240, offset: 0 },
-    { distance: 1370, offset: 0 },
-    { distance: 1660, offset: 0 },
-    { distance: 1950, offset: 0 },
-    { distance: 2120, offset: 0 },
-    { distance: 2286.353556318704, offset: 0 },
+  racingLine: [], surfaces: [],
+};
+
+const geometry = buildTrack(layout);
+const at = (point: number) => geometry.samples[point * layout.samplesPerSegment]!.distance;
+export const SPEEDWAY_LENGTH = geometry.length;
+
+export const speedway: TrackDef = {
+  ...layout,
+  racingLine: [{ distance: 0, offset: 0 }, { distance: SPEEDWAY_LENGTH, offset: 0 }],
+  bankKeys: [
+    { distance: 0, roll: 0 },
+    { distance: at(7), roll: 0 }, { distance: at(8), roll: 0.35 },
+    { distance: at(14), roll: 0.35 }, { distance: at(15), roll: 0 },
+    { distance: at(23), roll: 0 }, { distance: at(24), roll: -0.35 },
+    { distance: at(30), roll: -0.35 }, { distance: at(31), roll: 0 },
+    { distance: SPEEDWAY_LENGTH, roll: 0 },
   ],
   surfaces: [
-    { kind: 'dirt', from: 440, to: 520 },
-    { kind: 'jump', from: 733, to: 736 },
-    { kind: 'dirt', from: 1670, to: 1750 },
+    { kind: 'boost', from: 210, to: 220 },
+    { kind: 'boost', from: 245, to: 255 },
+    { kind: 'boost', from: 280, to: 290 },
   ],
-  widthKeys: [
-    { distance: 1145, roadHalfWidth: BASE_ROAD_HALF_WIDTH, wallHalfWidth: BASE_WALL_HALF_WIDTH },
-    { distance: 1165, roadHalfWidth: 5.15, wallHalfWidth: 7.5 },
-    { distance: 1195, roadHalfWidth: 5.15, wallHalfWidth: 7.5 },
-    { distance: 1215, roadHalfWidth: BASE_ROAD_HALF_WIDTH, wallHalfWidth: BASE_WALL_HALF_WIDTH },
-  ],
-  bankKeys: [
-    { distance: 780, roll: 0 },
-    { distance: 810, roll: 0.18 },
-    { distance: 880, roll: 0.18 },
-    { distance: 910, roll: 0 },
-  ],
-  themeId: 'speedway',
+  // The pit wall sweeps along the outer half of the back straight. The centre
+  // remains open throughout its cycle, including approaches and tapered noses.
+  barriers: [{
+    from: at(18) + 30, to: at(18) + 62, center: 6.5, halfWidth: 1.3, taper: 8,
+    scenery: 'block', motion: { kind: 'sweep', amplitude: 1.5, period: 8, phase: 0 },
+  }],
 };
