@@ -1,11 +1,13 @@
-import type { RaceEvent, RaceState, TrackId } from '../sim/types';
+import type { CpuLevel, RaceEvent, RaceState, TrackId } from '../sim/types';
 import type { RosterPlayer } from './session';
 
 export type { InputFrame, RaceEvent, RaceState } from '../sim/types';
 export type { RosterPlayer } from './session';
 
-export const PROTOCOL_VERSION = 16;
+export const PROTOCOL_VERSION = 17;
 export const ROOM_PREFIX = `pcircuit-v${PROTOCOL_VERSION}-`;
+// Kept local: the net core may only type-import from sim (sim/types CPU_LEVELS is the source of truth).
+const CPU_LEVELS: readonly CpuLevel[] = ['easy', 'normal', 'hard'];
 /** FNV-1a32 of JSON.stringify(SNAPSHOT_LAYOUT), including enum order and flight fields.
  * Pinned to protocol v14; snapshot codec tests compare the actual wire descriptors.
  */
@@ -129,14 +131,14 @@ function entity(value: unknown, trap: boolean): boolean {
 }
 export function isRaceState(value: unknown): value is RaceState {
   if (!record(value) || !keys(value, ['laps', 'tick', 'seed', 'trackId', 'phase', 'countdown', 'racingTicks', 'time',
-    'karts', 'boxes', 'projectiles', 'traps', 'events', 'nextEntityId'])) return false;
+    'karts', 'boxes', 'projectiles', 'traps', 'events', 'nextEntityId', 'cpuLevel'])) return false;
   return integer(value.laps, 1, 3) && integer(value.tick) && integer(value.seed) && oneOf(value.trackId, PROTOCOL_TRACK_IDS) && integer(value.racingTicks) &&
     oneOf(value.phase, ['countdown', 'racing', 'finished']) && finite(value.countdown) && positiveTime(value.time) &&
     arrayOf(value.karts, kart, MAX_PLAYERS, 1) &&
     new Set((value.karts as RecordValue[]).map(entry => entry.id)).size === (value.karts as unknown[]).length &&
     arrayOf(value.boxes, box, 64) && arrayOf(value.projectiles, entry => entity(entry, false), 256) &&
     arrayOf(value.traps, entry => entity(entry, true), 256) && arrayOf(value.events, isRaceEvent, MAX_EVENTS) &&
-    integer(value.nextEntityId);
+    integer(value.nextEntityId) && oneOf(value.cpuLevel, CPU_LEVELS);
 }
 
 export function isHello(value: unknown): value is Hello {

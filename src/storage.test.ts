@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { loadBest, loadSensitivity, loadSteerAssist, saveBest, saveSensitivity, saveSteerAssist } from './storage';
+import {
+  loadBest, loadCpuLevel, loadSensitivity, loadSteerAssist, saveBest, saveCpuLevel, saveSensitivity, saveSteerAssist,
+} from './storage';
+import { CPU_LEVELS } from './sim/types';
 import { TRACK_IDS } from './sim/tracks';
 
 const V1 = 'pocket-circuit.best.v1';
@@ -255,5 +258,29 @@ describe('storage steer sensitivity', () => {
     vi.stubGlobal('localStorage', { getItem: () => { throw new Error('denied'); }, setItem: () => { throw new Error('denied'); } });
     expect(loadSensitivity()).toBe(3);
     expect(() => saveSensitivity(2)).not.toThrow();
+  });
+});
+
+describe('storage CPU level', () => {
+  it('defaults to normal and round-trips every level', () => {
+    expect(loadCpuLevel()).toBe('normal');
+    for (const level of CPU_LEVELS) {
+      saveCpuLevel(level);
+      expect(store.get('pocket-circuit.cpu-level.v1')).toBe(level);
+      expect(loadCpuLevel()).toBe(level);
+    }
+  });
+
+  it('treats invalid values as normal', () => {
+    for (const bad of ['', 'Easy', 'expert', '1', 'null', '"hard"']) {
+      store.set('pocket-circuit.cpu-level.v1', bad);
+      expect(loadCpuLevel()).toBe('normal');
+    }
+  });
+
+  it('survives throwing storage', () => {
+    vi.stubGlobal('localStorage', { getItem: () => { throw new Error('denied'); }, setItem: () => { throw new Error('denied'); } });
+    expect(loadCpuLevel()).toBe('normal');
+    expect(() => saveCpuLevel('hard')).not.toThrow();
   });
 });

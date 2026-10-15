@@ -46,7 +46,7 @@ export function getAIInput(state: RaceState, kartId: number): InputFrame {
     !crossedZone(track, 'pit', kart.trackDistance, kart.trackDistance + 20, kart.lateralOffset);
   const driftWindow = (state.racingTicks + kartId * 61) % 220;
   const approachingJump = crossedZone(track, 'jump', kart.trackDistance, kart.trackDistance + lookAhead + 12, kart.lateralOffset);
-  const drift = kart.airTime === 0 && !approachingJump && !approachingBomb && driftWindow < 115 &&
+  const drift = kart.airTime === 0 && !approachingJump && !approachingBomb && driftWindow < (state.cpuLevel === 'easy' ? 70 : state.cpuLevel === 'hard' ? 150 : 115) &&
     Math.abs(error) > 0.1 && Math.abs(error) < 0.75 && kart.speed > 16 &&
     (kart.driftDirection === 0 || error * kart.driftDirection > 0.1);
   if (drift && kart.driftDirection !== 0) {

@@ -190,7 +190,7 @@ export function decodeSnapshot(data: unknown, template: RaceState): Snapshot | n
     laps, tick: view.getUint32(2, true), seed: view.getUint32(14, true), phase,
     countdown: view.getUint16(19, true) / 100, racingTicks, time: racingTicks * FIXED_DT,
     karts: [], boxes: [], projectiles: [], traps: [], events: [],
-    nextEntityId: view.getUint16(25, true), trackId: template.trackId,
+    nextEntityId: view.getUint16(25, true), trackId: template.trackId, cpuLevel: template.cpuLevel,
   };
   const lastAppliedInput: InputFrame[] = [];
   for (let id = 0; id < MAX_PLAYERS; id++) {

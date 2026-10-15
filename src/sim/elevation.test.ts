@@ -48,7 +48,8 @@ describe('slope physics', () => {
     const state = soloRace(buildTrack(slopeCourse(0)), 10);
     for (let tick = 0; tick < 2000; tick++) stepRace(state, [getAIInput(state, 0)]);
     expect(state.karts[0]!.nextCheckpoint).toBeGreaterThan(0);
-    expect(createHash('sha256').update(JSON.stringify(state)).digest('hex')).toBe(FLAT_COURSE_PIN);
+    // M7-00: hashed without the added cpuLevel key so the pre-v17 pin still proves the run is bit-exact.
+    expect(createHash('sha256').update(JSON.stringify({ ...state, cpuLevel: undefined })).digest('hex')).toBe(FLAT_COURSE_PIN);
   });
 
   it('settles at 0.80–0.90× flat speed up a 0.3 grade and 1.10–1.20× down it', () => {

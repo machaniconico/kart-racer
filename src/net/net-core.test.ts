@@ -38,7 +38,7 @@ function finalState() {
     boxes: [{ id: 100, x: 0, y: 0, z: 0, heading: 0, respawnTime: 0 }],
     projectiles: [{ kind: 'bolt' as const, id: 101, ownerId: 0, x: 0, y: 0, z: 0, heading: 0, life: 1, bounces: 0 }],
     traps: [{ kind: 'trap' as const, id: 102, ownerId: 1, x: 0, y: 0, z: 0, heading: 0, life: 1, age: 0 }],
-    events: [{ type: 'finish' as const, kartId: 0, value: 7 }], nextEntityId: 103,
+    events: [{ type: 'finish' as const, kartId: 0, value: 7 }], nextEntityId: 103, cpuLevel: 'normal' as const,
   };
 }
 
@@ -109,8 +109,8 @@ describe('control protocol', () => {
   });
 
   it('isolates protocol v14 rooms from earlier versions', () => {
-    expect(PROTOCOL_VERSION).toBe(16);
-    expect(ROOM_PREFIX).toBe('pcircuit-v16-');
+    expect(PROTOCOL_VERSION).toBe(17);
+    expect(ROOM_PREFIX).toBe('pcircuit-v17-');
     expect(fromPeerId('pcircuit-v15-AB2X')).toBeNull();
     expect(fromPeerId('pcircuit-v13-AB2X')).toBeNull();
     expect(fromPeerId('pcircuit-v12-AB2X')).toBeNull();
@@ -229,6 +229,15 @@ describe('control protocol', () => {
       expect(isRaceState(state)).toBe(false);
       expect(parseControlMessage(JSON.stringify({ type: 'race_end', raceId: 0, finalState: state }))).toBeNull();
     }
+  });
+
+  it('rejects a finalState with a missing or invalid cpuLevel', () => {
+    const missing = Object.fromEntries(Object.entries(finalState()).filter(([key]) => key !== 'cpuLevel'));
+    for (const state of [missing, ...[null, '', 'Normal', 'expert', 1].map(cpuLevel => ({ ...finalState(), cpuLevel }))]) {
+      expect(isRaceState(state)).toBe(false);
+      expect(parseControlMessage(JSON.stringify({ type: 'race_end', raceId: 0, finalState: state }))).toBeNull();
+    }
+    for (const cpuLevel of ['easy', 'normal', 'hard'] as const) expect(isRaceState({ ...finalState(), cpuLevel })).toBe(true);
   });
 
   it('preserves all effect timers, rapid-dash state and defensive hold ticks in race_end JSON', () => {

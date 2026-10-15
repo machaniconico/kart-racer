@@ -289,6 +289,44 @@ describe('H1 CPU balance: absolute range and recorded baseline', () => {
   }, 120_000);
 });
 
+// H7 CPU levels: easy / hard pace against the normal BASELINE (8 CPU, seeds 1, 42, 98765, 3 laps).
+// Measured with speed x0.93 / x1.04 (M7-00, darwin-arm64), meanLap (ratio to BASELINE, wall / band / pit):
+//   meadow  easy 73.0414 (1.0663, 0/0/0)  hard 66.6086 (0.9724, 0/0/0)
+//   skyline easy 72.5565 (1.0773, 0/0/0)  hard 64.7785 (0.9618, 1/0/0)
+describe('H7 CPU levels', () => {
+  it.each([
+    ['meadow', 'easy'], ['meadow', 'hard'], ['skyline', 'easy'], ['skyline', 'hard'],
+  ] as const)('%s %s CPUs keep their pace band and hit budgets', (trackId, cpuLevel) => {
+    let totalLapTime = 0;
+    let wallHits = 0;
+    let bandHits = 0;
+    let pitFalls = 0;
+    const track = tracks.getTrack(trackId);
+    for (const seed of SEEDS) {
+      const state = createRace(seed, { trackId, racers: [], cpuLevel });
+      for (let tick = 0; tick < 60 * 420 && state.phase !== 'finished'; tick++) {
+        stepRace(state, state.karts.map(kart => getAIInput(state, kart.id)));
+        pitFalls += state.events.filter(event => event.type === 'hit' && event.value === 2).length;
+        const hits = countHits(state, track);
+        wallHits += hits.wall;
+        bandHits += hits.band;
+      }
+      expect(state.phase).toBe('finished');
+      expect(state.karts).toHaveLength(8);
+      for (const kart of state.karts) {
+        expect(kart.lapTimes).toHaveLength(3);
+        totalLapTime += kart.lapTimes.reduce((sum, time) => sum + time, 0);
+      }
+    }
+    const meanLap = totalLapTime / 72;
+    if (cpuLevel === 'easy') expect(meanLap).toBeGreaterThanOrEqual(1.04 * BASELINE[trackId].meanLap);
+    else expect(meanLap).toBeLessThanOrEqual(0.975 * BASELINE[trackId].meanLap);
+    expect(wallHits).toBeLessThanOrEqual(6);
+    expect(bandHits).toBeLessThanOrEqual(6);
+    if (trackId === 'skyline') expect(pitFalls).toBeLessThanOrEqual(6);
+  }, 120_000);
+});
+
 // A stadium loop whose first straight (arc ~100 to ~330 m) carries three centre pillars.
 const pillar = (from: number): Barrier => ({ from, to: from + 20, center: 0, halfWidth: 1.2, taper: 4, scenery: 'pillar' });
 const pillarTrack = buildTrack({

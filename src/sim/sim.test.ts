@@ -5,7 +5,7 @@ import {
   chooseItem, createRace, getAIInput, getRank, projectToTrack,
   sampleTrack, stepRace, updateLapTracking, RACE_FINISH_TIMEOUT,
   getFinishTimeRemaining, isRaceTimedOut, KART_EFFECT_LAYOUT, ENTITY_KINDS,
-  decideItemUse, getKartModifiers, onKartContact, hitKart, useItem, advanceItems,
+  decideItemUse, getKartModifiers, onKartContact, hitKart, useItem, advanceItems, CPU_LEVELS, isCpuLevel,
 } from './index';
 import type { InputFrame, KartState, RaceState } from './types';
 import { formatResultTime } from '../ui/GameUI';
@@ -1022,6 +1022,45 @@ describe('kart contact impulses', () => {
       expect(state.karts[0]!.speed).toBeGreaterThan(18);
       expect(state.karts[0]!.spinTime).toBe(0);
     }
+  });
+});
+
+describe('race options: karts, item boxes and CPU level', () => {
+  it('defaults to eight karts, item boxes and normal CPUs with the original grid', () => {
+    const state = createRace(3);
+    expect(state.cpuLevel).toBe('normal');
+    expect(state.karts).toHaveLength(8);
+    expect(state.boxes.length).toBeGreaterThan(0);
+    expect(JSON.stringify(createRace(3, { karts: 8, itemBoxes: true, cpuLevel: 'normal' }))).toBe(JSON.stringify(state));
+  });
+
+  it('karts: 1 makes a single human kart at the front of the grid', () => {
+    const state = createRace(3, { karts: 1 });
+    expect(state.karts).toHaveLength(1);
+    const [kart] = state.karts;
+    expect(kart!.id).toBe(0);
+    expect(kart!.human).toBe(true);
+    expect(kart!.trackDistance).toBe(Math.max(...createRace(3).karts.map(k => k.trackDistance)));
+    expect(kart!.trackDistance).toBe(track.length - 8);
+    expect(kart!.lateralOffset).toBe(-2);
+  });
+
+  it('itemBoxes: false leaves the course without boxes', () => {
+    expect(createRace(3, { itemBoxes: false }).boxes).toEqual([]);
+  });
+
+  it('keeps cpuLevel through a JSON round trip', () => {
+    for (const cpuLevel of CPU_LEVELS) {
+      const state = createRace(5, { cpuLevel });
+      expect(state.cpuLevel).toBe(cpuLevel);
+      expect((JSON.parse(JSON.stringify(state)) as RaceState).cpuLevel).toBe(cpuLevel);
+    }
+    expect(CPU_LEVELS.every(isCpuLevel)).toBe(true);
+    expect([undefined, null, 'Normal', 'expert', 1].some(isCpuLevel)).toBe(false);
+  });
+
+  it('rejects karts 0, 9 and non-integers', () => {
+    for (const karts of [0, 9, 2.5, NaN]) expect(() => createRace(1, { karts })).toThrow(RangeError);
   });
 });
 

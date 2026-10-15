@@ -9,6 +9,7 @@ import { barrierEscape, insideBarrier, projectToTrack, rollAt, sameLevel, sample
 import { getTrack } from './tracks';
 import { crossedZone, insideZone, JUMP_DURATION, JUMP_HEIGHT, spinRateAt, surfaceAt } from './surfaces';
 import type { InputFrame, KartState, RaceOptions, RaceState, Track } from './types';
+import { isCpuLevel } from './types';
 
 export const FIXED_DT = 1 / 60;
 export const DRIFT_BLUE_TIME = 0.65;
@@ -39,18 +40,28 @@ function allRacersFinished(state: RaceState): boolean {
   return racers.length > 0 && racers.every((kart) => kart.finishTime !== null);
 }
 
+// CPU level base-speed factors (normal never multiplies). H7 in handling.test.ts measured meanLap
+// (8 CPU, seeds 1, 42, 98765, 3 laps): meadow easy 73.0414 / hard 66.6086, skyline easy 72.5565 / hard 64.7785.
+const CPU_SPEED_EASY = 0.93;
+const CPU_SPEED_HARD = 1.04;
+
 export function createRace(seed: number, options: RaceOptions = {}): RaceState {
   if (options.racers && options.racers.length > NAMES.length) throw new RangeError('A race supports at most eight racers');
   const { trackId = 'meadow', laps = DEFAULT_LAPS } = options;
   if (!isLapCount(laps)) throw new RangeError('A race runs 1 to 3 laps');
+  const { cpuLevel = 'normal', karts = NAMES.length, itemBoxes = true } = options;
+  if (!isCpuLevel(cpuLevel)) throw new RangeError('Unknown CPU level');
+  if (!Number.isInteger(karts) || karts < 1 || karts > NAMES.length) throw new RangeError('A race runs 1 to 8 karts');
+  if (options.racers && options.racers.length > karts) throw new RangeError('More racers than karts');
   const track = getTrack(trackId);
   const state: RaceState = {
     laps, tick: 0, seed: (seed >>> 0) || 0x51c3a97d, phase: 'countdown', countdown: 3,
     racingTicks: 0, time: 0, karts: [], boxes: [], projectiles: [], traps: [], events: [], nextEntityId: 100, trackId: track.def.id,
+    cpuLevel,
   };
-  for (let id = 0; id < NAMES.length; id++) {
+  for (let id = 0; id < karts; id++) {
     // Start the player at the rear so the chase camera sees the whole grid ahead.
-    const gridSlot = NAMES.length - 1 - id;
+    const gridSlot = karts - 1 - id;
     const racer = options.racers?.[id];
     const distance = track.length - 8 - Math.floor(gridSlot / 2) * 4.5;
     const sample = sampleTrack(track, distance);
@@ -68,7 +79,7 @@ export function createRace(seed: number, options: RaceOptions = {}): RaceState {
       lastBand: -1,
     });
   }
-  for (const pose of track.boxPoses) {
+  for (const pose of itemBoxes ? track.boxPoses : []) {
     state.boxes.push({ id: state.nextEntityId++, ...pose, respawnTime: 0 });
   }
   return state;
@@ -320,11 +331,20 @@ function advanceKart(track: Track, state: RaceState, kart: KartState, input: Inp
     grade = slope * (Math.sin(kart.heading) * sample.tx + Math.cos(kart.heading) * sample.tz);
   }
   let maxSpeed = kart.human ? 32 : 30.2 + (kart.id % 3) * 0.35;
-  if (!kart.human) {
+  if (!kart.human && state.cpuLevel === 'normal') {
     const humanProgress = state.karts.filter((racer) => racer.human).map(racer => raceProgress(track, racer));
     if (humanProgress.length > 0) {
       const difference = Math.max(...humanProgress) - raceProgress(track, kart);
       maxSpeed *= 1 + Math.max(-0.02, Math.min(0.04, difference / 1800));
+    }
+  } else if (!kart.human) {
+    // Easy CPUs run slower and only ease off to the human; hard CPUs run faster and mostly catch up.
+    const easy = state.cpuLevel === 'easy';
+    maxSpeed *= easy ? CPU_SPEED_EASY : CPU_SPEED_HARD;
+    const humanProgress = state.karts.filter((racer) => racer.human).map(racer => raceProgress(track, racer));
+    if (humanProgress.length > 0) {
+      const difference = Math.max(...humanProgress) - raceProgress(track, kart);
+      maxSpeed *= 1 + Math.max(easy ? -0.04 : -0.01, Math.min(easy ? 0 : 0.06, difference / 1800));
     }
   }
   maxSpeed *= modifiers.maxSpeedMultiplier;

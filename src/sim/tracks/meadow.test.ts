@@ -37,7 +37,9 @@ describe('MEADOW course', () => {
 
   it('pins the layout 3 initial race JSON and default course', () => {
     const state = createRace(1, { trackId: 'meadow' });
-    expect(JSON.stringify(state)).toBe(MEADOW_RACE_JSON);
+    expect(state.cpuLevel).toBe('normal');
+    // M7-00: compared without the added cpuLevel key so the pre-v17 golden stays byte-identical.
+    expect(JSON.stringify({ ...state, cpuLevel: undefined })).toBe(MEADOW_RACE_JSON);
     expect(JSON.stringify(createRace(1))).toBe(JSON.stringify(state));
     expect(JSON.stringify(JSON.parse(MEADOW_RACE_JSON))).toBe(MEADOW_RACE_JSON);
   });

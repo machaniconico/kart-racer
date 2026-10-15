@@ -5,6 +5,7 @@ const BEST_KEY_V4 = 'pocket-circuit.best.v4';
 const MUTE_KEY = 'pocket-circuit.muted.v1';
 const SENSITIVITY_KEY = 'pocket-circuit.steer-sensitivity.v1';
 const ASSIST_KEY = 'pocket-circuit.steer-assist.v1';
+const CPU_LEVEL_KEY = 'pocket-circuit.cpu-level.v1';
 
 export const SENSITIVITY_MIN = 1;
 export const SENSITIVITY_MAX = 5;
@@ -179,4 +180,19 @@ export function loadSteerAssist(): boolean | null {
 
 export function saveSteerAssist(enabled: boolean): void {
   try { localStorage.setItem(ASSIST_KEY, String(enabled)); } catch { /* The setting still works for this session. */ }
+}
+
+// Mirrors sim CpuLevel; kept local so storage stays independent of sim/.
+type CpuLevel = 'easy' | 'normal' | 'hard';
+const CPU_LEVEL_VALUES: readonly string[] = ['easy', 'normal', 'hard'];
+
+export function loadCpuLevel(): CpuLevel {
+  try {
+    const value = localStorage.getItem(CPU_LEVEL_KEY);
+    return value !== null && CPU_LEVEL_VALUES.includes(value) ? value as CpuLevel : 'normal';
+  } catch { return 'normal'; }
+}
+
+export function saveCpuLevel(level: CpuLevel): void {
+  try { localStorage.setItem(CPU_LEVEL_KEY, level); } catch { /* The level still applies for this session. */ }
 }

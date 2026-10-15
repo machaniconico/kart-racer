@@ -15,7 +15,20 @@ export interface InputSource {
 
 export interface RacerSpec { name: string; color: number; human: boolean }
 /** Profiles are in slot order; omitted slots use CPU defaults. */
-export interface RaceOptions { trackId?: TrackId; racers?: readonly RacerSpec[]; laps?: number }
+export type CpuLevel = 'easy' | 'normal' | 'hard';
+export const CPU_LEVELS: readonly CpuLevel[] = ['easy', 'normal', 'hard'];
+export function isCpuLevel(value: unknown): value is CpuLevel {
+  return (CPU_LEVELS as readonly unknown[]).includes(value);
+}
+export interface RaceOptions {
+  trackId?: TrackId; racers?: readonly RacerSpec[]; laps?: number;
+  /** Defaults to 'normal', which keeps the CPU formulas bit-exact. */
+  cpuLevel?: CpuLevel;
+  /** 1 to 8 karts; defaults to 8. */
+  karts?: number;
+  /** Defaults to true. */
+  itemBoxes?: boolean;
+}
 export interface Pose { x: number; y: number; z: number; heading: number }
 export interface KartState extends Pose {
   id: number;
@@ -79,6 +92,7 @@ export interface RaceState {
   traps: Trap[];
   events: RaceEvent[];
   nextEntityId: number;
+  cpuLevel: CpuLevel;
 }
 export interface TrackSample {
   x: number; y: number; z: number;

@@ -54,7 +54,8 @@ it.each(MEADOW_FINAL_JSON)('pins MEADOW final JSON (seed %i)', (seed, ...hashes)
   }
   expect(state.phase).toBe('finished');
   expect(state.karts.every(kart => kart.lap === 3 && kart.finishTime !== null)).toBe(true);
-  const digest = createHash('sha256').update(JSON.stringify(state)).digest('hex');
+  // M7-00: hashed without the added cpuLevel key so the pre-v17 columns still prove normal CPUs are bit-exact.
+  const digest = createHash('sha256').update(JSON.stringify({ ...state, cpuLevel: undefined })).digest('hex');
   // An unlisted platform still checks completion above; add its column from a trusted run.
   const pinned: string | undefined = column ? hashes[column - 1] : undefined;
   if (pinned && pinned !== 'pending-ci') expect(digest).toBe(pinned);
