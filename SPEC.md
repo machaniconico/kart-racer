@@ -1147,3 +1147,67 @@ CDP のネットワーク絞りは HTTP スタックにだけ効き、WebRTC の
 
 ### M9 に送ったもの
 `.omc/followups.md` の「v6 M8」節の「M9 送り」のとおり。neon の構築コスト、実回線の適応遅延の基準、遠隔カートの視覚平滑化、tick ベースのタイムライン、初回アイテム material のコンパイル、途中再参加、および M7 から続く保守項目。
+
+## v6 M9（保守・プロトコル v17 のまま）
+
+M8 から送られた保守項目を片づけた。wire・`PROTOCOL_VERSION`・`LAYOUT_FINGERPRINT` は動かしていない。値は `16fa30f`〜`dc4683a`（M9-02 `16fa30f`、M9-01 `8d04b27`、M9-00 `bfdf79b`、M9-03 `e337a79`、M9-04 `d2e2c3b`、M9-05 `e8a5f67`、M9-06 `dc4683a`） のコミットメッセージと該当ファイルによる。
+
+### 画面 golden の platform ゲート（`e2e/courses.spec.ts`、M9-00）
+- golden は「その platform のディレクトリに同名のファイルがあれば照合、無ければ `golden-skipped` の注釈を付けて照合だけを省き、他の検査は続ける」。従来の darwin 固定をやめた。
+- `KART_GOLDENS=write` は常に照合（`--update-snapshots` と併用して書き出す）。`KART_GOLDEN_PLATFORM` は存在確認の platform だけを差し替え、書き出し先は変えない。
+- 閾値は `threshold: 0.2`, `maxDiffPixels: 0` と明示した。Playwright の既定と同じ値で、緩めてはいない。将来の変更が diff に出るようにするためである。darwin の 27 枚は SHA-256 不変で 5/5 通過し、`KART_GOLDEN_PLATFORM=linux` では 5/5 が skip 注釈つきで通る。`harbor-narrow.png` に 1 px 変えると TIDEWATER が「1 pixels ... different」で落ちることを確認し、元に戻した。
+- 手順（linux golden の取得）: `.github/workflows/goldens-linux.yml`（`workflow_dispatch` のみ、ubuntu-latest）を dispatch → step A で `KART_GOLDENS=write` で書き出し → step B で同一 runner のまま書いた golden に再照合（SwiftShader が run 内で決定的かの証明）→ step C で artifact `linux-goldens`（`e2e/__screenshots__/linux/`、保持 14 日）を upload。B が通ったら artifact を `e2e/__screenshots__/linux/` に commit する。以後は linux でも自動で照合される。B が通らなければ commit しない。
+- 対象は TIDEWATER / MOSSWOOD / EMBER / STRATOS / title-eight-courses（`-g 'TIDEWATER|MOSSWOOD|EMBER|STRATOS|eight-course'`）。darwin の golden は 27 枚。
+- drawCalls / triangles の完全一致は緩めない。three の `info.render` は CPU 側のカウンタで GPU に依存せず、linux でも一致するはずだから。この理由は `courses.spec.ts` にコメントした。
+
+### roadIndex（`src/render/course/roadIndex.ts`、M9-01）
+- `roadHeightAtXZ` を 32 m 格子（`CELL_SIZE = 32`）の候補集合で引く。各区間を壁の半幅 + `MAX_MARGIN`（22 m）+ 1e-6 で広げて格子に登録し、候補は元の区間 index の昇順で走査する（同距離タイは先勝ちで、総当たりと同じ）。`margin` が 22 を超えると `RangeError`。
+- 同値性: 総当たりの算術（符号つきゼロを含む）をそのまま使い、総当たりの参照実装は未変更で export して検証に使う。8 コース × 20,000 点 × 2 × 3 × 2 の行列、計 1,920,000 回の `Object.is` 比較が全て一致した（22.385 s）。`buildCourse` の形状 signature（`buildCourse.test.ts:128/180`）は不変で、既存 75 ケースが通った。
+- 時間（darwin-arm64、Node 25.8.1、Vitest 4.1.11、neon の `buildCourse` を 5 回ウォームアップ後の中央値）: インデックスあり 33.911 ms、総当たり 179.301 ms（18.91%、-81%）。どちらもインデックス構築を含み dispose を除く。値は報告のみで assert しない。
+- 効果の限界: ロビー切替のゲストの `frameGap` は neon でも約 1.8 s のまま（T1 で ホスト 883.2 ms / ゲスト 1816.6 ms、予算 1,500 / 2,500 ms）。主因は構築 CPU ではなくネイティブ / GPU 側と判断した。
+
+### FOREST の racingLine（`src/sim/tracks/forest.ts`、M9-02）
+- 従来は両端 offset 0 の 2 点だけだった。20 キーに増やした: ヘアピンは外→内→外（東 3 / -7.4 / 3、北 3 / -7.9 / 3）、左カーブは内側、S 字は浅く、デッキ・狭路・アンダーパス・小川のジャンプは offset 0。
+- CPU のみが使う（`ai.ts` と `corridor.ts`）。人間・ゴースト・ベストは `racingLineOffset` を使わないので `layoutVersion 1`、ghost、best は無傷。
+- 新 BASELINE（`handling.test.ts`、`version: 'm9'`）: 8 CPU × seed 1 / 42 / 98765 × 3 周 = 72 周で meanLap 69.52407407407406 s（旧 70.53587962962963 s、-1.43%）、wallHits 0、bandHits 0。他の seed 組 [2,3,4]、[7,1000,31337]、[5,6,8]、[7,2026,314159] でも速くなった。easy / hard の新 BASELINE に対する比は 1.0554 / 0.9773（記録のみ）。
+- ジャンプ通過時の横ずれ上限を 1.5 → 2.55 m に改めた（司令塔の判断）。`getAiLineOffset` が全コースで足す sin×2.5 の蛇行のためで、旧い中央線でも 2.50 m だった（実測 2.500223 m）。
+
+### COURSE_FINGERPRINT と pinned[17]（M9-02）
+- `COURSE_FINGERPRINT`（`src/sim/tracks/index.ts`）は全 TrackDef の JSON を指紋化するので racingLine を含む。`snapshotCodec.test.ts` の `pinned[17]` を **1316474231** に更新した。
+- **プロトコルは v17 のまま**。hello は `protocol !== 17 || course !== COURSE_FINGERPRINT` を `reject('version')` するので、旧ビルドとの混在は版を上げなくても弾かれる。前例（M5→v15、M6→v16）はコース変更で版を上げているが、今回は CPU の走行ラインだけで人間の入力・状態・wire は変わらないため据え置いた（司令塔の判断）。
+
+### タイムアタックの表示（M9-03）
+- `#item-display` は timeattack で非表示（「ボックスを取ろう」を出さない）。パネルの文言だけを省き、タッチのアイテムボタンは同期を続ける。
+- ゴーストの車輪が回る: `GameRenderer.updateGhost` が `dt` を取り、ロスターと同じ式で `rotation.x` を進める。デバッグブリッジに `render.ghost { visible, wheelSpin }` と `ghost.speed`（debug ビルドのみ）。`modes.spec` が 500 ms で wheelSpin が 1 rad 以上増えることを検査する。記録と再生には影響しない。
+
+### 縦画面のタイトルの幾何不変量（`e2e/layout.spec.ts`、M9-04）
+- 縦画面のみ: `.title-screen` はトップバーの下端（`--topbar-bottom`）から始まる。スクリムはスクロール領域全体の背後に固定し、`#online-entry`（bottom sheet）は `max-height: min(40vh, 160px)`、スクローラの下余白はそれ + 16 px。
+- 検査（360×640、390×844、844×390 の 3 ビューポート）: 縦画面でスクローラ上端 ≥ トップバー下端、最大スクロール時にコース選択の帯の下端 ≤ sheet の上端、横スクロールなし、コース 8・モード 3・開始ボタン 1 の各 44×44 px 以上。加えて 390×844 でホスト注意文が見出しと重ならない。4 件通過（37 s）。1280×720 の `title-eight-courses.png` は不変。
+- 見た目の最終判断は目視。幾何不変量が固定するのは位置関係だけ。
+
+### M7 の minor（M9-05）
+- `recordRace` は trackId / phase / laps の不一致を `RangeError` で拒否する。
+- `quantizeInput` は steer を [-1, 1]、throttle を [0, 1] に clamp し、NaN は 0 にする（保存できる 522,240 通りの入力は同じ符号化）。
+- `GhostRecorder.checkpoint` は同じ tick の再呼び出しを無視する。
+- `LobbyUI` は周回の選択肢を `LAP_CHOICES` から作る。`GrandPrixUI` の得点は `aria-label` ではなく視覚的に隠した文字で読み上げる。
+- `modes.spec` のグランプリは強い CPU を選び、4 レースすべてで `state.cpuLevel === 'hard'` を確認する（単独 41.6 s）。各単体テストは修正を戻すと落ちる。
+
+### jitterStats と T3 の基準（M9-06）
+- `JitterEstimator.stats(now)` は窓（`JITTER_WINDOW_MS` 3,000 ms）の lateness を nearest rank（`ceil(n·q) - 1`）で `{ samples, minMs, p50Ms, p90Ms, p95Ms, maxMs }` として返す（窓が空か `now` が非有限なら null）。`target()` は不変（2 万回の比較が同一）、netQuality と guestSession の数値も不変。
+- `GuestSession.latenessStats`（適応遅延時のみ。最後のフレームの `now` を使う）と、デバッグブリッジの `net.jitterStats`。`GuestSession` の getter 名を `jitterStats` にしなかったのは、その文字列を本番バンドルに入れないため（コミットメッセージ）。
+- `network.spec` T3 の基準 B は、劣化前に 100 ms 間隔で取った 5 標本の中央値。回復条件は不変。単独 2 回通過（B = 120.5 / 121.9 ms）。5 s 時点でも標本はまだ下降中だった（M10 送り）。推定器そのものは変えていない。実機 2 台の lateness を取ってから見直す。
+
+### 基準の更新（動いた pin / 動かない pin）
+| pin | 状態 |
+| --- | --- |
+| `COURSE_FINGERPRINT` / `snapshotCodec.test.ts` の `pinned[17]` | 動いた: 1316474231（v17 据え置き） |
+| `handling.test.ts` の forest BASELINE と `forest.test.ts` の実測コメント | 動いた: meanLap 69.524 s（`version: 'm9'`） |
+| FOREST のジャンプ横ずれ上限 | 動いた: 1.5 → 2.55 m |
+| `PROTOCOL_VERSION` 17、`ROOM_PREFIX` | 不変 |
+| `LAYOUT_FINGERPRINT` aa03c454、sim 指紋（meadow / neon）、forest `layoutVersion 1` | 不変 |
+| `buildCourse.test.ts` の形状 signature、courses.spec の 8 コース drawCalls / triangles | 不変 |
+| darwin の golden 27 枚 | 不変（SHA-256 一致。linux は新規追加のみ） |
+| netQuality の実測表、M6-07 の誤差表 | 不変 |
+
+### M10 に送ったもの
+`.omc/followups.md` の「v6 M9」節の「M10 送り」のとおり。

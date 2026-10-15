@@ -26,6 +26,10 @@ npm run e2e         # E2E（Playwright。オンライン対戦と 8 コース。
 
 `npm run e2e` は `e2e/multiplayer.spec.ts` と `e2e/courses.spec.ts` を順に実行します。`courses.spec.ts` は 8 コースそれぞれで選択から 3 周の完走、コース別ベスト、描画負荷を確認します。`multiplayer.spec.ts` は 2 つのブラウザコンテキストで実際にルームを作って参加します。**公開の PeerJS ブローカー**を使うため、ブローカーの状態や回線によって不安定な場合があります。CI（`.github/workflows/e2e.yml`）では手動実行（`workflow_dispatch`）のみです。初回は `npx playwright install chromium` が必要です。
 
+**視覚テスト（スクリーンショットの golden）**: `courses.spec.ts` の画面比較は platform ごとのディレクトリ（`e2e/__screenshots__/darwin/` に 27 枚）の golden と照合します。その platform の golden が無ければ `golden-skipped` の注釈を付けて比較だけを省き、他の検査は実行します（Linux は golden を追加するまでこの扱い）。閾値は `threshold 0.2`、`maxDiffPixels 0` です。描画負荷の drawCalls / triangles は platform を問わず完全一致を見ます。
+
+Linux の golden の取り方: GitHub の Actions で「Capture linux goldens」（`.github/workflows/goldens-linux.yml`、手動実行のみ）を実行します。書き出した直後に同じ runner で再照合し、通れば artifact `linux-goldens` ができるので、中身を `e2e/__screenshots__/linux/` に置いてコミットします。以後は Linux でも自動で照合されます。再照合が通らなければコミットしません。golden を意図して作り直すときだけ `KART_GOLDENS=write npx playwright test e2e/courses.spec.ts --update-snapshots` を使います。
+
 ## 遊び方
 
 ### 3 つのモード（1 人用）
@@ -39,6 +43,8 @@ npm run e2e         # E2E（Playwright。オンライン対戦と 8 コース。
 ### CPU の強さ
 
 「やさしい / ふつう / つよい」から選びます（初期値はふつう）。レースとグランプリで効き、タイムアタックには CPU がいません。やさしいは速度が約 7% 低く、つよいは約 4% 高くなります（コースごとの周回時間は、MEADOW でやさしい 約 73.0 秒・つよい 約 66.6 秒、ふつう 約 68.5 秒）。**オンラインの部屋は常にふつうの CPU です。**
+
+MOSSWOOD TRAIL（森のコース）の CPU は走行ラインを持ち、ヘアピンでは外から入ってイン側に付き、左カーブはイン寄り、S 字は浅く抜けます。人間のカートの挙動やベストタイムは変わりません。
 
 ### 1 人用のコースと周回数
 
