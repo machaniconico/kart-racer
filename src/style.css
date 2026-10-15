@@ -520,12 +520,17 @@ h1 span { color: var(--lime); }
 /* Portrait phones (360x640): the title scrolls vertically so every option and the start button stay reachable. */
 @media (max-width: 700px) and (orientation: portrait) {
   .title-description { display: none; }
-  .title-screen { flex-direction: column; align-items: stretch; padding-bottom: 130px; overflow-y: auto; overflow-x: hidden; overscroll-behavior-y: contain; touch-action: pan-y; }
+  /* M9-04: the scroller starts below the topbar (static --topbar-bottom = top + 44px button + 8px) so content never slides under it;
+     the strip above is painted with the title scrim colour on #app. The bottom sheet's natural height is ~132px and it is capped at min(40vh, 160px) (scrolls beyond that), so the reserve is that cap + 16px, a fixed value (no ResizeObserver). The scrim is fixed so it spans the whole scroll area instead of scrolling away. */
+  .title-screen::before { position: fixed; inset: var(--topbar-bottom) 0 0 0; }
+  #app { --topbar-bottom: calc(max(24px, env(safe-area-inset-top)) + 52px); }
+  [data-screen="title"]::before { content: ""; position: absolute; z-index: 1; top: 0; left: 0; right: 0; height: var(--topbar-bottom); pointer-events: none; background: #103b2be6; }
+  .title-screen { top: var(--topbar-bottom); bottom: 0; height: auto; padding-top: 16px; padding-bottom: calc(min(40vh, 160px) + 16px); flex-direction: column; align-items: stretch; overflow-y: auto; overflow-x: hidden; overscroll-behavior-y: contain; touch-action: pan-y; }
   .course-strip { position: relative; left: auto; right: auto; bottom: auto; flex-wrap: wrap; margin-top: 22px; }
   .course-picker { margin-left: 0; max-width: 100%; }
   .title-options, .option-select { max-width: 100%; }
   /* The online panel is a sibling of the scroller, so pin it as a bottom sheet and reserve its height above. */
-  [data-screen="title"] #online-entry { position: fixed; top: auto; bottom: 0; left: 0; right: 0; width: auto; border-radius: 7px 7px 0 0; }
+  [data-screen="title"] #online-entry { position: fixed; top: auto; bottom: 0; left: 0; right: 0; width: auto; max-height: min(40vh, 160px); overflow-y: auto; border-radius: 7px 7px 0 0; }
   .option-select .laps-options { flex-wrap: wrap; }
 }
 

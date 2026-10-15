@@ -2,7 +2,7 @@ import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: ['multiplayer.spec.ts', 'courses.spec.ts', 'roulette.spec.ts', 'handling.spec.ts', 'modes.spec.ts', 'network.spec.ts'],
+  testMatch: ['multiplayer.spec.ts', 'courses.spec.ts', 'roulette.spec.ts', 'handling.spec.ts', 'modes.spec.ts', 'network.spec.ts', 'layout.spec.ts'],
   fullyParallel: false,
   // M6-05: 29 tests / 23.95 min on darwin; below the 35 min threshold for workers 2.
   workers: 1,
