@@ -47,7 +47,23 @@ export const forest: TrackDef = {
     { distance: 1300, ...base }, { distance: 1330, ...narrow },
     { distance: 1370, ...narrow }, { distance: 1400, ...base },
   ],
-  racingLine: [{ distance: 0, offset: 0 }, { distance: FOREST_LENGTH, offset: 0 }],
+  // Positive offsets are on the outside of the right-hand hairpins and inside the left-hand bends.
+  // The bridge deck, the narrow sections and the creek jump (1050–1400 m) stay on the centre line.
+  racingLine: [
+    { distance: 0, offset: 0 }, { distance: 440, offset: 0 },
+    // East hairpin: out, in, out.
+    { distance: 470, offset: 3 }, { distance: 518, offset: -7.4 }, { distance: 568, offset: 3 },
+    { distance: 745, offset: 7.9 },
+    // North hairpin: out, in, out.
+    { distance: 900, offset: 3 }, { distance: 960, offset: -7.9 }, { distance: 1005, offset: 3 },
+    { distance: 1050, offset: 0 }, { distance: 1400, offset: 0 },
+    { distance: 1550, offset: 7.9 },
+    // Fern slalom and root bends: cut each apex to flatten the switchbacks.
+    { distance: 1671, offset: -3.5 }, { distance: 1708, offset: 2.5 }, { distance: 1746, offset: -1.5 },
+    { distance: 1870, offset: 7.9 },
+    { distance: 1981, offset: -1.5 }, { distance: 2018, offset: 1.5 }, { distance: 2055, offset: -1.5 },
+    { distance: FOREST_LENGTH, offset: 0 },
+  ],
   surfaces: [
     { kind: 'dirt', from: 350, to: 440 },
     { kind: 'dirt', from: 760, to: 840 },

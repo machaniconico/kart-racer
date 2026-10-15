@@ -186,14 +186,16 @@ describe('H1 handling', () => {
 // All values match the M5-01–04 reports (rounding only); NEON's band hit is seed 1.
 // M6-05 / v16, darwin-arm64: 8 CPUs × seeds [1, 42, 98765] × 3 laps (72 per course).
 // Original four values re-measured identically to M5-05; M6-09 changes rendering only.
-type Baseline = { version: 'v15' | 'v16'; meanLap: number; wallHits: number; bandHits: number };
+// M9-02: FOREST racing line (hairpins out-in-out, shallow S sections), 70.53587962962962 -> 69.52407407407406 s.
+// FOREST easy / hard: 73.37800925925927 (1.0554) / 67.94791666666666 (0.9773), 0/0 hits each (recorded, not required).
+type Baseline = { version: 'v15' | 'v16' | 'm9'; meanLap: number; wallHits: number; bandHits: number };
 const BASELINE: Record<(typeof tracks.TRACK_IDS)[number], Baseline> = {
   meadow: { version: 'v15', meanLap: 68.5011574074074, wallHits: 0, bandHits: 0 },
   canyon: { version: 'v15', meanLap: 68.49583333333334, wallHits: 0, bandHits: 0 },
   snowpeak: { version: 'v15', meanLap: 67.89120370370368, wallHits: 0, bandHits: 0 },
   neon: { version: 'v15', meanLap: 64.32939814814814, wallHits: 0, bandHits: 1 },
   harbor: { version: 'v16', meanLap: 69.73750000000001, wallHits: 0, bandHits: 0 },
-  forest: { version: 'v16', meanLap: 70.53587962962962, wallHits: 0, bandHits: 0 },
+  forest: { version: 'm9', meanLap: 69.52407407407406, wallHits: 0, bandHits: 0 },
   volcano: { version: 'v16', meanLap: 67.82407407407408, wallHits: 0, bandHits: 0 },
   skyline: { version: 'v16', meanLap: 67.35324074074076, wallHits: 0, bandHits: 1 },
 };

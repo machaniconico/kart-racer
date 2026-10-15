@@ -126,8 +126,15 @@ describe('MOSSWOOD TRAIL', () => {
       expect(after.distance).toBeGreaterThan(before.distance);
       expect(Math.abs(after.offset - before.offset) / (after.distance - before.distance)).toBeLessThanOrEqual(0.3);
     }
+    // M9-02: 10–20 keys; centred on the deck, both narrows and 30 m either side of the creek jump.
+    expect(line.length).toBeGreaterThanOrEqual(10);
+    expect(line.length).toBeLessThanOrEqual(20);
+    for (const [from, to] of [[130, 170], [208, 278], [1230, 1290], [1330, 1370]] as const) {
+      for (let d = from; d <= to; d++) expect(racingLineOffset(track, d), `racing line at ${d} m`).toBe(0);
+    }
     for (const p of track.samples) {
       const offset = racingLineOffset(track, p.distance);
+      expect(Math.abs(offset)).toBeLessThanOrEqual(widthAt(track, p.distance).roadHalfWidth - KART_RADIUS - 0.5);
       expect(corridorAt(track, p.distance, 0).some(interval => offset >= interval.min && offset <= interval.max)).toBe(true);
     }
   });
@@ -232,19 +239,29 @@ describe('MOSSWOOD TRAIL', () => {
     } finally { course.dispose(); vi.unstubAllGlobals(); }
   });
 
-  // M6-02 / darwin-arm64: 8 CPUs × seeds [1, 42, 98765] × 3 laps = 72 laps.
-  // Measured meanLap 70.53587962962963 s, wallHits 0, bandHits 0 (no AI/sim changes).
-  // Per-seed means: 70.59583333333335, 70.19097222222221, 70.82083333333333 s; all hits 0.
+  // M9-02 / darwin-arm64: 8 CPUs × seeds [1, 42, 98765] × 3 laps = 72 laps, with the racing line.
+  // Measured meanLap 69.52407407407406 s (M6-02 centre line: 70.53587962962963 s, −1.43 %), wallHits 0, bandHits 0.
+  // Per-seed means: 69.86527777777779, 69.47222222222223, 69.23472222222222 s; all hits 0.
+  // Max |lateralOffset| over the 72 jump crossings: 2.500223446354248 m, the ±2.5 m CPU weave of getAiLineOffset
+  // on a zero racing line (the M6-02 centre line also measured 2.5002 m).
   // Length 2237.3654195978625 m; radius 17.349946898361907 m; max slope 0.12959622113025598;
   // elevation range 13.864839823647234 m; crossing height difference 13.2 m.
   // GPU baseline remains null until M6-05; E2E is deliberately not run in this story.
   it('finishes all 72 CPU laps within the pace and collision budgets', () => {
     const lapTimes: number[] = [];
     let wallHits = 0, bandHits = 0;
+    const jumpOffsets: number[] = [];
     for (const seed of [1, 42, 98765]) {
       const state = createRace(seed, { trackId: 'forest', racers: [] });
       for (let tick = 0; tick < 60 * 420 && state.phase !== 'finished'; tick++) {
+        const previous = state.karts.map(kart => kart.trackDistance);
         stepRace(state, state.karts.map(kart => getAIInput(state, kart.id)));
+        state.karts.forEach((kart, index) => {
+          const before = previous[index]!;
+          if (kart.finishTime === null && before < 1260 && kart.trackDistance >= 1260 && kart.trackDistance - before < 10) {
+            jumpOffsets.push(kart.lateralOffset);
+          }
+        });
         for (const event of state.events) {
           if (event.type !== 'hit') continue;
           if (event.value === 1) { bandHits++; continue; }
@@ -268,7 +285,11 @@ describe('MOSSWOOD TRAIL', () => {
     expect(meanLap).toBeGreaterThanOrEqual(60);
     expect(meanLap).toBeGreaterThanOrEqual(track.length / 40);
     expect(meanLap).toBeLessThanOrEqual(track.length / 20);
-    expect(wallHits).toBeLessThanOrEqual(6);
+    expect(meanLap).toBeLessThanOrEqual(69.8);
+    expect(wallHits).toBeLessThanOrEqual(2);
     expect(bandHits).toBe(0);
+    // Every CPU crosses the creek jump once per lap close to the centre line.
+    expect(jumpOffsets).toHaveLength(72);
+    for (const offset of jumpOffsets) expect(Math.abs(offset)).toBeLessThanOrEqual(2.55);
   }, 120_000);
 });

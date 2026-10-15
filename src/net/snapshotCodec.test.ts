@@ -599,8 +599,9 @@ describe('protocol layout fingerprint', () => {
     const definitions = TRACK_IDS.map(id => TRACKS[id]);
     pinned[15] = 642527371; // M5-05: measured after M5-01–04 and the shared followups
     pinned[16] = 513548114; // M6-05: measured after all eight courses and M6-09
-    pinned[17] = 513548114; // M7-00: v17 only adds RaceState.cpuLevel; M7 leaves course definitions unchanged
-    expect(pinned[17]).toBe(pinned[16]);
+    // M7-00: v17 only added RaceState.cpuLevel (513548114). M9-02 forest racingLine、v17 のまま:
+    // the hello handshake rejects COURSE_FINGERPRINT mismatches ('version'), so older builds cannot mix.
+    pinned[17] = 1316474231;
     expect(COURSE_FINGERPRINT).toBe(Number.parseInt(fingerprint(definitions), 16));
     expect(COURSE_FINGERPRINT).toBe(pinned[PROTOCOL_VERSION]);
     expect(fingerprint(definitions.map((def, index) => index === 0 ? { ...def, roadHalfWidth: 8 } : def)))
