@@ -1,4 +1,5 @@
 import type { Pose, RaceState } from '../sim/types';
+import { TICK_MS } from './clock';
 import type { Snapshot } from './snapshotCodec';
 
 export const INTERPOLATION_DELAY_MS = 100;
@@ -19,6 +20,8 @@ export function interpolateState(from: Snapshot, to: Snapshot, hostTime: number,
   const duration = to.hostTime - from.hostTime;
   const alpha = duration > 0 ? Math.max(0, Math.min(1, (hostTime - from.hostTime) / duration)) : 1;
   const seconds = Math.min(MAX_EXTRAPOLATION_MS, Math.max(0, hostTime - to.hostTime)) / 1000;
+  // Rates use simulated time: a slow host can send two snapshots within one wall millisecond.
+  const rateDuration = (to.state.tick - from.state.tick) * TICK_MS;
   for (const kart of state.karts) {
     const previous = from.state.karts.find(entry => entry.id === kart.id);
     const current = to.state.karts.find(entry => entry.id === kart.id);
@@ -38,15 +41,15 @@ export function interpolateState(from: Snapshot, to: Snapshot, hostTime: number,
     // Advance along the travel direction (heading minus drift slip, as the sim moves) at the latest
     // speed, turning it at the last snapshot pair's heading rate so a curve is followed as an arc.
     const travel = kart.heading - kart.driftDirection * Math.min(0.23, kart.driftTime * 0.35);
-    const turn = previous && duration > 0 && seconds > 0
-      ? Math.atan2(Math.sin(current.heading - previous.heading), Math.cos(current.heading - previous.heading)) * seconds * 1000 / duration
+    const turn = previous && rateDuration > 0 && seconds > 0
+      ? Math.atan2(Math.sin(current.heading - previous.heading), Math.cos(current.heading - previous.heading)) * seconds * 1000 / rateDuration
       : 0;
     // sin(a + t) - sin(a) = 2 sin(t/2) cos(a + t/2): the exact arc, and the straight line as turn -> 0.
     const chord = Math.abs(turn) > 1e-9 ? 2 * Math.sin(turn / 2) / turn : 1;
     kart.x += Math.sin(travel + turn / 2) * kart.speed * seconds * chord;
     kart.z += Math.cos(travel + turn / 2) * kart.speed * seconds * chord;
     // Karts carry no vertical speed, so extrapolate y along the last snapshot pair's slope.
-    if (previous && duration > 0) kart.y += (current.y - previous.y) * seconds * 1000 / duration;
+    if (previous && rateDuration > 0) kart.y += (current.y - previous.y) * seconds * 1000 / rateDuration;
   }
   const oldEntities = new Map([...from.state.projectiles, ...from.state.traps].map(entity => [entity.id, entity]));
   const newEntities = new Map([...to.state.projectiles, ...to.state.traps].map(entity => [entity.id, entity]));
@@ -55,8 +58,8 @@ export function interpolateState(from: Snapshot, to: Snapshot, hostTime: number,
     const current = newEntities.get(entity.id);
     if (!previous || !current || previous.kind !== entity.kind) continue;
     mixPose(entity, previous, current, alpha);
-    if ('bounces' in entity && duration > 0 && seconds > 0) {
-      const scale = seconds * 1000 / duration;
+    if ('bounces' in entity && rateDuration > 0 && seconds > 0) {
+      const scale = seconds * 1000 / rateDuration;
       entity.x += (current.x - previous.x) * scale;
       entity.y += (current.y - previous.y) * scale;
       entity.z += (current.z - previous.z) * scale;

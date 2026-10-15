@@ -335,8 +335,11 @@ describe('HostSession lobby', () => {
   // Measured in e2e C-010 (Chromium headless, host and guest sharing one SwiftShader GPU), longest
   // gap between messages the host handled around the change: before M6-07 4548 / 5313 / 5194 ms
   // (the guest also hit host_lost in 3 of 5 runs); after, 4264 / 4233 / 4035 / 4078 / 3889 ms.
-  // A host stall of 4.3 s keeps the guest; 5.6 s (beyond the 5 s budget) does not.
-  it.each([{ stallMs: 4300, phase: 'lobby' }, { stallMs: 5600, phase: 'closed' }])
+  // M8-02: a guest that received a course tolerates COURSE_GRACE_MS (10 s) of host silence for the
+  // next 10 s, LOBBY_TIMEOUT_MS (5 s) otherwise; the plain 5 s lobby timeout is pinned by
+  // guestSession.test.ts "(b) without a course change, closes after LOBBY_TIMEOUT_MS of host silence".
+  // A host stall of 4.3 s keeps the guest; 10.6 s (beyond the 10 s course grace) does not.
+  it.each([{ stallMs: 4300, phase: 'lobby' }, { stallMs: 10_600, phase: 'closed' }])
   ('puts a course change on the wire before listeners rebuild; host stall $stallMs ms leaves the guest $phase', async ({ stallMs, phase }) => {
     const network = new MockTransport({ latencyMs: 30 });
     const host = await HostSession.create(network, { roomCode: 'AB2X', now: () => network.now });

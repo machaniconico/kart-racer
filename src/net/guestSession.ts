@@ -17,6 +17,11 @@ import type { Snapshot } from './snapshotCodec';
 import { TransportError } from './transport';
 import type { ChannelKind, PeerLink, Transport, TransportErrorCode, WireData } from './transport';
 
+/** Lobby/results host silence that ends the session. */
+export const LOBBY_TIMEOUT_MS = 5000;
+/** The host rebuilds its renderer after sending a course, so tolerate a longer silence meanwhile. */
+export const COURSE_GRACE_MS = 10_000;
+
 export interface GuestSessionOptions {
   name?: string;
   color?: number;
@@ -62,7 +67,8 @@ export class GuestSession {
   private eventTick = -1;
   private pendingEvents: RaceEvent[] = [];
   private lastSnapshotAt = 0;
-  private lastPongAt = 0;
+  private lastHostSeenAt = 0;
+  private graceUntil = 0;
   private lastPollAt: number | null = null;
   private stallExcused = false;
   private joinedAt = 0;
@@ -131,7 +137,7 @@ export class GuestSession {
     this.pingCount = 0;
     this.fallbackOffset = 0;
     this.joinedAt = this.now();
-    this.lastPongAt = this.joinedAt;
+    this.lastHostSeenAt = this.joinedAt;
     this.nextPingAt = this.joinedAt;
     this.setPhase('connecting');
     try {
@@ -199,6 +205,7 @@ export class GuestSession {
     this.pendingUseItem = false;
     this.inputHistory = [];
     this.isStalled = false;
+    this.graceUntil = 0;
   }
 
   private start(message: RaceStart, now: number): void {
@@ -234,12 +241,13 @@ export class GuestSession {
     }
     const clock = unpackClock(data);
     if (clock?.kind === PacketKind.PING) {
+      this.lastHostSeenAt = now;
       this.send('unreliable', packPong(clock.t0, now));
       return;
     }
     if (clock?.kind === PacketKind.PONG) {
       if (this.pings.delete(clock.t0) && this.clock.sample(clock.t0, clock.hostNow, now)) {
-        this.lastPongAt = now;
+        this.lastHostSeenAt = now;
         // Clock offset uses the minimum RTT. Input lead must react immediately
         // to a slower path instead of waiting ten seconds for that sample to age.
         this.inputRtt = Math.max(now - clock.t0, this.inputRtt * 0.9);
@@ -274,6 +282,7 @@ export class GuestSession {
   }
 
   private control(message: ControlMessage, now: number): void {
+    this.lastHostSeenAt = now;
     switch (message.type) {
       case 'welcome':
         if (this.phase !== 'connecting') return;
@@ -282,7 +291,7 @@ export class GuestSession {
         this.selectedTrackId = message.trackId;
         this.selectedLaps = message.laps;
         this.fallbackOffset = message.hostTime - now;
-        this.lastPongAt = now;
+        this.lastHostSeenAt = now;
         this.setPhase('lobby');
         break;
       case 'reject':
@@ -292,6 +301,7 @@ export class GuestSession {
         if (this.phase !== 'lobby') return;
         this.selectedTrackId = message.trackId;
         this.selectedLaps = message.laps;
+        this.graceUntil = now + COURSE_GRACE_MS;
         this.notify();
         break;
       case 'roster':
@@ -336,17 +346,17 @@ export class GuestSession {
   }
 
   /** The caller blocked the main thread since the last poll (e.g. rebuilding the renderer).
-   * That time is not host silence: no PONG or snapshot could be handled meanwhile. */
+   * That time is not host silence: no host message or snapshot could be handled meanwhile. */
   excuseStall(): void { this.stallExcused = true; }
 
   private poll(): number {
     const now = this.now();
     if (this.stallExcused && this.lastPollAt !== null) {
       const gap = Math.max(0, now - this.lastPollAt);
-      // Shift by the stall but never past now: a PONG or snapshot handled after the stall already
+      // Shift by the stall but never past now: a host message or snapshot handled after the stall already
       // carries a fresh time. A deadline already in the future (the scheduled race start) is kept.
       const excuse = (at: number): number => at > now ? at : Math.min(now, at + gap);
-      this.lastPongAt = excuse(this.lastPongAt);
+      this.lastHostSeenAt = excuse(this.lastHostSeenAt);
       this.lastSnapshotAt = excuse(this.lastSnapshotAt);
     }
     this.stallExcused = false;
@@ -354,7 +364,8 @@ export class GuestSession {
     // Never pass rAF's older frame timestamp into ClockSync.expire/sample.
     this.clock.expire(now);
     if (this.phase === 'connecting' && this.link && now - this.joinedAt >= 5000) this.finish('timeout');
-    if ((this.phase === 'lobby' || this.phase === 'results') && now - this.lastPongAt >= 5000) this.finish('host_lost');
+    const limit = now < this.graceUntil ? COURSE_GRACE_MS : LOBBY_TIMEOUT_MS;
+    if ((this.phase === 'lobby' || this.phase === 'results') && now - this.lastHostSeenAt >= limit) this.finish('host_lost');
     if (this.activeRace) {
       const silence = now - this.lastSnapshotAt;
       if (silence >= 5000) this.finish('host_lost');

@@ -4,7 +4,7 @@ import { getAIInput } from '../sim/ai';
 import { createRace, stepRace } from '../sim/race';
 import type { InputFrame, RaceState } from '../sim/types';
 import { packPong, TICK_MS, unpackClock } from './clock';
-import { GuestSession } from './guestSession';
+import { COURSE_GRACE_MS, GuestSession, LOBBY_TIMEOUT_MS } from './guestSession';
 import { HostSession } from './hostSession';
 import { InputBuffer, NEUTRAL_INPUT, unpack } from './inputBuffer';
 import type { InputPacket } from './inputBuffer';
@@ -191,6 +191,33 @@ describe('SnapshotBuffer and interpolation', () => {
     expect(view.karts[1].item).toBe('tripleDash');
     expect(view.karts[1].effects.charges).toBe(3);
     expect(view.projectiles[0].x).toBe(42);
+  });
+
+  it('extrapolates rates over the tick gap when a slow host sends two snapshots 0.3 ms apart', () => {
+    // At host <= 15 fps one rAF steps several ticks and sends two snapshots almost together;
+    // dividing by that wall gap extrapolated ~166 times too far.
+    const from = snapshot(9, 1000, 0);
+    const to = snapshot(12, 1000.3, 0);
+    for (const [value, heading, y] of [[from, 0, 0], [to, 0.05, 0.1]] as const) {
+      for (const kart of value.state.karts) Object.assign(kart, { x: 0, y, z: 0, speed: 30, heading, driftTime: 0 });
+      value.state.projectiles = [{ kind: 'bolt', id: 1000, ownerId: 0, x: heading * 20, y: 0, z: heading * 10,
+        heading: 0, life: 3, bounces: 1 }];
+    }
+    const view = interpolateState(from, to, 1050);
+    const seconds = (1050 - 1000.3) / 1000;
+    for (const kart of view.karts) {
+      const advance = Math.hypot(kart.x, kart.z);
+      expect(advance).toBeLessThanOrEqual(30 * 0.05);
+      expect(Math.abs(advance - 30 * seconds)).toBeLessThanOrEqual(30 * seconds * 0.01);
+      // The arc's chord points half the extrapolated turn past the last heading.
+      expect(Math.abs(Math.atan2(kart.x, kart.z) - 0.05)).toBeLessThanOrEqual(0.05);
+      expect(kart.y - 0.1).toBeGreaterThan(0);
+      expect(kart.y - 0.1).toBeLessThanOrEqual(0.1);
+    }
+    const [bolt] = view.projectiles;
+    const step = Math.hypot(1, 0.5);
+    expect(Math.hypot(bolt.x - 1, bolt.z - 0.5)).toBeLessThanOrEqual(step * 1.0);
+    expect(Math.hypot(bolt.x - 1, bolt.z - 0.5)).toBeGreaterThan(step * 0.99);
   });
 });
 
@@ -570,9 +597,10 @@ describe('GuestSession', () => {
       h.send({ type: 'race_end', raceId: 1, finalState: final });
       h.network.advance(0);
     }
-    // The last valid pong was at 400ms. Unsolicited pongs are not liveness evidence.
+    // The last valid pong was at 400ms; in results the reliable race_end at 500ms is the last host message.
+    // Unsolicited pongs are not liveness evidence.
     h.answerPings(false);
-    h.pump(4890);
+    h.pump(phase === 'results' ? 4990 : 4890);
     h.link.send('unreliable', packPong(123, h.network.now));
     h.network.advance(0);
     expect(h.guest.phase).toBe(phase);
@@ -959,5 +987,95 @@ describe('HostSession integration', () => {
     expect(guest.frame()!.state.tick).toBe(0);
     host.close();
     expect(guest.reason).toBe('host_lost');
+  });
+});
+
+describe('Guest lobby liveness (M8-02)', () => {
+  /** A real host in the lobby; heardAt() is the network time of the last host message the guest received. */
+  async function lobby(options: MockTransportOptions = {}) {
+    const network = new MockTransport({ latencyMs: 20, ...options });
+    let room!: Awaited<ReturnType<MockTransport['host']>>;
+    let heard = -Infinity;
+    const transport: Transport = {
+      host: async code => (room = await network.host(code)),
+      join: async code => {
+        const link = await network.join(code);
+        const onMessage = link.onMessage.bind(link);
+        link.onMessage = handler => onMessage((kind, data) => { heard = network.now; handler(kind, data); });
+        return link;
+      },
+    };
+    const host = await HostSession.create(transport, { roomCode: 'AB2X', now: () => network.now });
+    const guest = new GuestSession(transport, { now: () => network.now, prediction: false });
+    await guest.join('AB2X');
+    for (let n = 0; n < 200; n++) { host.frame(); guest.frame(); network.advance(10); }
+    expect(guest.phase).toBe('lobby');
+    // Holding the host-side link models a host main thread blocked by a renderer rebuild.
+    const hostPeer = [...room.links][0].peerId;
+    /** Advances in 10 ms frames until ms elapse or the guest closes; returns the close time, if any. */
+    const run = (ms: number, hostFrames: boolean) => {
+      const end = network.now + ms;
+      while (network.now < end) {
+        if (hostFrames) host.frame();
+        network.advance(10);
+        guest.frame();
+        if (guest.phase === 'closed') return network.now;
+      }
+      return null;
+    };
+    return { network, host, guest, hostPeer, run, heardAt: () => heard };
+  }
+
+  it('(a) keeps the lobby through an 8 s host stall right after a course change, then resumes on PONGs', async () => {
+    const { network, host, guest, hostPeer, run } = await lobby();
+    host.setCourse('neon');
+    network.hold(hostPeer);
+    expect(run(8000, false)).toBeNull();
+    expect(guest.phase).toBe('lobby');
+    expect(guest.course).toBe('neon');
+    network.release(hostPeer);
+    // No host.frame(): only PONGs answering the guest's pings keep it alive after the grace expires.
+    expect(run(12_000, false)).toBeNull();
+    expect(guest.phase).toBe('lobby');
+    host.close();
+  });
+
+  it('(b) without a course change, closes after LOBBY_TIMEOUT_MS of host silence', async () => {
+    const { network, guest, hostPeer, run, heardAt } = await lobby();
+    network.hold(hostPeer);
+    const closedAt = run(5500, false);
+    expect(guest.reason).toBe('host_lost');
+    expect(closedAt! - heardAt()).toBeGreaterThanOrEqual(LOBBY_TIMEOUT_MS);
+    expect(closedAt! - heardAt()).toBeLessThan(LOBBY_TIMEOUT_MS + 10);
+  });
+
+  it('(c) after a course change, closes after COURSE_GRACE_MS of host silence', async () => {
+    const { network, host, guest, hostPeer, run, heardAt } = await lobby();
+    host.setCourse('neon');
+    network.hold(hostPeer);
+    const closedAt = run(10_500, false);
+    expect(guest.reason).toBe('host_lost');
+    expect(closedAt! - heardAt()).toBeGreaterThanOrEqual(COURSE_GRACE_MS);
+    expect(closedAt! - heardAt()).toBeLessThan(COURSE_GRACE_MS + 10);
+  });
+
+  it('(d) a reliable-only host keeps the lobby alive but is lost 5 s into a snapshot-less countdown', async () => {
+    const { host, guest, run } = await lobby({ lossRate: 1 });
+    // Every PING and PONG is lost; only reliable roster updates every 2 s reach the guest.
+    for (let second = 0; second < 20; second += 2) {
+      expect(host.setProfile(`Host ${second}`, host.roster.players[0].color)).toBe(true);
+      expect(run(2000, true)).toBeNull();
+    }
+    expect(guest.phase).toBe('lobby');
+    expect(guest.roster.players[0].name).toBe('Host 18');
+    host.startRace(1);
+    expect(run(100, true)).toBeNull();
+    expect(guest.phase).toBe('countdown');
+    const closedAt = run(10_000, true);
+    expect(guest.reason).toBe('host_lost');
+    // The scheduled start is not an outage; snapshot silence counts from it (plus one-way latency).
+    expect(closedAt! - host.startAtHostTime).toBeGreaterThanOrEqual(5000);
+    expect(closedAt! - host.startAtHostTime).toBeLessThan(5000 + 20 + 10);
+    host.close();
   });
 });
