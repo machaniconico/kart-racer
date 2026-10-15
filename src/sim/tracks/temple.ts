@@ -1,67 +1,68 @@
 import type { TrackDef } from '../types';
-import { BASE_ROAD_HALF_WIDTH, BASE_WALL_HALF_WIDTH } from './widths';
+import { buildTrack } from '../track';
+import { islandSplit } from './features';
+import { BASE_ROAD_HALF_WIDTH, BASE_WALL_HALF_WIDTH, WIDTH_SCALE } from './widths';
+
+const base = { roadHalfWidth: BASE_ROAD_HALF_WIDTH, wallHalfWidth: BASE_WALL_HALF_WIDTH };
+const layout: TrackDef = {
+  id: 'temple', name: 'SUNKEN TEMPLE', layoutVersion: 1, themeId: 'temple',
+  // Enter the sunken courtyard, climb the eastern shrines, cross its raised
+  // causeway, then weave through the jungle terraces back to the start.
+  controlPoints: [
+    [-170, 2, 0], [-100, 2, 0], [0, 2, 0], [100, 2, 0], [200, 2, 0],
+    [240, 2, 0], [260, 3, 0], [284.395, 4, -10.105], [294.5, 5, -34.5],
+    [284.395, 6, -58.895], [260, 7, -69], [240, 8, -69], [220, 9, -69],
+    [190, 10, -69], [150, 12, -85], [130, 15, -120], [130, 18, -160],
+    [130, 20, -220], [130, 20, -250], [119.895, 20, -274.395],
+    [95.5, 20, -284.5], [71.105, 20, -274.395], [61, 20, -250],
+    [61, 20, -220], [61, 20, -150], [61, 20, -80], [61, 20, 0],
+    [61, 20, 80], [61, 11, 160], [30, 5, 220], [-30, 2, 280],
+    [-90, 2, 310], [-170, 2, 310], [-250, 3, 310], [-320, 4, 290],
+    [-340, 5, 245], [-328, 6, 195], [-340, 7, 145], [-328, 7, 95],
+    [-340, 7, 45], [-320, 7, 0], [-260, 4, 0],
+  ],
+  scale: 1, samplesPerSegment: 32, ...base,
+  checkpointCount: 24,
+  boxRows: [0.04, 0.23, 0.32, 0.44, 0.60, 0.72, 0.82, 0.93],
+  boxLanes: [-5.33, 0, 5.33],
+  racingLine: [], surfaces: [],
+};
+
+const geometry = buildTrack(layout);
+const at = (index: number) => geometry.samples[index * layout.samplesPerSegment]!.distance;
+export const TEMPLE_LENGTH = geometry.length;
+const island = islandSplit({ from: 310, to: 360, islandHalf: 3,
+  laneWidth: 11.7, taper: 10, scenery: 'building', risky: 'inner', bend: 1 });
+const lane = island.splits[0]!.lanes.find(candidate => candidate.risk === 0)!;
+const safeOffset = (lane.offsetMin + lane.offsetMax) / 2;
 
 export const temple: TrackDef = {
-  id: 'temple',
-  name: 'SUNKEN TEMPLE',
-  layoutVersion: 3,
-  controlPoints: [
-    // Home straight and the east hairpin (27 m control-point radius).
-    [0, 1, 0], [80, 1, 0], [160, 1, 0], [203, 1, 0],
-    [230, 1, 0], [249.092, 1, 7.908], [257, 1, 27],
-    [249.092, 1, 46.092], [230, 1, 54], [203, 1, 54],
-    [160, 1, 54], [80, 1, 54], [10, 1, 85], [-20, 1, 140],
-    // Meadow ridge: the crest levels out before the descent.
-    [-30, 8, 215], [-90, 9, 250], [-180, 9, 250], [-250, 8, 200],
-    [-290, 3, 120], [-300, 1, 20], [-290, 1, -100], [-250, 1, -180],
-    [-220, 1, -210],
-    // Four alternating bends, then a sweeping southern compound corner.
-    [-160, 1, -200], [-110, 1, -220], [-60, 1, -200], [-10, 1, -220],
-    [50, 1, -210], [130, 1, -200], [190, 1, -150], [190, 1, -100],
-    [130, 1, -60], [40, 1, -80], [-13, 1, -80], [-40, 1, -80],
-    [-68.284, 1, -68.284], [-80, 1, -40], [-68.284, 1, -11.716],
-    [-40, 1, 0], [-13, 1, 0],
+  ...layout,
+  decks: [{ from: at(26) - 28, to: at(26) + 28 }],
+  widthKeys: [
+    { distance: 270, ...base },
+    ...island.widthKeys.map(key => ({ ...key, wallHalfWidth: Math.max(BASE_WALL_HALF_WIDTH, key.roadHalfWidth) })),
+    { distance: 400, ...base },
   ],
-  scale: 1,
-  samplesPerSegment: 32,
-  roadHalfWidth: BASE_ROAD_HALF_WIDTH,
-  wallHalfWidth: BASE_WALL_HALF_WIDTH,
-  checkpointCount: 24,
-  boxRows: [0.02, 0.12, 0.24, 0.36, 0.47, 0.58, 0.695, 0.81],
-  boxLanes: [-5.33, 0, 5.33],
+  splits: island.splits,
+  barriers: [
+    ...island.barriers,
+    // Stone doors retract into the sides; the central passage remains open
+    // throughout their cycle, even when each door is fully extended.
+    { from: 200, to: 222, center: 8, halfWidth: 3, taper: 7, scenery: 'pillar',
+      motion: { kind: 'gate', amplitude: 0, period: 7, phase: 0, minWidth: 0.6 * WIDTH_SCALE } },
+    { from: at(24) + 15, to: at(24) + 37, center: -8, halfWidth: 3, taper: 7, scenery: 'pillar',
+      motion: { kind: 'gate', amplitude: 0, period: 9, phase: 1, minWidth: 0.6 * WIDTH_SCALE } },
+  ],
   racingLine: [
     { distance: 0, offset: 0 },
-    { distance: 180, offset: 0 },
-    { distance: 215, offset: 3 },
-    { distance: 272, offset: -3 },
-    { distance: 330, offset: 3 },
-    { distance: 390, offset: 0 },
-    { distance: 600, offset: 0 },
-    { distance: 780, offset: 0 },
-    { distance: 1000, offset: 0 },
-    { distance: 1240, offset: 0 },
-    { distance: 1370, offset: 0 },
-    { distance: 1660, offset: 0 },
-    { distance: 1950, offset: 0 },
-    { distance: 2120, offset: 0 },
-    { distance: 2286.353556318704, offset: 0 },
+    { distance: 270, offset: 0 }, { distance: 310, offset: safeOffset },
+    { distance: 360, offset: safeOffset }, { distance: 400, offset: 0 },
+    { distance: geometry.length, offset: 0 },
   ],
   surfaces: [
-    { kind: 'dirt', from: 440, to: 520 },
-    { kind: 'jump', from: 733, to: 736 },
-    { kind: 'dirt', from: 1670, to: 1750 },
+    { kind: 'spin', from: 130, to: 142, offsetMin: -6, offsetMax: 6, rate: 0.8 },
+    { kind: 'spin', from: at(25) + 20, to: at(25) + 32, offsetMin: -6, offsetMax: 6, rate: -0.8 },
+    { kind: 'boost', from: at(31) + 24, to: at(31) + 30 },
   ],
-  widthKeys: [
-    { distance: 1145, roadHalfWidth: BASE_ROAD_HALF_WIDTH, wallHalfWidth: BASE_WALL_HALF_WIDTH },
-    { distance: 1165, roadHalfWidth: 5.15, wallHalfWidth: 7.5 },
-    { distance: 1195, roadHalfWidth: 5.15, wallHalfWidth: 7.5 },
-    { distance: 1215, roadHalfWidth: BASE_ROAD_HALF_WIDTH, wallHalfWidth: BASE_WALL_HALF_WIDTH },
-  ],
-  bankKeys: [
-    { distance: 780, roll: 0 },
-    { distance: 810, roll: 0.18 },
-    { distance: 880, roll: 0.18 },
-    { distance: 910, roll: 0 },
-  ],
-  themeId: 'temple',
 };
