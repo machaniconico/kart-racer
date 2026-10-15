@@ -82,12 +82,16 @@ h1 span { color: var(--lime); }
 .laps-select { min-width: 0; margin: 0; padding: 0; border: 0; }
 .laps-select legend { margin-bottom: 4px; font-size: 10px; font-weight: 700; }
 .laps-options { display: flex; flex-wrap: wrap; gap: 6px; }
-.laps-option { position: relative; flex: 1 0 44px; min-width: 44px; min-height: 44px; cursor: pointer; touch-action: manipulation; }
-.laps-option input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
-.laps-option span { display: grid; place-items: center; min-height: 44px; border: 1px solid #ffffff60; border-radius: 5px; background: #173d35a6; font-size: 12px; font-weight: 800; }
-.laps-option input:hover + span { background: #326957; }
-.laps-option input:checked + span { background: var(--lime); border-color: var(--lime); color: var(--ink); }
-.laps-option input:focus-visible + span { outline: 3px solid var(--lime); outline-offset: 2px; }
+.title-options { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.option-select .laps-options { flex-wrap: nowrap; }
+.option-select .mode-option, .option-select .cup-option, .option-select .cpu-option { flex: 1 0 auto; }
+.option-select span { padding: 0 8px; white-space: nowrap; }
+.laps-option, .mode-option, .cup-option, .cpu-option { position: relative; flex: 1 0 44px; min-width: 44px; min-height: 44px; cursor: pointer; touch-action: manipulation; }
+.laps-option input, .mode-option input, .cup-option input, .cpu-option input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.laps-option span, .mode-option span, .cup-option span, .cpu-option span { display: grid; place-items: center; min-height: 44px; border: 1px solid #ffffff60; border-radius: 5px; background: #173d35a6; font-size: 12px; font-weight: 800; }
+.laps-option input:hover + span, .mode-option input:hover + span, .cup-option input:hover + span, .cpu-option input:hover + span { background: #326957; }
+.laps-option input:checked + span, .mode-option input:checked + span, .cup-option input:checked + span, .cpu-option input:checked + span { background: var(--lime); border-color: var(--lime); color: var(--ink); }
+.laps-option input:focus-visible + span, .mode-option input:focus-visible + span, .cup-option input:focus-visible + span, .cpu-option input:focus-visible + span { outline: 3px solid var(--lime); outline-offset: 2px; }
 .course-option { position: relative; display: block; }
 .course-option input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
 .course-option span { display: grid; place-items: center; width: 44px; height: 44px; border: 1px solid #ffffff60; border-radius: 5px; background: #173d35a6; font-size: 12px; font-weight: 800; font-variant-numeric: tabular-nums; transition: background 150ms; }
@@ -511,4 +515,24 @@ h1 span { color: var(--lime); }
   .title-screen .title-content h1 { margin: 8px 0; font-size: 32px; white-space: nowrap; }
   .title-content h1 br { display: none; }
   .title-content h1 span { margin-left: .25em; }
+}
+
+/* Portrait phones (360x640): the title scrolls vertically so every option and the start button stay reachable. */
+@media (max-width: 700px) and (orientation: portrait) {
+  .title-description { display: none; }
+  .title-screen { flex-direction: column; align-items: stretch; padding-bottom: 130px; overflow-y: auto; overflow-x: hidden; overscroll-behavior-y: contain; touch-action: pan-y; }
+  .course-strip { position: relative; left: auto; right: auto; bottom: auto; flex-wrap: wrap; margin-top: 22px; }
+  .course-picker { margin-left: 0; max-width: 100%; }
+  .title-options, .option-select { max-width: 100%; }
+  /* The online panel is a sibling of the scroller, so pin it as a bottom sheet and reserve its height above. */
+  [data-screen="title"] #online-entry { position: fixed; top: auto; bottom: 0; left: 0; right: 0; width: auto; border-radius: 7px 7px 0 0; }
+  .option-select .laps-options { flex-wrap: wrap; }
+}
+
+/* Short landscape (e.g. 844x390): the footer joins the scrolling title flow so the extra option rows cannot overlap the controls above. */
+@media (max-height: 480px) and (orientation: landscape) {
+  .title-screen { flex-direction: column; align-items: stretch; padding-right: calc(4% + 300px); padding-bottom: 20px; overflow-y: auto; overflow-x: hidden; overscroll-behavior-y: contain; touch-action: pan-y; }
+  .course-strip { position: relative; left: auto; right: auto; bottom: auto; flex-wrap: wrap; gap: 14px 34px; margin-top: 16px; }
+  .course-picker { max-width: 100%; }
+  .title-options { gap: 4px 14px; }
 }

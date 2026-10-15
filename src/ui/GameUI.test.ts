@@ -15,7 +15,8 @@ vi.mock('../sim/tracks', async importOriginal => {
   };
 });
 
-import { courseNumber, courseOptions, GameUI } from './GameUI';
+import { courseNumber, courseOptions, cpuOptions, cupOptions, formatPreciseTime, GameUI, modeOptions } from './GameUI';
+import { CUPS } from '../gp/grandPrix';
 import { sampleTrack } from '../sim/track';
 
 const courseNames = tracks.names!;
@@ -233,5 +234,111 @@ describe('GameUI minimap', () => {
     const expected = `stroke(${deckOps(loopTrack(), [[150, 450]])})`;
     expect(upperPaths([{ from: 149, to: 450 }])).not.toContain(expected);
     expect(upperPaths([{ from: 150, to: 451 }])).not.toContain(expected);
+  });
+});
+
+const labelsOf = (html: string): string[] => [...html.matchAll(/aria-label="([^"]*)"/g)].map(match => match[1]);
+const valuesOf = (html: string): string[] => [...html.matchAll(/value="([^"]*)"/g)].map(match => match[1]);
+
+describe('GameUI title mode / cup / cpu options', () => {
+  it('renders 3 modes, the CUPS cups and 3 cpu levels with labels and defaults', () => {
+    expect(valuesOf(modeOptions)).toEqual(['race', 'gp', 'timeattack']);
+    expect(labelsOf(modeOptions)).toEqual(['レース', 'グランプリ', 'タイムアタック']);
+    expect(valuesOf(cupOptions)).toEqual(CUPS.map(cup => cup.id));
+    expect(labelsOf(cupOptions)).toEqual(['SUNRISE CUP 01–04', 'HORIZON CUP 05–08']);
+    expect(valuesOf(cpuOptions)).toEqual(['easy', 'normal', 'hard']);
+    expect(labelsOf(cpuOptions)).toEqual(['やさしい', 'ふつう', 'つよい']);
+    expect(modeOptions.match(/ checked/g)).toHaveLength(1);
+    expect(modeOptions).toMatch(/value="race"[^>]* checked/);
+    expect(cpuOptions).toMatch(/value="normal"[^>]* checked/);
+    expect(modeOptions).toContain('class="mode-option"');
+    expect(cupOptions).toContain('class="cup-option"');
+    expect(cpuOptions).toContain('class="cpu-option"');
+  });
+});
+
+interface FakeEl { hidden: boolean; textContent: string; innerHTML: string; dataset: Record<string, string>; inputs: { value: string; checked: boolean }[];
+  querySelectorAll(): unknown[]; querySelector(): unknown; replaceChildren(): void; append(...nodes: unknown[]): void; className: string;
+  style: Record<string, string> }
+function fakeEl(values: string[] = []): FakeEl {
+  const el: FakeEl = { hidden: false, textContent: '', innerHTML: '', dataset: {}, inputs: values.map(value => ({ value, checked: false })),
+    querySelectorAll: () => el.inputs, querySelector: () => el.inputs.find(input => input.checked) ?? null,
+    replaceChildren: () => undefined, append: () => undefined, className: '', style: {} };
+  return el;
+}
+const IDS = ['cup-select', 'course-select', 'cpu-select', 'position-group', 'retry-label', 'course-index', 'course-name', 'title-best',
+  'result-position', 'leaderboard', 'best-lap-record', 'results-heading', 'results-course', 'finish-time', 'finish-best', 'new-record', 'result-laps',
+  'back-title', 'retry-race'];
+function fakeUi() {
+  const refs: Record<string, FakeEl> = Object.fromEntries(IDS.map(id => [id, fakeEl()]));
+  refs['cup-select'] = fakeEl(CUPS.map(cup => cup.id));
+  refs['cpu-select'] = fakeEl(['easy', 'normal', 'hard']);
+  const root = fakeEl();
+  const ui = Object.create(GameUI.prototype) as Record<string, unknown> & {
+    setPlayMode(m: string): void; setCpuLevel(l: string): void; setCup(c: string): void; setTimeAttackBest(t: number | null, b: number | null): void;
+    setCourse(id: string, best: number | null): void; showResults(...args: unknown[]): void; show(s: string): void };
+  Object.assign(ui, { refs, root, playMode: 'race', courseId: 'meadow', localKartId: 0, screen: 'title', paused: false,
+    setBackgroundResolution: () => undefined, setPaused: () => undefined, setCourseLabels: () => undefined, canvas: {} });
+  return { ui, refs, root };
+}
+
+describe('GameUI play modes', () => {
+  it('swaps course and cup selection for gp and hides cpu / position for time attack', () => {
+    const { ui, refs, root } = fakeUi();
+    ui.setCourse('meadow', null);
+    ui.setPlayMode('gp');
+    expect(root.dataset.playMode).toBe('gp');
+    expect([refs['cup-select'].hidden, refs['course-select'].hidden, refs['cpu-select'].hidden, refs['position-group'].hidden])
+      .toEqual([false, true, false, false]);
+    expect(refs['retry-label'].textContent).toBe('順位表へ');
+    expect(refs['course-name'].textContent).toBe('SUNRISE CUP · 4 RACES');
+    ui.setCup('horizon');
+    expect(refs['cup-select'].inputs.map(input => input.checked)).toEqual([false, true]);
+    expect(refs['course-name'].textContent).toBe('HORIZON CUP · 4 RACES');
+    ui.setPlayMode('timeattack');
+    expect([refs['cup-select'].hidden, refs['course-select'].hidden, refs['cpu-select'].hidden, refs['position-group'].hidden])
+      .toEqual([true, false, true, true]);
+    expect(refs['retry-label'].textContent).toBe('もう一度走る');
+    expect(refs['course-index'].textContent).toBe('01');
+    ui.setPlayMode('race');
+    expect([refs['cpu-select'].hidden, refs['position-group'].hidden]).toEqual([false, false]);
+  });
+
+  it('checks the cpu level radio and formats the time attack best', () => {
+    const { ui, refs } = fakeUi();
+    ui.setCpuLevel('hard');
+    expect(refs['cpu-select'].inputs.map(input => input.checked)).toEqual([false, false, true]);
+    ui.setTimeAttackBest(62.345, 20.111);
+    expect(refs['title-best'].textContent).toBe('BEST 1:02.345 · LAP 0:20.111');
+    ui.setTimeAttackBest(null, null);
+    expect(refs['title-best'].textContent).toBe('まだ記録はありません');
+    expect(formatPreciseTime(62.345)).toBe('1:02.345');
+  });
+
+  it('hides all four screens for standings', () => {
+    const screens = Object.fromEntries(['title', 'lobby', 'race', 'results'].map(name => [name, fakeEl()]));
+    const { ui } = fakeUi();
+    Object.assign(ui, screens, { reset: undefined });
+    vi.stubGlobal('requestAnimationFrame', vi.fn());
+    vi.stubGlobal('document', { activeElement: null });
+    ui.show('standings');
+    expect(Object.values(screens).map(el => el.hidden)).toEqual([true, true, true, true]);
+  });
+
+  it('time attack results hide position and leaderboard and show the lap record', () => {
+    const { ui, refs } = fakeUi();
+    Object.assign(ui, { results: fakeEl(), title: fakeEl(), lobby: fakeEl(), race: fakeEl() });
+    vi.stubGlobal('requestAnimationFrame', vi.fn());
+    vi.stubGlobal('document', { createElement: () => fakeEl() });
+    const kart = { id: 0, name: 'YOU', color: 0xff0000, finishTime: 70, lapTimes: [23, 22, 25], lap: 3 };
+    const state = { karts: [kart], trackId: 'meadow', laps: 3, phase: 'finished', time: 70 };
+    const track = { def: { name: 'MEADOW' } };
+    tracks.current = track;
+    ui.setPlayMode('timeattack');
+    (ui as unknown as { show(s: string): void }).show = () => undefined;
+    ui.showResults(state, 70, true, { bestLap: 22, isLapRecord: true });
+    expect(refs['results-heading'].textContent).toBe('TIME ATTACK');
+    expect([refs['result-position'].hidden, refs['leaderboard'].hidden, refs['best-lap-record'].hidden]).toEqual([true, true, false]);
+    expect(refs['finish-best'].textContent).toBe('1:10.000');
   });
 });

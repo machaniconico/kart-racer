@@ -2,12 +2,15 @@ import { DEFAULT_LAPS, LAP_CHOICES, getRank } from '../sim/laps';
 import { getFinishTimeRemaining, isRaceTimedOut } from '../sim/race';
 import { getTrack, TRACK_IDS } from '../sim/tracks';
 import { sampleTrack } from '../sim/track';
-import type { ItemType, KartState, RaceState, Track, TrackId } from '../sim/types';
+import { CPU_LEVELS } from '../sim/types';
+import type { CpuLevel, ItemType, KartState, RaceState, Track, TrackId } from '../sim/types';
+import { CUPS } from '../gp/grandPrix';
 import { ROULETTE_TIME } from '../sim/items';
 import { emptyItemIcon as emptyItem, icon, itemIcon, itemName, itemShortName, createRouletteView, stepRoulette } from './itemIcons';
 import { createInkOverlay, update as updateInkOverlay } from './inkOverlay';
 
-type Screen = 'title' | 'lobby' | 'race' | 'results';
+type Screen = 'title' | 'lobby' | 'race' | 'results' | 'standings';
+export type PlayMode = 'race' | 'gp' | 'timeattack';
 type Mode = 'solo' | 'host' | 'guest';
 
 const arrow = icon('<path d="M4 12h15M13 5l7 7-7 7"/>');
@@ -27,6 +30,24 @@ export function courseNumber(trackId: string): string {
 }
 
 export const courseOptions = TRACK_IDS.map((id, index) => `<label class="course-option"><input type="radio" name="course" value="${id}" aria-label="${courseNumber(id)} ${getTrack(id).def.name}"${index === 0 ? ' checked' : ''}><span aria-hidden="true">${courseNumber(id)}</span></label>`).join('');
+
+const MODES: readonly { value: PlayMode; label: string }[] = [
+  { value: 'race', label: 'レース' }, { value: 'gp', label: 'グランプリ' }, { value: 'timeattack', label: 'タイムアタック' },
+];
+const CPU_LABELS: Record<CpuLevel, string> = { easy: 'やさしい', normal: 'ふつう', hard: 'つよい' };
+const radio = (cls: string, name: string, value: string, label: string, checked: boolean): string =>
+  `<label class="${cls}"><input type="radio" name="${name}" value="${value}" aria-label="${label}"${checked ? ' checked' : ''}><span>${label}</span></label>`;
+
+export const modeOptions = MODES.map(({ value, label }) => radio('mode-option', 'mode', value, label, value === 'race')).join('');
+export const cupOptions = CUPS.map((cup, index) => radio('cup-option', 'cup', cup.id,
+  `${cup.name} ${courseNumber(cup.tracks[0])}–${courseNumber(cup.tracks[cup.tracks.length - 1])}`, index === 0)).join('');
+export const cpuOptions = CPU_LEVELS.map(level => radio('cpu-option', 'cpu', level, CPU_LABELS[level], level === 'normal')).join('');
+
+/** Time-attack records show milliseconds, e.g. 1:02.345. */
+export function formatPreciseTime(seconds: number): string {
+  const ms = Math.max(0, Math.round(seconds * 1000));
+  return `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}.${String(ms % 1000).padStart(3, '0')}`;
+}
 
 export function formatResultTime(state: RaceState, kart: KartState): string {
   if (kart.finishTime !== null) return formatTime(kart.finishTime);
@@ -51,6 +72,8 @@ export class GameUI {
   private mapTrack: Track | null = null;
   private readonly refs: Record<string, HTMLElement> = {};
   private screen: Screen = 'title';
+  private playMode: PlayMode = 'race';
+  private courseId: TrackId = TRACK_IDS[0];
   private paused = false;
   private previousFocus: HTMLElement | null = null;
   private lastItem: ItemType | null | undefined;
@@ -96,13 +119,13 @@ export class GameUI {
           <p class="touch-help">左手で曲がる。右手でドリフト。<br>アクセルは自動でも、手動でも。</p>
           <p class="drift-tip">ドリフトをためて、離すとターボ。</p>
         </aside>
-        <footer class="course-strip"><div><span id="course-index" class="course-index">01</span><span><small>THE CIRCUIT</small><strong id="course-name">${initialCourse}</strong></span></div><div class="course-picker"><small aria-hidden="true">SELECT COURSE</small><div id="course-select" class="course-select" role="radiogroup" aria-label="コースを選ぶ">${courseOptions}</div><fieldset id="laps-select" class="laps-select"><legend>周回数</legend><div class="laps-options">${LAP_CHOICES.map(n => `<label class="laps-option"><input type="radio" name="solo-laps" value="${n}"${n === DEFAULT_LAPS ? ' checked' : ''}><span>${n} 周</span></label>`).join('')}</div></fieldset></div><div><small>ON THE GRID</small><strong>8 RACERS</strong></div><div><small>TO THE FINISH</small><strong id="title-laps">${DEFAULT_LAPS} LAPS</strong></div><span class="course-footnote">A FRESH LITTLE ESCAPE.</span></footer>
+        <footer class="course-strip"><div><span id="course-index" class="course-index">01</span><span><small>THE CIRCUIT</small><strong id="course-name">${initialCourse}</strong></span></div><div class="course-picker"><small aria-hidden="true">SELECT COURSE</small><div id="course-select" class="course-select" role="radiogroup" aria-label="コースを選ぶ">${courseOptions}</div><fieldset id="laps-select" class="laps-select"><legend>周回数</legend><div class="laps-options">${LAP_CHOICES.map(n => `<label class="laps-option"><input type="radio" name="solo-laps" value="${n}"${n === DEFAULT_LAPS ? ' checked' : ''}><span>${n} 周</span></label>`).join('')}</div></fieldset><div class="title-options"><fieldset id="mode-select" class="laps-select option-select"><legend>モード</legend><div class="laps-options">${modeOptions}</div></fieldset><fieldset id="cup-select" class="laps-select option-select" hidden><legend>カップ</legend><div class="laps-options">${cupOptions}</div></fieldset><fieldset id="cpu-select" class="laps-select option-select"><legend>CPU</legend><div class="laps-options">${cpuOptions}</div></fieldset></div></div><div><small>ON THE GRID</small><strong>8 RACERS</strong></div><div><small>TO THE FINISH</small><strong id="title-laps">${DEFAULT_LAPS} LAPS</strong></div><span class="course-footnote">A FRESH LITTLE ESCAPE.</span></footer>
       </section>
 
       <section id="lobby-screen" class="screen lobby-screen" aria-label="ロビー" hidden></section>
 
       <section id="race-screen" class="screen race-screen" aria-label="レース" hidden>
-        <div class="race-position" aria-label="順位とラップ"><div class="position-group"><span class="hud-eyebrow">POSITION</span><div><strong id="position-value">8</strong><span id="position-total" class="position-total">/ 8</span></div></div><div class="lap-group"><span class="hud-eyebrow">LAP</span><strong><span id="lap-value">1</span><span id="lap-total" class="lap-total"> / ${DEFAULT_LAPS}</span></strong></div></div>
+        <div class="race-position" aria-label="順位とラップ"><div id="position-group" class="position-group"><span class="hud-eyebrow">POSITION</span><div><strong id="position-value">8</strong><span id="position-total" class="position-total">/ 8</span></div></div><div class="lap-group"><span class="hud-eyebrow">LAP</span><strong><span id="lap-value">1</span><span id="lap-total" class="lap-total"> / ${DEFAULT_LAPS}</span></strong></div></div>
         <div class="race-times"><div><span>TOTAL</span><strong id="total-time">00:00.00</strong></div><div><span>LAP</span><strong id="lap-time">00:00.00</strong></div><div class="best-lap-line"><span>BEST LAP</span><strong id="best-lap">—</strong></div></div>
         <div id="item-display" class="item-display"><div id="item-hud-icon" class="item-icon">${emptyItem}</div><div><span class="hud-eyebrow">YOUR ITEM</span><strong id="item-name">ボックスを取ろう</strong><span class="item-key"><kbd>SHIFT</kbd> / <kbd>E</kbd> で使う</span></div></div>
         <div id="countdown-display" class="countdown-display" role="status" aria-live="polite" hidden>3</div>
@@ -119,7 +142,7 @@ export class GameUI {
       <section id="results-screen" class="screen results-screen" aria-labelledby="results-heading" hidden>
         <div class="results-content">
           <div class="results-heading-row"><div><span id="results-course" class="eyebrow">${initialCourse} · ${DEFAULT_LAPS} LAPS</span><h2 id="results-heading">FINISH!</h2></div><span id="result-position" class="result-position">1<span>位</span></span></div>
-          <div class="finish-summary"><div><span>YOUR TIME</span><strong id="finish-time">00:00.00</strong></div><span id="new-record" class="record-badge" hidden>NEW BEST!</span><div class="finish-best"><span>PERSONAL BEST</span><strong id="finish-best">—</strong></div></div>
+          <div class="finish-summary"><div><span>YOUR TIME</span><strong id="finish-time">00:00.00</strong></div><span id="new-record" class="record-badge" hidden>NEW BEST!</span><span id="best-lap-record" class="record-badge" hidden>BEST LAP!</span><div class="finish-best"><span>PERSONAL BEST</span><strong id="finish-best">—</strong></div></div>
           <ol id="leaderboard" class="leaderboard" aria-label="レース順位"></ol>
           <p id="result-laps" class="result-laps"></p>
           <div class="result-actions"><button id="retry-race" class="primary-button" type="button"><span id="retry-label">もう一度走る</span>${arrow}</button><button id="back-title" class="secondary-button" type="button">タイトルへ</button></div>
@@ -168,7 +191,7 @@ export class GameUI {
       this.lastMapTick = -1;
       this.resetRoulette();
       this.canvas.focus({ preventScroll: true });
-    } else if (screen !== 'lobby') {
+    } else if (screen !== 'lobby' && screen !== 'standings') {
       requestAnimationFrame(() => {
         if (this.screen === screen && !this.paused && this.get('error-dialog').hidden) {
           const retry = this.get('retry-race').hidden ? 'back-title' : 'retry-race';
@@ -208,11 +231,54 @@ export class GameUI {
     this.text('resume-label', online ? 'レースにもどる' : 'レースをつづける');
     this.text('quit-race', online ? '退出する' : 'タイトルへ戻る');
     this.text('pause-shortcut-label', online ? 'もどる' : '再開');
-    this.text('retry-label', mode === 'host' ? '再戦（ロビーへ）' : 'もう一度走る');
+    this.text('retry-label', mode === 'host' ? '再戦（ロビーへ）' : this.retryLabel());
     this.get('retry-race').hidden = mode === 'guest';
     this.text('back-title', mode === 'host' ? 'ルームを閉じる' : mode === 'guest' ? '退出する' : 'タイトルへ');
     this.get('host-notice').hidden = mode !== 'host';
     this.setNetStatus(null);
+  }
+
+  private retryLabel(): string {
+    return this.playMode === 'gp' ? '順位表へ' : 'もう一度走る';
+  }
+
+  /** Title / HUD / result variants for race, grand prix and time attack. */
+  setPlayMode(mode: PlayMode): void {
+    this.playMode = mode;
+    this.root.dataset.playMode = mode;
+    this.get('cup-select').hidden = mode !== 'gp';
+    this.get('course-select').hidden = mode === 'gp';
+    this.get('cpu-select').hidden = mode === 'timeattack';
+    this.get('position-group').hidden = mode === 'timeattack';
+    if (this.root.dataset.mode !== 'host') this.text('retry-label', this.retryLabel());
+    if (mode === 'gp') this.showCupStrip(this.get('cup-select').querySelector<HTMLInputElement>('input:checked')?.value);
+    else this.showCourseStrip(this.courseId);
+  }
+
+  setCpuLevel(level: CpuLevel): void {
+    for (const input of this.get('cpu-select').querySelectorAll<HTMLInputElement>('input')) input.checked = input.value === level;
+  }
+
+  setCup(cupId: string): void {
+    for (const input of this.get('cup-select').querySelectorAll<HTMLInputElement>('input')) input.checked = input.value === cupId;
+    if (this.playMode === 'gp') this.showCupStrip(cupId);
+  }
+
+  private showCupStrip(cupId: string | undefined): void {
+    const cup = CUPS.find(candidate => candidate.id === cupId) ?? CUPS[0];
+    this.text('course-index', 'GP');
+    this.text('course-name', `${cup.name} · ${cup.tracks.length} RACES`);
+  }
+
+  private showCourseStrip(trackId: TrackId): void {
+    this.text('course-index', courseNumber(trackId));
+    this.text('course-name', getTrack(trackId).def.name);
+  }
+
+  /** Time-attack personal best on the title: total and best lap. */
+  setTimeAttackBest(total: number | null, bestLap: number | null): void {
+    this.text('title-best', total === null ? 'まだ記録はありません'
+      : `BEST ${formatPreciseTime(total)}${bestLap === null ? '' : ` · LAP ${formatPreciseTime(bestLap)}`}`);
   }
 
   /** Guest-only connection notice inside the race HUD, e.g. a stalled host. */
@@ -362,16 +428,20 @@ export class GameUI {
     this.text('item-announce', '');
   }
 
-  showResults(state: RaceState, best: number | null, isRecord: boolean): void {
+  showResults(state: RaceState, best: number | null, isRecord: boolean, extra?: { bestLap?: number | null; isLapRecord?: boolean }): void {
     const player = state.karts.find((kart) => kart.id === this.localKartId);
     if (!player) return;
     const rank = getRank(state, this.localKartId);
     const didFinish = player.finishTime !== null;
     this.text('results-course', `${getTrack(state.trackId).def.name} · ${state.laps} LAPS`);
-    this.text('results-heading', didFinish ? 'FINISH!' : 'RACE OVER');
+    const timeAttack = this.playMode === 'timeattack';
+    this.text('results-heading', timeAttack ? 'TIME ATTACK' : didFinish ? 'FINISH!' : 'RACE OVER');
+    this.get('result-position').hidden = timeAttack;
+    this.get('leaderboard').hidden = timeAttack;
+    this.get('best-lap-record').hidden = !(extra?.isLapRecord && didFinish);
     this.get('result-position').innerHTML = `${rank}<span>位</span>`;
     this.text('finish-time', didFinish ? formatTime(player.finishTime!) : 'DNF');
-    this.text('finish-best', best === null ? '—' : formatTime(best));
+    this.text('finish-best', best === null ? '—' : timeAttack ? formatPreciseTime(best) : formatTime(best));
     this.get('new-record').hidden = !isRecord || !didFinish;
     const list = this.get('leaderboard');
     list.replaceChildren();
@@ -402,7 +472,7 @@ export class GameUI {
     const lapResults = player.lapTimes.map((time, index) => `LAP ${index + 1}  ${formatTime(time)}`);
     if (!didFinish) lapResults.push(`未完走 · ${player.lap} / ${state.laps} 周完了`);
     this.text('result-laps', lapResults.join('   /   '));
-    this.setBest(best);
+    if (!timeAttack) this.setBest(best);
     this.show('results');
   }
 
@@ -419,8 +489,8 @@ export class GameUI {
     for (const input of this.get('course-select').querySelectorAll<HTMLInputElement>('input[name="course"]')) {
       input.checked = input.value === trackId;
     }
-    this.text('course-index', courseNumber(trackId));
-    this.text('course-name', getTrack(trackId).def.name);
+    this.courseId = trackId;
+    if (this.playMode !== 'gp') this.showCourseStrip(trackId);
     this.setCourseLabels(trackId);
     this.setBest(best);
   }
