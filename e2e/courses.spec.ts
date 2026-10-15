@@ -608,11 +608,16 @@ test('C-010: sixteen-course 32 switches keep renderer geometry memory bounded', 
   await page.goto('./');
   await page.waitForFunction(() => !!window.__kartDebug?.rendererInfo);
   // Visit all sixteen courses twice (32 switches).
-  const lap = TRACK_IDS;
+  // Meadow is the initial selection (selecting it again is a no-op), so rotate it to the end: all 32 selections are real switches.
+  const lap = [...TRACK_IDS.slice(1), TRACK_IDS[0]];
   const sequence = [...lap, ...lap];
   expect(sequence).toHaveLength(32);
   const samples = [];
+  let switches = 0;
+  let current = await page.evaluate(() => window.__kartDebug.render.trackId);
   for (const id of sequence) {
+    if (id !== current) switches++;
+    current = id;
     const sample = await page.evaluate(async trackId => {
       window.__kartDebug.selectCourse(trackId);
       await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
@@ -634,6 +639,7 @@ test('C-010: sixteen-course 32 switches keep renderer geometry memory bounded', 
   console.info('M6-05 geometry memory', JSON.stringify(samples));
   // M8-01: rebuilds reuse one WebGLRenderer (shared info), so a leak shows up as growth here, not as a
   // non-empty old renderer. Lap 2 must match lap 1 exactly: geometry, texture and program counts.
+  expect(switches).toBe(32);
   const maxGeometries = Math.max(...samples.slice(0, lap.length).map(sample => sample.geometries));
   const maxTextures = Math.max(...samples.slice(0, lap.length).map(sample => sample.textures));
   const maxPrograms = Math.max(...samples.slice(0, lap.length).map(sample => sample.programs));

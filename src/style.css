@@ -254,13 +254,23 @@ h1 span { color: var(--lime); }
 }
 
 /* M10-09: sixteen courses make two rows of eight; on desktop the laps/mode options sit beside the grid so the strip stays short. */
-@media (min-width: 701px) and (min-height: 481px) {
+@media (min-width: 1000px) and (min-height: 481px) {
+  .title-screen { padding-bottom: 230px; }
   .course-strip > .course-picker { display: grid; grid-template-columns: 394px auto; column-gap: 24px; row-gap: 6px; align-items: start; }
   .course-picker > small { grid-column: 1 / -1; }
   .course-picker > #course-select { grid-column: 1; }
   .course-picker > #laps-select { grid-column: 2; }
   .course-picker > #laps-select .laps-options { flex-wrap: nowrap; }
   .course-picker > .title-options { grid-column: 1 / -1; }
+}
+
+/* M10-09: the pinned strip only fits at 1000px+ wide and 720-800px or 880px+ tall; every other desktop size scrolls with the strip in normal flow (as short landscape does), clear of the online panel on the right. */
+@media (min-width: 701px) and (max-width: 999px) and (min-height: 481px), (min-width: 1000px) and (min-height: 481px) and (max-height: 719px), (min-width: 1000px) and (min-height: 801px) and (max-height: 879px) {
+  .title-screen { flex-direction: column; align-items: stretch; padding-right: calc(4% + 300px); padding-bottom: 20px; overflow-y: auto; overflow-x: hidden; overscroll-behavior-y: contain; touch-action: pan-y; }
+  .course-strip { position: relative; left: auto; right: auto; bottom: auto; flex-wrap: wrap; gap: 14px 34px; margin-top: 16px; }
+  .course-picker { max-width: 100%; }
+  .course-select { grid-template-columns: repeat(auto-fill, 44px); }
+  .title-options { gap: 4px 14px; }
 }
 
 @media (max-width: 700px) and (orientation: portrait) {

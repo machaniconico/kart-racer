@@ -98,3 +98,46 @@ test('M9-04 host notice does not overlap headings at 390x844', async ({ page }, 
     if (await el.isVisible()) expect(intersects(n, await rectOf(page, selector)), selector).toBe(false);
   }
 });
+
+// M10-09 boundary sizes around the CSS breakpoints (480/481, 700/701, 720, 800/801, 879/880, 999/1000).
+const boundarySizes = [
+  [1280, 480], [1280, 481], [1280, 719], [1280, 720], [1280, 800], [1280, 801], [1280, 879], [1280, 880],
+  [701, 720], [844, 481], [999, 720], [1000, 720],
+] as const;
+for (const [width, height] of boundarySizes) {
+  test(`M10-09 sixteen-course title has no overlap at ${width}x${height}`, async ({ page }, info) => {
+    await page.setViewportSize({ width, height });
+    await page.goto('./');
+    await expect(page.locator('#title-screen')).toBeVisible();
+    await expect(page.locator('#online-entry')).toBeVisible();
+    await attach(page, info, `title-${width}x${height}`);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+    const content = await rectOf(page, '.title-content');
+    const strip = await rectOf(page, '.course-strip');
+    expect(strip.top, 'strip sits below the title content').toBeGreaterThanOrEqual(content.bottom - 0.5);
+
+    // Every option (and the start button) must be hit-testable at its own centre: nothing, including the online panel, covers it.
+    const problems = await page.evaluate(() => {
+      const bad: string[] = [];
+      const courseOptions = [...document.querySelectorAll<HTMLElement>('.course-option')];
+      // Intersections are measured in one snapshot, before any scrolling moves the rects.
+      const rects = courseOptions.map(el => el.getBoundingClientRect());
+      for (let i = 0; i < rects.length; i++) {
+        for (let j = i + 1; j < rects.length; j++) {
+          const a = rects[i];
+          const b = rects[j];
+          if (a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom) bad.push(`option ${i} intersects ${j}`);
+        }
+      }
+      for (const el of [...courseOptions, document.querySelector<HTMLElement>('#start-race')!]) {
+        el.scrollIntoView({ block: 'nearest' });
+        const r = el.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        if (!hit || !(hit === el || el.contains(hit))) bad.push(`${el.id || el.textContent?.trim()} covered by ${hit?.id || hit?.className || hit?.tagName}`);
+      }
+      return bad;
+    });
+    expect(problems).toEqual([]);
+  });
+}
