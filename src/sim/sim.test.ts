@@ -1072,9 +1072,21 @@ describe('sim fingerprint', () => {
     return hash;
   }
 
-  it.each([['meadow', 1966540717], ['neon', 1211865273]] as const)('%s seed 7 stays bit-exact for 1800 ticks', (trackId, pinned) => {
+  // libm differs between platforms, so each platform keeps its own column (as in surfaces.test.ts).
+  // linux-x64 was copied from CI run 38685104421 (a4dbd77); that run also passed the pre-M7
+  // linux MEADOW full-race hashes in surfaces.test.ts, so normal CPUs are unchanged on linux too.
+  const FINGERPRINTS: Record<string, Record<'meadow' | 'neon', number>> = {
+    'darwin-arm64': { meadow: 1966540717, neon: 1211865273 },
+    'linux-x64': { meadow: 1670404181, neon: 1324528798 },
+  };
+  const platform = `${process.platform}-${process.arch}`;
+
+  it.each(['meadow', 'neon'] as const)('%s seed 7 stays bit-exact for 1800 ticks', (trackId) => {
     const state = createRace(7, { trackId, racers: [] });
     for (let i = 0; i < 1800; i++) stepRace(state, state.karts.map((kart) => getAIInput(state, kart.id)));
-    expect(fnv1a(state.karts.map((k) => [k.x, k.z, k.speed, k.trackDistance, k.heading]))).toBe(pinned);
+    const digest = fnv1a(state.karts.map((k) => [k.x, k.z, k.speed, k.trackDistance, k.heading]));
+    const pinned = FINGERPRINTS[platform]?.[trackId];
+    if (pinned === undefined) console.info(`sim fingerprint (${platform}) ${trackId}: ${digest}`);
+    else expect(digest).toBe(pinned);
   });
 });
