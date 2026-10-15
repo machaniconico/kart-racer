@@ -31,8 +31,12 @@ const layout: TrackDef = {
 const geometry = buildTrack(layout);
 const at = (index: number) => geometry.samples[index * layout.samplesPerSegment]!.distance;
 export const TEMPLE_LENGTH = geometry.length;
-const island = islandSplit({ from: 310, to: 360, islandHalf: 3,
-  laneWidth: 11.7, taper: 10, scenery: 'building', risky: 'inner', bend: 1 });
+// The eastern hairpin turns toward positive offsets. Its inner lane is
+// shorter and tighter; 10.5 m lanes keep the road clear of the entry's centre
+// of curvature, and both island tips stay clear of the 469.6 m checkpoint.
+const islandFrom = 445, islandTo = 495;
+const island = islandSplit({ from: islandFrom, to: islandTo, islandHalf: 3,
+  laneWidth: 10.5, taper: 10, scenery: 'building', risky: 'inner', bend: 1 });
 const lane = island.splits[0]!.lanes.find(candidate => candidate.risk === 0)!;
 const safeOffset = (lane.offsetMin + lane.offsetMax) / 2;
 
@@ -40,24 +44,24 @@ export const temple: TrackDef = {
   ...layout,
   decks: [{ from: at(26) - 28, to: at(26) + 28 }],
   widthKeys: [
-    { distance: 270, ...base },
+    { distance: islandFrom - 40, ...base },
     ...island.widthKeys.map(key => ({ ...key, wallHalfWidth: Math.max(BASE_WALL_HALF_WIDTH, key.roadHalfWidth) })),
-    { distance: 400, ...base },
+    { distance: islandTo + 40, ...base },
   ],
   splits: island.splits,
   barriers: [
     ...island.barriers,
-    // Stone doors retract into the sides; the central passage remains open
-    // throughout their cycle, even when each door is fully extended.
+    // Stone doors still cover 2.6 m of road when retracted; the central
+    // passage remains open even when each door is fully extended.
     { from: 200, to: 222, center: 8, halfWidth: 3, taper: 7, scenery: 'pillar',
-      motion: { kind: 'gate', amplitude: 0, period: 7, phase: 0, minWidth: 0.6 * WIDTH_SCALE } },
+      motion: { kind: 'gate', amplitude: 0, period: 7, phase: 0, minWidth: WIDTH_SCALE } },
     { from: at(24) + 15, to: at(24) + 37, center: -8, halfWidth: 3, taper: 7, scenery: 'pillar',
-      motion: { kind: 'gate', amplitude: 0, period: 9, phase: 1, minWidth: 0.6 * WIDTH_SCALE } },
+      motion: { kind: 'gate', amplitude: 0, period: 9, phase: 1, minWidth: WIDTH_SCALE } },
   ],
   racingLine: [
     { distance: 0, offset: 0 },
-    { distance: 270, offset: 0 }, { distance: 310, offset: safeOffset },
-    { distance: 360, offset: safeOffset }, { distance: 400, offset: 0 },
+    { distance: islandFrom - 40, offset: 0 }, { distance: islandFrom, offset: safeOffset },
+    { distance: islandTo, offset: safeOffset }, { distance: islandTo + 40, offset: 0 },
     { distance: geometry.length, offset: 0 },
   ],
   surfaces: [

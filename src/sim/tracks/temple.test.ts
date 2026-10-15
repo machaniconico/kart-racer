@@ -1,7 +1,8 @@
-// M10-06 / darwin-arm64: buildCourse 43 meshes, 94,126 triangles including shadows;
-// five-build median 154.967 ms (Vitest, 2026-10-16). +20k karts < 165,246 triangle cap.
-// 8 CPUs × seeds [1, 42, 98765] × 3 laps = 72: meanLap 63.13402777777776 s,
+// M10-06 fix / darwin-arm64: buildCourse 43 meshes, 94,226 triangles including shadows;
+// five-build median 466.322 ms (parallel story load, 2026-10-16). +20k karts < 165,246 cap.
+// 8 CPUs × seeds [1, 42, 98765] × 3 laps = 72: meanLap 63.4671296296296 s,
 // wallHits 0, bandHits 0, pitFalls 0. Simulation and shared baselines unchanged.
+// Island lane integral: inner 35.854 m / outer 64.146 m (28.293 m shortcut).
 import * as THREE from 'three';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildCourse } from '../../render/course/buildCourse';
@@ -109,6 +110,18 @@ describe('SUNKEN TEMPLE', () => {
     for (const gate of gates) {
       expect(gate.motion!.kind).toBe('gate');
       expect(gate.motion!.minWidth).toBeGreaterThanOrEqual(0.6 * WIDTH_SCALE);
+      // Both fully open and fully extended doors must physically cover road,
+      // without counting the kart-radius expansion used by collision checks.
+      const extendedAt = -gate.motion!.phase * gate.motion!.period / (2 * Math.PI);
+      const openAt = extendedAt + gate.motion!.period / 2;
+      expect(barrierHalfWidthAt(gate, extendedAt)).toBeCloseTo(gate.halfWidth);
+      expect(barrierHalfWidthAt(gate, openAt)).toBeCloseTo(gate.motion!.minWidth!);
+      const road = widthAt(track, (gate.from + gate.to) / 2).roadHalfWidth;
+      for (const time of [openAt, extendedAt]) {
+        const halfWidth = barrierHalfWidthAt(gate, time);
+        const overlap = Math.min(road, gate.center + halfWidth) - Math.max(-road, gate.center - halfWidth);
+        expect(overlap).toBeGreaterThanOrEqual(2);
+      }
       const widths = [];
       for (let step = 0; step <= 48; step++) {
         const time = step * gate.motion!.period / 48;
@@ -135,6 +148,36 @@ describe('SUNKEN TEMPLE', () => {
       const offset = racingLineOffset(track, d);
       expect(corridorAt(track, d, 0).some(lane => lane.min < offset - KART_RADIUS && lane.max > offset + KART_RADIUS)).toBe(true);
     }
+  });
+
+  it('rewards the tighter inner island lane with at least two metres of real shortcut', () => {
+    const split = track.def.splits![0]!;
+    const risky = split.lanes.find(lane => lane.risk === 1)!;
+    const safe = split.lanes.find(lane => lane.risk === 0)!;
+    const riskyOffset = (risky.offsetMin + risky.offsetMax) / 2;
+    const safeOffset = (safe.offsetMin + safe.offsetMax) / 2;
+    let riskyLength = 0, safeLength = 0, measuredDistance = 0;
+    for (let i = 0; i < profile.length - 1; i++) {
+      const a = profile[i]!, b = profile[i + 1]!;
+      const from = Math.max(a.distance, split.from), to = Math.min(b.distance, split.to);
+      if (to <= from) continue;
+      // Track offsets use the right normal (tz, -tx), so heading curvature
+      // is the negative of shapeMetrics' x-z cross-product curvature.
+      const curvatureAt = (d: number) => -(a.curvature + (b.curvature - a.curvature) *
+        (d - a.distance) / (b.distance - a.distance));
+      const curvature = (curvatureAt(from) + curvatureAt(to)) / 2;
+      expect(curvatureAt(from) * riskyOffset).toBeGreaterThan(0);
+      expect(curvatureAt(to) * riskyOffset).toBeGreaterThan(0);
+      expect(curvature * safeOffset).toBeLessThan(0);
+      expect(1 - curvature * riskyOffset).toBeGreaterThan(0);
+      const ds = to - from;
+      riskyLength += (1 - curvature * riskyOffset) * ds;
+      safeLength += (1 - curvature * safeOffset) * ds;
+      measuredDistance += ds;
+    }
+    expect(measuredDistance).toBeCloseTo(split.to - split.from, 8);
+    expect(safeLength - riskyLength).toBeGreaterThanOrEqual(2);
+    console.info('M10-06 island', { riskyLength, safeLength, shortcut: safeLength - riskyLength });
   });
 
   it('renders jungle ruins and column rows within the geometry budget', () => {
