@@ -15,6 +15,7 @@ const LEGACY_TRACK_ID = 'meadow';
 // Mirrors the sim course registry; kept local so storage stays independent of sim/.
 const KNOWN_TRACK_IDS: ReadonlySet<string> = new Set([
   'meadow', 'canyon', 'snowpeak', 'neon', 'harbor', 'forest', 'volcano', 'skyline',
+  'dunes', 'garden', 'speedway', 'bayou', 'cavern', 'temple', 'serpentine', 'lunar',
 ]);
 
 function validTime(value: unknown): value is number {

@@ -103,7 +103,8 @@ export interface TrackProjection {
   distance: number; offset: number; height: number; heading: number;
 }
 
-export type TrackId = 'meadow' | 'canyon' | 'snowpeak' | 'neon' | 'harbor' | 'forest' | 'volcano' | 'skyline';
+export type TrackId = 'meadow' | 'canyon' | 'snowpeak' | 'neon' | 'harbor' | 'forest' | 'volcano' | 'skyline'
+  | 'dunes' | 'garden' | 'speedway' | 'bayou' | 'cavern' | 'temple' | 'serpentine' | 'lunar';
 
 export interface WidthKey {
   readonly distance: number;

@@ -15,10 +15,19 @@ import { harbor } from './course/themes/harbor';
 import { forest } from './course/themes/forest';
 import { volcano } from './course/themes/volcano';
 import { skyline } from './course/themes/skyline';
+import { dunes } from './course/themes/dunes';
+import { garden } from './course/themes/garden';
+import { speedway } from './course/themes/speedway';
+import { bayou } from './course/themes/bayou';
+import { cavern } from './course/themes/cavern';
+import { temple } from './course/themes/temple';
+import { serpentine } from './course/themes/serpentine';
+import { lunar } from './course/themes/lunar';
 import { attachKartEffects, createEntityMesh, entityPose, updateKartEffects, type KartEffectVisuals } from './itemVisuals';
 
 const themes: Readonly<Record<TrackId, CourseTheme>> = {
   meadow, canyon, snowpeak, neon, harbor, forest, volcano, skyline,
+  dunes, garden, speedway, bayou, cavern, temple, serpentine, lunar,
 };
 
 const mix = (a: number, b: number, t: number) => a + (b - a) * t;

@@ -7,6 +7,7 @@ import { COURSE_FINGERPRINT, TRACK_IDS } from '../sim/tracks';
 import { CLOCK_WINDOW_MS, ClockSync, packPing, packPong, TickMap, TICK_MS, unpackClock } from './clock';
 import { INPUT_HOLD_TICKS, InputBuffer, NEUTRAL_INPUT, pack, quantizeInput, unpack } from './inputBuffer';
 import { MockTransport } from './mockTransport';
+import { HostSession } from './hostSession';
 import {
   PROTOCOL_TRACK_IDS,
   controlGuards, encodeControlMessage, isControlMessage, isPlayerName, isRaceEvent, isRaceState,
@@ -108,9 +109,10 @@ describe('control protocol', () => {
     }
   });
 
-  it('isolates protocol v14 rooms from earlier versions', () => {
-    expect(PROTOCOL_VERSION).toBe(17);
-    expect(ROOM_PREFIX).toBe('pcircuit-v17-');
+  it('isolates protocol v18 rooms from earlier versions', () => {
+    expect(PROTOCOL_VERSION).toBe(18);
+    expect(ROOM_PREFIX).toBe('pcircuit-v18-');
+    expect(fromPeerId('pcircuit-v17-AB2X')).toBeNull();
     expect(fromPeerId('pcircuit-v15-AB2X')).toBeNull();
     expect(fromPeerId('pcircuit-v13-AB2X')).toBeNull();
     expect(fromPeerId('pcircuit-v12-AB2X')).toBeNull();
@@ -118,6 +120,27 @@ describe('control protocol', () => {
     expect(fromPeerId('pcircuit-v8-AB2X')).toBeNull();
     expect(fromPeerId('pcircuit-v7-AB2X')).toBeNull();
     expect(fromPeerId('pcircuit-v5-AB2X')).toBeNull();
+  });
+
+  it('rejects a v17 hello before allocating a guest slot', async () => {
+    const network = new MockTransport({ latencyMs: 0 });
+    const host = await HostSession.create(network, { roomCode: 'AB2X', now: () => network.now });
+    try {
+      const guest = await network.join('AB2X');
+      const received: ControlMessage[] = [];
+      guest.onMessage((kind, data) => {
+        if (kind === 'reliable') {
+          const message = parseControlMessage(data);
+          if (message) received.push(message);
+        }
+      });
+      guest.send('reliable', encodeControlMessage({
+        type: 'hello', protocol: 17, course: COURSE_FINGERPRINT, name: 'GUEST', color: 0xff5f80,
+      }));
+      network.flush();
+      expect(received).toEqual([{ type: 'reject', reason: 'version' }]);
+      expect(host.roster.players.filter(player => player.kind === 'guest')).toHaveLength(0);
+    } finally { host.close(); }
   });
 
   it.each(TRACK_IDS)('guards %s in welcome, course, race_start and race_end', trackId => {

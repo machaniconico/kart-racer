@@ -4,7 +4,7 @@ import type { RosterPlayer } from './session';
 export type { InputFrame, RaceEvent, RaceState } from '../sim/types';
 export type { RosterPlayer } from './session';
 
-export const PROTOCOL_VERSION = 17;
+export const PROTOCOL_VERSION = 18;
 export const ROOM_PREFIX = `pcircuit-v${PROTOCOL_VERSION}-`;
 // Kept local: the net core may only type-import from sim (sim/types CPU_LEVELS is the source of truth).
 const CPU_LEVELS: readonly CpuLevel[] = ['easy', 'normal', 'hard'];
@@ -88,6 +88,7 @@ const itemTypes = ['dash', 'trap', 'bolt', 'seeker', 'skycomet', 'tripleDash', '
 // Must equal sim TRACK_IDS (net-core.test.ts checks); the net core may only import sim types.
 export const PROTOCOL_TRACK_IDS: readonly TrackId[] = [
   'meadow', 'canyon', 'snowpeak', 'neon', 'harbor', 'forest', 'volcano', 'skyline',
+  'dunes', 'garden', 'speedway', 'bayou', 'cavern', 'temple', 'serpentine', 'lunar',
 ];
 const poseFields = ['x', 'y', 'z', 'heading'];
 const kartNumbers = [...poseFields, 'speed', 'steer', 'trackDistance', 'lateralOffset',

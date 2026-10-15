@@ -8,15 +8,25 @@ import { harbor } from './harbor';
 import { forest } from './forest';
 import { volcano } from './volcano';
 import { skyline } from './skyline';
+import { dunes } from './dunes';
+import { garden } from './garden';
+import { speedway } from './speedway';
+import { bayou } from './bayou';
+import { cavern } from './cavern';
+import { temple } from './temple';
+import { serpentine } from './serpentine';
+import { lunar } from './lunar';
 
 export const TRACK_IDS: readonly TrackId[] = Object.freeze([
   'meadow', 'canyon', 'snowpeak', 'neon', 'harbor', 'forest', 'volcano', 'skyline',
+  'dunes', 'garden', 'speedway', 'bayou', 'cavern', 'temple', 'serpentine', 'lunar',
 ]);
 const cache = new Map<TrackId, Track>();
 
 // Own frozen copies, so editing a source definition cannot invalidate the fingerprint.
 export const TRACKS: Readonly<Record<TrackId, TrackDef>> = Object.freeze(Object.fromEntries(
-  [meadow, canyon, snowpeak, neon, harbor, forest, volcano, skyline].map(def => {
+  [meadow, canyon, snowpeak, neon, harbor, forest, volcano, skyline,
+    dunes, garden, speedway, bayou, cavern, temple, serpentine, lunar].map(def => {
     const track = buildTrack(def);
     cache.set(def.id, track);
     return [def.id, track.def];

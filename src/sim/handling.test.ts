@@ -188,8 +188,10 @@ describe('H1 handling', () => {
 // Original four values re-measured identically to M5-05; M6-09 changes rendering only.
 // M9-02: FOREST racing line (hairpins out-in-out, shallow S sections), 70.53587962962962 -> 69.52407407407406 s.
 // FOREST easy / hard: 73.37800925925927 (1.0554) / 67.94791666666666 (0.9773), 0/0 hits each (recorded, not required).
-type Baseline = { version: 'v15' | 'v16' | 'm9'; meanLap: number; wallHits: number; bandHits: number };
-const BASELINE: Record<(typeof tracks.TRACK_IDS)[number], Baseline> = {
+type Baseline =
+  | { version: 'v15' | 'v16' | 'm9'; meanLap: number; wallHits: number; bandHits: number }
+  | { version: 'm10-pending' };
+const BASELINE = {
   meadow: { version: 'v15', meanLap: 68.5011574074074, wallHits: 0, bandHits: 0 },
   canyon: { version: 'v15', meanLap: 68.49583333333334, wallHits: 0, bandHits: 0 },
   snowpeak: { version: 'v15', meanLap: 67.89120370370368, wallHits: 0, bandHits: 0 },
@@ -198,7 +200,15 @@ const BASELINE: Record<(typeof tracks.TRACK_IDS)[number], Baseline> = {
   forest: { version: 'm9', meanLap: 69.52407407407406, wallHits: 0, bandHits: 0 },
   volcano: { version: 'v16', meanLap: 67.82407407407408, wallHits: 0, bandHits: 0 },
   skyline: { version: 'v16', meanLap: 67.35324074074076, wallHits: 0, bandHits: 1 },
-};
+  dunes: { version: 'm10-pending' },
+  garden: { version: 'm10-pending' },
+  speedway: { version: 'm10-pending' },
+  bayou: { version: 'm10-pending' },
+  cavern: { version: 'm10-pending' },
+  temple: { version: 'm10-pending' },
+  serpentine: { version: 'm10-pending' },
+  lunar: { version: 'm10-pending' },
+} satisfies Record<(typeof tracks.TRACK_IDS)[number], Baseline>;
 const SEEDS = [1, 42, 98765];
 
 /**
@@ -282,6 +292,11 @@ describe('H1 CPU balance: absolute range and recorded baseline', () => {
     // Stage 1: absolute range, an average pace of 20 to 40 m/s.
     expect(meanLap).toBeGreaterThanOrEqual(track.length / 40);
     expect(meanLap).toBeLessThanOrEqual(track.length / 20);
+    if (baseline.version === 'm10-pending') {
+      // M10-10 で確定: retain completion, replay and absolute pace checks while recording new courses.
+      console.info('M10 pending CPU baseline', { trackId, meanLap, wallHits, bandHits, pitFalls });
+      return;
+    }
     // Stage 2: ratio to the recorded baseline.
     const ratio = meanLap / baseline.meanLap;
     expect(ratio).toBeGreaterThanOrEqual(0.95);

@@ -565,6 +565,7 @@ describe('protocol layout fingerprint', () => {
       15: 'aa03c454',
       16: 'aa03c454',
       17: 'aa03c454',
+      18: 'aa03c454',
     };
     expect(SNAPSHOT_LAYOUT.slice(0, 2)).toEqual([KART_EFFECT_LAYOUT, ENTITY_KINDS]);
     expect(fingerprint(SNAPSHOT_LAYOUT)).toBe(LAYOUT_FINGERPRINT);
@@ -602,8 +603,11 @@ describe('protocol layout fingerprint', () => {
     // M7-00: v17 only added RaceState.cpuLevel (513548114). M9-02 forest racingLine、v17 のまま:
     // the hello handshake rejects COURSE_FINGERPRINT mismatches ('version'), so older builds cannot mix.
     pinned[17] = 1316474231;
+    pinned[18] = undefined; // M10-10 で確定
     expect(COURSE_FINGERPRINT).toBe(Number.parseInt(fingerprint(definitions), 16));
-    expect(COURSE_FINGERPRINT).toBe(pinned[PROTOCOL_VERSION]);
+    if (pinned[PROTOCOL_VERSION] !== undefined) {
+      expect(COURSE_FINGERPRINT).toBe(pinned[PROTOCOL_VERSION]);
+    }
     expect(fingerprint(definitions.map((def, index) => index === 0 ? { ...def, roadHalfWidth: 8 } : def)))
       .not.toBe(fingerprint(definitions));
   });

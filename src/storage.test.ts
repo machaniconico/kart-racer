@@ -237,9 +237,11 @@ describe('storage best times', () => {
     expect(JSON.parse(store.get(V4)!)).toEqual({ meadow: { '3': { time: 9, layout: 1 } }, neon: { '1': { time: 33, layout: 1 } } });
   });
 
-  it('saves and loads every registered course', () => {
+  it('saves and loads all sixteen registered courses without dropping any IDs', () => {
+    expect(TRACK_IDS).toHaveLength(16);
     TRACK_IDS.forEach((id, index) => saveBest(id, 40 + index));
     TRACK_IDS.forEach((id, index) => expect(loadBest(id)).toBe(40 + index));
+    expect(Object.keys(JSON.parse(store.get(V4)!))).toEqual(TRACK_IDS);
   });
 });
 
