@@ -1022,3 +1022,128 @@ M5 の「M6 必須」だった、ロビーのコース変更でホストの再�
 ### M8 に送ったもの
 `.omc/followups.md` の「v6 M7」節のとおり。M8 はオンラインの安定化、M9 は保守。
 
+
+## v6 M8（オンライン安定化・プロトコル v17 のまま）
+ロビーのコース切替で切断される問題（C-010）と、悪回線でのゲストのジッターを直した。**通信の版は v17 のまま**で、スナップショットのバイトも変えていない。数値は実ファイル（`src/net/guestSession.ts`、`src/net/renderClock.ts`、`src/net/interpolation.ts`、`src/net/netQuality.test.ts`、`e2e/network.spec.ts`）と M8 のコミットメッセージ（`f923ff8` `4fcae9b` `33004af` `7e72f99` `f13ab3b` `43463c7` `b045877` `ff6194a` `6dbaf68` `ec37436`）から取った。E2E は darwin、Chromium、2 ページ、実 PeerJS。
+
+### wire は不変（v17）
+- `PROTOCOL_VERSION` は 17、`ROOM_PREFIX` は `pcircuit-v17-`。`LAYOUT_FINGERPRINT` は `aa03c454`（v14〜v17 は同値）。`COURSE_FINGERPRINT` の pin は `pinned[17] = 513548114` のまま（M7 と同じ。M8 はコース定義を変えていない）。M7 から版を上げない。
+- 版を上げずに済んだ理由: ホストはロビーで `course` を送ったあと必ずレンダラーを再構築する。つまりゲストが `course` を受け取ること自体が「ホストがこれから数秒止まる」予告になる。専用の制御メッセージ（案: `rebuilding`、v18）は同じ情報を持つので足さない。
+
+### ロビーの生存判定（`src/net/guestSession.ts`）
+- ゲストが `host_lost` と判定する条件（ロビーとリザルト）は、ホスト由来の**最後の受信**からの経過時間が閾値以上のとき。「最後の受信」は、ホストからの PING、有効な PONG、すべての制御メッセージ（`welcome` / `roster` / `course` など）で更新する。以前は PONG だけだった。
+- 閾値は `LOBBY_TIMEOUT_MS = 5000`。ただし `course` を受信してから `COURSE_GRACE_MS = 10_000` の間は閾値が 10 s になる（`graceUntil = now + COURSE_GRACE_MS`）。ホストの再構築で止まる時間の予告として使う。猶予の期間中は 5 s で切れない。
+- レース中は不変: スナップショットの無音が 1500 ms で stall 表示、5000 ms で `host_lost`。猶予はレース中には効かない（ロビーとリザルトのみ）。
+- 接続中の `timeout`（5 s）も不変。
+- 副作用: コース切替の直後 10 s 間は、本当にホストが落ちた場合の検知が最大 10 s に伸びる。猶予内でも PING や制御メッセージが届けば「最後の受信」は更新される。
+- `hostSession.test` のロビー停止ケースは、猶予に合わせて停止を 5.6 s から **10.6 s** にした。通常の 5 s は `guestSession.test` の (b) が固定している。M6-07 の履歴の数値は動かない。
+
+### C-010 の根本原因と対策（`43463c7`、M8-01）
+- **根本原因**: ロビーでコースを変えるたびに `recreateRenderer` が `THREE.WebGLRenderer` を作り直し、古い方を `dispose()` していた。`WebGLRenderer.dispose()` は three のプログラムキャッシュを捨てるため、新しいレンダラーが全シェーダーを再コンパイルする（スイッチごとに 13〜14 プログラム）。しかも古いレンダラーのプログラムが回収されず、約 7 つずつリークしていた。M6 の「GPU を奪い合う 2 ページで 3.9〜4.3 s」の大半はこの再コンパイルだった。
+- **対策**: `GameRenderer` に既存の `WebGLRenderer` を注入できるようにし、ロビーの再構築を次の順にした。
+  1. 共有の `WebGLRenderer` 上で新しいシーンを**構築**する。
+  2. 1 回**描画**する（プログラムはキャッシュに命中する）。
+  3. 描画先の所有権を新シーンに**引き渡す**。
+  4. 最後に**旧シーンだけを `dispose()`** する。
+  この順序が本質。material の `dispose()` は使用数が 0 になった時点でプログラムを削除するため、旧シーンを先に壊すと共有プログラムが消える。
+- **実測（2 ページ、実 PeerJS、ロビーのコース切替 5 回 × 3 run）**:
+
+| 項目 | 修正前 | 修正後 |
+| --- | --- | --- |
+| 生存プログラム数 | 13 → 40（増え続ける） | 13〜16（安定） |
+| 1 回の切替でコンパイルされるプログラム数 | 13〜14 | 1〜4（neon 固有の分は戻るたびに再コンパイル） |
+| 最長フレーム間隔 ホスト | 2.35〜4.47 s | 0.25〜0.99 s |
+| 最長フレーム間隔 ゲスト | 2.45〜4.04 s | 0.40〜1.97 s |
+
+- `courses.spec` の geometry テストは、`disposedGeometries === 0` の検査（新規 `WebGLRenderer` 前提）をやめ、geometries / textures / programs が有界であることと、2 周目 == 1 周目を検査する。
+- 最終 dispose でも共有アイテム資源は保持する（同一ページで再初期化を繰り返すとリスナーが残る。followups の M8）。
+
+### 見送った試行: M8-01b（neon の material キャッシュ）
+- neon 固有の 3 マテリアルを保持し、起動時にウォームアップする案を試した。再コンパイルは消えたが、ロビー切替のゲストの `frameGap` は **1,750〜1,917 ms** のまま変わらなかった。
+- 原因は再コンパイルではない。neon の構築 CPU（154〜171 ms。`roadHeightAtXZ` が 75〜92 ms で、他コースの約 5 倍）と、その後のネイティブ時間、2 ページのテストが 1 つの GPU を共有することの合算。
+- 差分は**破棄**した。T1 のゲスト予算は下の再仕様化で 2,500 ms にした。neon の構築コストは M9 送り。
+
+### E2E の予算の再仕様化（`e2e/network.spec.ts`、司令塔、2026-10-15）
+M8-07 の E2E（T1〜T4）を実測したところ、設計時の予算が当たらなかった。実装を直すのではなく、予算を実測と理由つきで改めた（`6dbaf68`、`ec37436`）。
+
+- **T1（8 コース連続切替）**: 伝搬 ≤ 1,000 ms、ホストのフレーム間隔 ≤ **1,500** ms、ゲスト ≤ **2,500** ms。訪問済みの meadow に戻るときはホスト・ゲストとも ≤ 1,000 ms で、プログラム数は戻る前後で同数。総プログラム数は P0 + 8 以下（P0 = 13、最大 16）。
+  - 理由: 1,500 ms は単独のホストの目安。ゲストは neon で 1,450 ms（単独）、1,783〜1,833 ms（全体 run）、最大 1,917 ms（M8-01b 試行）が出た。原因は上の neon の構築 CPU・ネイティブ時間・2 ページが共有する GPU で、キャッシュでは消えない。M8-01 の前は 3,900〜4,300 ms。2,500 ms は `COURSE_GRACE_MS`（10,000 ms）の 1/4 で、猶予の内側に十分収まる。
+- **T3（15 s の遅延・ジッター・ロス・バースト下のレース）**: 劣化は `latencyMs 120 / jitterMs 50 / lossRate 0.1 / seed 3`、3 s ごとに 400 ms の `+200 ms / loss 0.4` のバースト。5 s 後の最初の標本 ≥ 140 ms、5〜15 s の最大 ∈ [140, 250] ms、**全標本 ≤ 250 ms**、レンダー時刻の逆行 0、stall 0、ダイアログなし。
+  - 回復: 劣化を外す前の 5 s（走行中・無劣化）で**同一レースの基準 B** を測り、劣化解除後 10 s 以内に、**同じ 1 標本**が `≤ max(110, B + 30)` かつ `≤ 劣化中の最大 − 50` を満たすこと（100 ms 周期で標本）。
+  - 理由: 旧基準「解除 6 s 後に ≤ 110 ms」は、3 s 窓と 5 %/s のスルー（250 → 110 に落ちるだけで約 2.8 s）に加え、2 ページの headless 環境そのものの雑音（無劣化でも B ≈ 150 ms）で、136 ms / 123.675 ms と落ちた。絶対値では環境ごとの雑音を拾うので、同一レースの B を基準にした。また「5 s 後の全標本 ≥ 140 ms」は、バーストの合間に遅延が下がる設計（112 ms を観測）を弾くため、最初の標本と最大値だけを見て、上限は全標本に課した。
+  - 実測: B = 146.055 ms（限界 176.055）で 174.020 ms @ 4,738 ms に回復（単独）。B = 152.880 ms（限界 182.880）で 179.435 ms @ 4,755.6 ms（全体 run。劣化中の最大 250 ms より 70.565 ms 下）。B は単一標本（中央値化が望ましい。followups）。
+- **T2**: コース変更の直後にホストを `busyWait` 4.5 s 止めても、ロビーが保たれ、続くレースが走る。**T4**: ロビーのホスト喪失は 10 s 以内にダイアログを出し、OK でタイトルに戻る。
+- 全体: 39 件を 1 build・1 worker・retries 0 で **39 passed (25.5m)**、壁時計 1527.573 s（35 分未満）。既存のスクリーンショット 47 ファイルの SHA-256 は実行前後で同一。
+- T1 実測（全体 run、ms。ホスト/ゲストはフレーム間隔の最大。`ec37436`）:
+
+| コース | 伝搬 | ホスト | ゲスト | プログラム数 |
+| --- | --- | --- | --- | --- |
+| canyon | 120.7 | 733.3 | 983.3 | 13 |
+| snowpeak | 118.0 | 383.3 | 400.0 | 12 |
+| neon | 143.0 | 983.3 | 1783.3 | 16 |
+| harbor | 120.6 | 250.0 | 233.3 | 12 |
+| forest | 113.3 | 583.3 | 850.0 | 13 |
+| volcano | 128.9 | 366.6 | 466.6 | 12 |
+| skyline | 111.5 | 850.0 | 1049.9 | 13 |
+| meadow | 85.1 | 283.3 | 583.3 | 13 |
+
+  単独 run は neon がホスト 783.2 / ゲスト 1449.9、meadow がホスト 216.7 / ゲスト 366.6。
+
+### 適応表示遅延（`src/net/renderClock.ts`）
+ゲストの他車の補間は、固定 100 ms の表示遅延から、ジッターに追従する遅延に変わった（`4fcae9b`、`7e72f99`）。
+
+- 定数: `BASE_RENDER_DELAY_MS = 100`、`MAX_RENDER_DELAY_MS = 250`、`JITTER_WINDOW_MS = 3000`、`MIN_JITTER_SAMPLES = 10`、`JITTER_DEADBAND_MS = 2`、`DELAY_SLEW = 0.05`、`OFFSET_SLEW = 0.05`。外挿上限 `MAX_EXTRAPOLATION_MS = 100`（`interpolation.ts`）は不変。
+- `JitterEstimator`: スナップショットごとに `到着のローカル時刻 − snapshot.hostTime` を標本にする。時計オフセットは定数なので引き算で消え、ロスの影響も受けない。3 s の窓で `p95 − min` を取り、標本が 10 未満または 2 ms 未満（デッドバンド）なら目標は 100 ms、それ以外は `100 + 値` を [100, 250] に丸める。
+- `RenderClock`: 表示遅延とクロックオフセットの段差を、どちらも毎秒 5 %（50 ms/s）で目標に近づける。表示するホスト時刻は前進のみで、前進の速さは経過時間の 90〜110 %。`hostTime(now)` と `JitterEstimator.target(now)` は状態を変えるので、呼び手はそのフレームの `now` 以外で呼ばない。
+- `GuestSession` の既定は `renderDelay: 'adaptive'`。`'fixed'` を渡すと従来の 100 ms 固定（`renderDelayMs` は `INTERPOLATION_DELAY_MS`）に戻る。
+- **保証の再定義**: M6-07 の「age ≤ 100 ms で誤差 < 1.0 m」は**実際の遅延に対する基準**になった（`age = 表示するホスト時刻 − 最新スナップショットの送信時刻`）。固定遅延の条件では遅延が 100 ms に留まり、従来と同じ数値になる。誤差表（M6-07）、`netMotion` の ≤ 1.0 m、`predictor.test` seed 92 の ≤ 0.05 m は動かない。
+  - 履歴テストの基準 tick は `hostTick − renderDelayMs / TICK_MS` に変え、その条件で `renderDelayMs === 100` を毎フレーム検査する（従来の `− 6` と同値）。
+  - **fixed と adaptive の同値**: ジッター 0 の mock（RTT 120 ms、loss 10 %、seed 92、meadow、600 フレーム）で、両モードの描画ポーズが `toEqual` で完全一致する。ジッター 0 では遅延が 100 ms から動かない。
+
+### interpolateState の tick 分母（`src/net/interpolation.ts`）
+- 速度・ヨー率・y 速度・弾の速度の外挿に使う分母を、壁時計の `duration`（`to.hostTime − from.hostTime`）から、`rateDuration = (to.tick − from.tick) × TICK_MS` に変えた。位置の補間 `alpha` は従来どおり壁時計。
+- 理由（既存のバグ）: ホストが約 15 fps 以下だと、同じ rAF の中で 2 枚のスナップショットが約 0.3 ms 差で出る。分母が 0.3 ms になり、外挿が 100 倍以上に発散していた。tick 差は壁時計差と一致する固定遅延の mock では同値なので、M6-07 の表は動かない。
+- 範囲: M8 は分母の修正だけ。ホストのバンチングを根本から直す tick ベースのタイムラインは M9 送り。
+
+### netQuality の指標（`src/net/netQuality.test.ts`、`f13ab3b`）
+固定と適応を、同じ劣化プロファイルで決定的に比べる。予測 on、レース seed 431、`MockTransport`、host の AI 入力、他車（id ≠ 1）だけを対象にする。各 run は racing のまま、`reason` は null、stall 遷移 0、レンダー時刻の逆行 0。
+
+- **pops**: 他車 1 台・1 フレームごとに、前フレームからの変位が `2 × |speed| × dt + 0.1 m` を超えた回数。ホストの権威的なワープ（同じ区間の tick で `popLimit` を超える移動）は数えない。
+- **freezes**: `|speed| > 5` なのに変位が 0.01 m 未満のフレーム数。
+- **max err**: adaptive の run のみ。`age ≤ 100 ms` の標本だけで、描画ポーズと、ホスト履歴を表示 tick で線形補間した位置との距離の最大値。< 1 m を検査。
+- **delay**: 表示遅延の最小〜最大。adaptive は常に [100, 250] で、レンダー時刻の前進は経過時間の 0.85〜1.15 倍。
+- プロファイル: **P1（jitter）** = `latencyMs 60 / jitterMs 60 / lossRate 0.2 / seed 92`、600 tick。**P2（spiky）** = `latencyMs 60 / jitterMs 15 / lossRate 0.05 / seed 7`、900 tick、3 s ごとに 400 ms の `+200 ms / loss 0.4` のバースト。
+- 受け入れ: P1 は fixed の pops ≥ 20 かつ adaptive の pops・freezes が fixed の半分以下。P2 は adaptive が fixed 以下。
+- **当初の P1 は 60±40 ms、loss 0.1**だった。fixed の pops が **0** で、比較の前提（固定遅延では pops が出る）が成り立たなかった（adaptive も 0 で、遅延 100〜178 ms、誤差 0.2013 / 0.1927 m）。司令塔の判断で 60±60 ms、loss 0.2 に強めた。
+
+| プロファイル | コース | モード | pops | freezes | max err (m) | delay (ms) |
+| --- | --- | --- | --- | --- | --- | --- |
+| P1 jitter（当初 60±40） | meadow | fixed | 0 | 0 | - | 100-100 |
+| P1 jitter（当初 60±40） | meadow | adaptive | 0 | 0 | 0.2013 | 100-178 |
+| P1 jitter（当初 60±40） | skyline | fixed | 0 | 0 | - | 100-100 |
+| P1 jitter（当初 60±40） | skyline | adaptive | 0 | 0 | 0.1927 | 100-178 |
+| P1 jitter（採用 60±60） | meadow | fixed | 27 | 42 | - | 100-100 |
+| P1 jitter（採用 60±60） | meadow | adaptive | 0 | 0 | 0.7584 | 100-211 |
+| P1 jitter（採用 60±60） | skyline | fixed | 29 | 42 | - | 100-100 |
+| P1 jitter（採用 60±60） | skyline | adaptive | 0 | 0 | 0.4872 | 100-217 |
+| P2 spiky | meadow | fixed | 89 | 441 | - | 100-100 |
+| P2 spiky | meadow | adaptive | 42 | 210 | 0.7776 | 100-250 |
+| P2 spiky | skyline | fixed | 82 | 427 | - | 100-100 |
+| P2 spiky | skyline | adaptive | 68 | 294 | 0.4069 | 100-250 |
+
+- spiky では adaptive でも pops が 42 / 68 残る（バースト中は最大 250 ms でも吸収しきれない）。遠隔カートの視覚平滑化は M9 送り。
+- 悪回線の代償: 遅延は最大 250 ms まで伸びるので、**他のプレイヤーは最大 250 ms 遅れて見える**（自車は予測で遅れない）。
+
+### ImpairingTransport は debug ビルド限定（`src/net/impairedLink.ts`、`b045877`）
+- 遅延・ジッター・ロス・バーストを seed 付き（mulberry32）で `Transport` に与えるラッパー。`validate` が不正値を `RangeError('Invalid impairment profile')` で拒む。
+- `src/main.ts` は `import.meta.env.DEV || import.meta.env.VITE_KART_DEBUG === '1'` のときだけ動的 import してラッパーを挟む。本番ビルドではこの条件が静的に偽で、**モジュールも `__kartDebug`（`impair()`、`busyWait`、`frameGap`、`render.programCount`）も dist に含まれない**。E2E は `__kartDebug.net.impair()`（async、検証後にコピーを保存）で切り替える。stall の回数はセッションごとに 0 に戻る。
+- `MockTransport` にも `hold` / `release`（主スレッド停止の模擬）と `bursts` を足した（`f923ff8`）。バーストなしの乱数消費は HEAD と同一（35 構成で確認）。
+
+### CDP の絞りを使わない理由
+CDP のネットワーク絞りは HTTP スタックにだけ効き、WebRTC のデータチャネル（PeerJS のゲーム通信）には効かない。絞っても対戦の通信が劣化しないので、アプリ内で `ImpairingTransport` を挟む。
+
+### 基準の更新
+- 変更なし: `PROTOCOL_VERSION` 17、`pinned[17]`、`LAYOUT_FINGERPRINT`、コース指紋、M6-07 の誤差表、sim 指紋 pin。スクリーンショットの golden は更新していない。
+
+### M9 に送ったもの
+`.omc/followups.md` の「v6 M8」節の「M9 送り」のとおり。neon の構築コスト、実回線の適応遅延の基準、遠隔カートの視覚平滑化、tick ベースのタイムライン、初回アイテム material のコンパイル、途中再参加、および M7 から続く保守項目。
