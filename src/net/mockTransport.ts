@@ -12,6 +12,8 @@ export interface MockTransportOptions {
   reorderRate?: number;
   /** Extra random delay for packets selected for reordering. */
   reorderDelayMs?: number;
+  /** Periodic bad windows: a send at time t with t mod periodMs < lengthMs gets extra delay and extra loss. */
+  bursts?: { periodMs: number; lengthMs: number; extraLatencyMs: number; lossRate: number };
 }
 
 interface Delivery { at: number; sequence: number; link: MockLink; kind: ChannelKind; data: WireData }
@@ -103,7 +105,9 @@ class MockHost implements TransportHost {
 /** One instance is an isolated virtual network; call host/join for every participant. */
 export class MockTransport implements Transport {
   private readonly rooms = new Map<string, MockHost>();
-  private readonly options: Required<MockTransportOptions>;
+  private readonly options: Required<Omit<MockTransportOptions, 'bursts'>> & Pick<MockTransportOptions, 'bursts'>;
+  private held: Delivery[] = [];
+  private readonly heldPeers = new Set<string>();
   private randomState: number;
   private clock = 0;
   private nextPeer = 1;
@@ -117,6 +121,12 @@ export class MockTransport implements Transport {
     if (!Number.isInteger(settings.seed) || settings.seed < 0 || settings.seed > 0xffffffff ||
       ![settings.latencyMs, settings.jitterMs, settings.reorderDelayMs].every(value => Number.isFinite(value) && value >= 0) ||
       ![settings.lossRate, settings.reorderRate].every(value => Number.isFinite(value) && value >= 0 && value <= 1)) {
+      throw new RangeError('Invalid mock network options');
+    }
+    const bursts = settings.bursts;
+    if (bursts && !(Number.isFinite(bursts.periodMs) && bursts.periodMs > 0 &&
+      [bursts.lengthMs, bursts.extraLatencyMs].every(value => Number.isFinite(value) && value >= 0) &&
+      Number.isFinite(bursts.lossRate) && bursts.lossRate >= 0 && bursts.lossRate <= 1)) {
       throw new RangeError('Invalid mock network options');
     }
     this.randomState = settings.seed;
@@ -160,10 +170,13 @@ export class MockTransport implements Transport {
 
   /** Internal link operation; randomness is consumed only by send, never by advance. */
   schedule(sender: MockLink, kind: ChannelKind, data: WireData): void {
-    const { latencyMs, jitterMs, lossRate, reorderRate, reorderDelayMs } = this.options;
+    const { latencyMs, jitterMs, lossRate, reorderRate, reorderDelayMs, bursts } = this.options;
+    const inBurst = !!bursts && this.clock % bursts.periodMs < bursts.lengthMs;
     if (kind === 'unreliable' && this.random() < lossRate) return;
+    if (inBurst && kind === 'unreliable' && this.random() < bursts!.lossRate) return;
     let delay = Math.max(0, latencyMs + (this.random() * 2 - 1) * jitterMs);
     if (kind === 'unreliable' && this.random() < reorderRate) delay += this.random() * reorderDelayMs;
+    if (inBurst) delay += bursts!.extraLatencyMs;
     let at = this.clock + delay;
     if (kind === 'reliable') {
       at = Math.max(at, sender.reliableDue);
@@ -176,6 +189,17 @@ export class MockTransport implements Transport {
   }
   cancel(link: MockLink): void {
     this.deliveries = this.deliveries.filter(delivery => delivery.link !== link && delivery.link !== link.other);
+    this.held = this.held.filter(delivery => delivery.link !== link && delivery.link !== link.other);
+  }
+
+  /** Simulates a stalled main thread: deliveries to links with this peerId queue up until release. */
+  hold(peerId: string): void { this.heldPeers.add(peerId); }
+  /** Delivers everything held for peerId synchronously, in original order, at the current time. */
+  release(peerId: string): void {
+    this.heldPeers.delete(peerId);
+    const ready = this.held.filter(delivery => delivery.link.peerId === peerId);
+    this.held = this.held.filter(delivery => delivery.link.peerId !== peerId);
+    for (const delivery of ready) delivery.link.deliver(delivery.kind, delivery.data);
   }
 
   advance(ms: number): void {
@@ -186,7 +210,8 @@ export class MockTransport implements Transport {
       if (++count > 100_000) throw new Error('Mock network did not quiesce');
       const delivery = this.deliveries.shift()!;
       this.clock = delivery.at;
-      delivery.link.deliver(delivery.kind, delivery.data);
+      if (this.heldPeers.has(delivery.link.peerId)) this.held.push(delivery);
+      else delivery.link.deliver(delivery.kind, delivery.data);
     }
     this.clock = target;
   }
