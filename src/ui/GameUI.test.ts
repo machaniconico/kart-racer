@@ -18,6 +18,9 @@ vi.mock('../sim/tracks', async importOriginal => {
 import { courseNumber, courseOptions, cpuOptions, cupOptions, formatPreciseTime, GameUI, modeOptions } from './GameUI';
 import { CUPS } from '../gp/grandPrix';
 import { sampleTrack } from '../sim/track';
+import { createRouletteView } from './itemIcons';
+import { createRace } from '../sim/race';
+import type { ItemType } from '../sim/types';
 
 const courseNames = tracks.names!;
 tracks.names = null;
@@ -268,7 +271,7 @@ function fakeEl(values: string[] = []): FakeEl {
 }
 const IDS = ['cup-select', 'course-select', 'cpu-select', 'position-group', 'retry-label', 'course-index', 'course-name', 'title-best',
   'result-position', 'leaderboard', 'best-lap-record', 'results-heading', 'results-course', 'finish-time', 'finish-best', 'new-record', 'result-laps',
-  'back-title', 'retry-race'];
+  'back-title', 'retry-race', 'item-display'];
 function fakeUi() {
   const refs: Record<string, FakeEl> = Object.fromEntries(IDS.map(id => [id, fakeEl()]));
   refs['cup-select'] = fakeEl(CUPS.map(cup => cup.id));
@@ -298,10 +301,37 @@ describe('GameUI play modes', () => {
     ui.setPlayMode('timeattack');
     expect([refs['cup-select'].hidden, refs['course-select'].hidden, refs['cpu-select'].hidden, refs['position-group'].hidden])
       .toEqual([true, false, true, true]);
+    expect(refs['item-display'].hidden).toBe(true);
     expect(refs['retry-label'].textContent).toBe('もう一度走る');
     expect(refs['course-index'].textContent).toBe('01');
     ui.setPlayMode('race');
-    expect([refs['cpu-select'].hidden, refs['position-group'].hidden]).toEqual([false, false]);
+    expect([refs['cpu-select'].hidden, refs['position-group'].hidden, refs['item-display'].hidden]).toEqual([false, false, false]);
+    ui.setPlayMode('timeattack');
+    ui.setPlayMode('gp');
+    expect(refs['item-display'].hidden).toBe(false);
+  });
+
+  it('keeps the touch item button in sync through update() after a race with a held item', () => {
+    const { ui, refs } = fakeUi();
+    const make = () => ({ ...fakeEl(), disabled: false, attrs: {} as Record<string, string>,
+      classList: { toggle: () => undefined, remove: () => undefined },
+      setAttribute(name: string, value: string) { this.attrs[name] = value; }, dispatchEvent: () => true });
+    const any = new Proxy(refs as Record<string, unknown>, { get: (target, key: string) => (target[key] ??= make()) });
+    Object.assign(ui, { refs: any, roulette: createRouletteView(), lastItem: undefined, reducedMotion: null, onRoulette: null,
+      inkMounted: true, lastMapTick: 0, drawMap: () => undefined });
+    const state = createRace(1, { karts: 2, itemBoxes: false });
+    const button = make();
+    refs['use-item'] = button;
+    const run = (item: ItemType | null) => { state.karts[0]!.item = item; state.karts[0]!.effects.rouletteTime = 0; (ui as unknown as { update(s: unknown): void }).update(state); };
+    run('dash');
+    expect(refs['item-button-name'].textContent).not.toBe('ITEM');
+    expect(button.disabled).toBe(false);
+    ui.setPlayMode('timeattack');
+    run(null);
+    expect(refs['item-button-name'].textContent).toBe('ITEM');
+    expect(button.disabled).toBe(true);
+    expect(button.attrs['aria-label']).toBe('アイテムを持っていません');
+    expect(refs['item-name'].textContent).not.toBe('ボックスを取ろう');
   });
 
   it('checks the cpu level radio and formats the time attack best', () => {

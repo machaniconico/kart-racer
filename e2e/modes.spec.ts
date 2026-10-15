@@ -136,6 +136,15 @@ test('M7-07: time attack saves the exact time and replays an identical ghost wit
 
   await page.locator('#start-race').click();
   expect(await page.evaluate(() => window.__kartDebug.ghost?.active)).toBe(true);
+  await expect(page.locator('#item-display')).toBeHidden();
+  // Wait (real frames) until the ghost is moving, then sample its wheel spin 500 ms apart.
+  await page.waitForFunction(() => window.__kartDebug.ghost?.active && window.__kartDebug.ghost.speed > 5, undefined, { timeout: 30_000 });
+  const spin0 = await page.evaluate(() => window.__kartDebug.render.ghost?.wheelSpin ?? null);
+  await page.waitForTimeout(500);
+  const spin1 = await page.evaluate(() => window.__kartDebug.render.ghost?.wheelSpin ?? null);
+  expect(await page.evaluate(() => window.__kartDebug.ghost?.active && window.__kartDebug.ghost.speed > 5)).toBe(true);
+  expect(spin0).not.toBeNull();
+  expect(spin1! - spin0!).toBeGreaterThanOrEqual(1);
   // A stationary minute makes the slower-run branch mandatory and lets the ghost finish first.
   const secondTime = await finishRace(page, 60);
   expect(secondTime).toBeGreaterThan(firstTime);

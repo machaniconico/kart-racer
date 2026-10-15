@@ -265,7 +265,7 @@ export class GameRenderer {
   }
 
   /** Same pose formulas as the roster karts in update(); null hides the ghost. */
-  updateGhost(kart: KartState | null, prev: Pose | null, alpha: number): void {
+  updateGhost(kart: KartState | null, prev: Pose | null, alpha: number, dt: number): void {
     if (!this.ghost) return;
     this.ghost.root.visible = kart !== null;
     if (!kart) return;
@@ -282,7 +282,17 @@ export class GameRenderer {
     body.position.y = kart.hopTime > 0 ? Math.sin(Math.min(1, kart.hopTime / 0.35) * Math.PI) * 0.48 : 0;
     if (kart.spinTime > 0) body.rotation.y = kart.spinTime * 14;
     else body.rotation.y = kart.driftTime > 0 ? kart.driftDirection * 0.19 : 0;
-    for (const wheel of wheels) wheel.rotation.y = wheel.position.z > 0 ? kart.steer * 0.3 : 0;
+    for (const wheel of wheels) {
+      wheel.rotation.x += kart.speed * dt / 0.43;
+      wheel.rotation.y = wheel.position.z > 0 ? kart.steer * 0.3 : 0;
+    }
+  }
+
+  get ghostVisible(): boolean { return this.ghost?.root.visible ?? false; }
+
+  /** Sum of the ghost wheels' spin angles (debug bridge); null when no ghost exists. */
+  get ghostWheelSpin(): number | null {
+    return this.ghost ? this.ghost.wheels.reduce((sum, wheel) => sum + wheel.rotation.x, 0) : null;
   }
 
   update(state: RaceState, previous: RenderSnapshot, alpha: number, dt: number, mode: 'title' | 'lobby' | 'race' | 'results'): void {

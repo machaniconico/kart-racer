@@ -250,6 +250,7 @@ export class GameUI {
     this.get('course-select').hidden = mode === 'gp';
     this.get('cpu-select').hidden = mode === 'timeattack';
     this.get('position-group').hidden = mode === 'timeattack';
+    this.get('item-display').hidden = mode === 'timeattack';
     if (this.root.dataset.mode !== 'host') this.text('retry-label', this.retryLabel());
     if (mode === 'gp') this.showCupStrip(this.get('cup-select').querySelector<HTMLInputElement>('input:checked')?.value);
     else this.showCourseStrip(this.courseId);
@@ -387,7 +388,8 @@ export class GameUI {
     }
     if (this.lastItem !== player.item) {
       this.lastItem = player.item;
-      this.text('item-name', player.item ? itemName(player.item) : 'ボックスを取ろう');
+      // No boxes in time attack: the hidden panel keeps its text, but the touch button below still syncs.
+      if (this.playMode !== 'timeattack') this.text('item-name', player.item ? itemName(player.item) : 'ボックスを取ろう');
       this.text('item-button-name', player.item ? itemShortName(player.item) : 'ITEM');
       this.setItemArt(player.item ? itemIcon(player.item) : emptyItem, player.item !== null);
       // Fresh SVG nodes start the pop (or the reduced-motion fade) only on a roulette stop.

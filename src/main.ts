@@ -820,7 +820,7 @@ function frame(now: number): void {
     const alpha = mode === 'guest' ? guestAlpha : accumulator / FIXED_DT;
     const drawAlpha = screen === 'race' && !paused ? alpha : 1;
     const showGhost = ghost && !ghost.diverged && screen === 'race';
-    renderer.updateGhost(showGhost ? ghost!.state.karts[0]! : null, showGhost ? ghostPrevious?.karts[0] ?? null : null, drawAlpha);
+    renderer.updateGhost(showGhost ? ghost!.state.karts[0]! : null, showGhost ? ghostPrevious?.karts[0] ?? null : null, drawAlpha, paused ? 0 : elapsed);
     renderer.update(state, previous, drawAlpha, paused ? 0 : elapsed, rendererScreen());
   }
   frameId = requestAnimationFrame(frame);
@@ -862,6 +862,7 @@ function createDebugBridge() {
       get triangles() { return renderer?.renderer.info.render.triangles ?? 0; },
       get trackId() { return renderer?.getTrackId() ?? null; },
       get programCount() { return renderer?.programCount ?? null; },
+      get ghost() { return renderer ? { visible: renderer.ghostVisible, wheelSpin: renderer.ghostWheelSpin } : null; },
     },
     selectCourse,
     get playMode() { return playMode; },
@@ -869,7 +870,7 @@ function createDebugBridge() {
     get ghost() {
       return ghost && {
         active: !ghost.diverged && !ghost.finished, diverged: ghost.diverged, tick: ghost.state.tick,
-        finished: ghost.finished, finishTime: ghost.finishTime, recordTime: ghostRecordTime,
+        speed: ghost.state.karts[0]!.speed, finished: ghost.finished, finishTime: ghost.finishTime, recordTime: ghostRecordTime,
       };
     },
     timeAttackRecord(trackId: TrackId, laps: number) {
