@@ -1,4 +1,5 @@
-import { test, expect } from '@playwright/test';
+import { existsSync } from 'node:fs';
+import { test, expect, type TestInfo } from '@playwright/test';
 import type { KartDebug } from '../src/main';
 import { getTrack } from '../src/sim/tracks';
 import { sampleTrack } from '../src/sim/track';
@@ -6,6 +7,23 @@ import { findHairpins } from '../src/sim/tracks/shapeMetrics';
 import { KART_RADIUS, widthAt } from '../src/sim/corridor';
 
 declare const window: Window & { __kartDebug: KartDebug };
+
+// M9-00: golden gate. courses.spec is solo only and never touches the public broker.
+// A golden is compared when this platform has one (or KART_GOLDENS=write); otherwise the
+// comparison is skipped with a 'golden-skipped' annotation and the test still passes.
+// KART_GOLDEN_PLATFORM only swaps the platform in the existence check, never the write path.
+// Capture new platforms with .github/workflows/goldens-linux.yml.
+const GOLDEN_THRESHOLD = { threshold: 0.2, maxDiffPixels: 0 };
+function goldenPresent(testInfo: TestInfo, name: string): boolean {
+  if (process.env.KART_GOLDENS === 'write') return true;
+  const platform = process.env.KART_GOLDEN_PLATFORM ?? process.platform;
+  const path = testInfo.snapshotPath(name).replace(`/__screenshots__/${process.platform}/`, `/__screenshots__/${platform}/`);
+  if (existsSync(path)) return true;
+  const description = `${platform}: ${name} (capture with goldens-linux.yml)`;
+  testInfo.annotations.push({ type: 'golden-skipped', description });
+  console.warn(`golden-skipped ${description}`);
+  return false;
+}
 
 // C-010 timing (2026-10-05): npm test, 738 passed, Vitest 4.57 s / wall 4.84 s.
 // .omc/baseline-v3.txt records 3 s before C-001; the 6 s budget needs no seed reduction.
@@ -136,15 +154,17 @@ for (const { id, name, drawCalls: baselineDrawCalls, triangles: baselineTriangle
     for (const view of views) {
       await testInfo.attach(`${id}-${view.name}`, { body: Buffer.from(view.png, 'base64'), contentType: 'image/png' });
       await testInfo.attach(`${id}-${view.name}-minimap`, { body: Buffer.from(view.minimap, 'base64'), contentType: 'image/png' });
-      // Linux goldens are pending-ci (M6-06); never derive them from darwin pixels.
-      if (process.platform === 'darwin' && ['harbor', 'forest', 'volcano', 'skyline'].includes(id)) {
-        expect(Buffer.from(view.png, 'base64')).toMatchSnapshot(`${id}-${view.name}.png`);
-        if (view.name === 'start-grid') {
-          expect(Buffer.from(view.minimap, 'base64')).toMatchSnapshot(`${id}-minimap.png`);
+      if (['harbor', 'forest', 'volcano', 'skyline'].includes(id)) {
+        if (goldenPresent(testInfo, `${id}-${view.name}.png`)) {
+          expect(Buffer.from(view.png, 'base64')).toMatchSnapshot(`${id}-${view.name}.png`, GOLDEN_THRESHOLD);
+        }
+        if (view.name === 'start-grid' && goldenPresent(testInfo, `${id}-minimap.png`)) {
+          expect(Buffer.from(view.minimap, 'base64')).toMatchSnapshot(`${id}-minimap.png`, GOLDEN_THRESHOLD);
         }
       }
       for (const { drawCalls, triangles } of view.samples) {
         if (view.name === 'start-grid') {
+          // three's info.render is a CPU-side counter, independent of the GPU, so it matches across platforms.
           expect({ drawCalls, triangles }).toEqual({ drawCalls: baselineDrawCalls, triangles: baselineTriangles });
         }
         expect(drawCalls).toBeGreaterThan(0);
@@ -200,15 +220,15 @@ for (const { id, name, drawCalls: baselineDrawCalls, triangles: baselineTriangle
   });
 }
 
-test('C-010: title shows the eight-course picker', async ({ page }) => {
+test('C-010: title shows the eight-course picker', async ({ page }, testInfo) => {
   await page.goto('./');
   await expect(page.locator('#title-screen')).toBeVisible();
   await expect(page.locator('#course-select input')).toHaveCount(8);
-  // Linux golden remains pending-ci until M6-06 captures it on the CI renderer.
-  if (process.platform === 'darwin') {
+  if (goldenPresent(testInfo, 'title-eight-courses.png')) {
     await page.addStyleTag({ content: 'canvas { visibility: hidden !important; }' });
     await expect(page.locator('#title-screen')).toHaveScreenshot('title-eight-courses.png', {
       animations: 'disabled',
+      ...GOLDEN_THRESHOLD,
     });
   }
 });

@@ -1,0 +1,32 @@
+name: Capture linux goldens
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  goldens:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: A. Capture linux goldens
+        run: KART_GOLDENS=write npx playwright test e2e/courses.spec.ts -g 'TIDEWATER|MOSSWOOD|EMBER|STRATOS|eight-course' --update-snapshots
+      - name: B. Re-verify against the goldens just written (same-runner determinism)
+        run: npx playwright test e2e/courses.spec.ts -g 'TIDEWATER|MOSSWOOD|EMBER|STRATOS|eight-course'
+      - name: C. Upload linux goldens
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-goldens
+          path: e2e/__screenshots__/linux/
+          retention-days: 14
+          if-no-files-found: warn
