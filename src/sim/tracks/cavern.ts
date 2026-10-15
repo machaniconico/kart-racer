@@ -1,67 +1,43 @@
 import type { TrackDef } from '../types';
-import { BASE_ROAD_HALF_WIDTH, BASE_WALL_HALF_WIDTH } from './widths';
+import { BASE_ROAD_HALF_WIDTH, BASE_WALL_HALF_WIDTH, WIDTH_SCALE } from './widths';
+
+export const CAVERN_LENGTH = 2118.887715389262;
+const full = { roadHalfWidth: BASE_ROAD_HALF_WIDTH, wallHalfWidth: BASE_WALL_HALF_WIDTH };
+const narrow = { roadHalfWidth: BASE_ROAD_HALF_WIDTH * 0.55, wallHalfWidth: BASE_WALL_HALF_WIDTH * 0.55 };
 
 export const cavern: TrackDef = {
-  id: 'cavern',
-  name: 'CRYSTAL HOLLOW',
-  layoutVersion: 3,
+  id: 'cavern', name: 'CRYSTAL HOLLOW', layoutVersion: 1, themeId: 'cavern',
+  // Two irregular chambers curl around a raised crystal bridge. Long, curved
+  // transitions keep the silhouette organic and the crossing approaches level.
   controlPoints: [
-    // Home straight and the east hairpin (27 m control-point radius).
-    [0, 1, 0], [80, 1, 0], [160, 1, 0], [203, 1, 0],
-    [230, 1, 0], [249.092, 1, 7.908], [257, 1, 27],
-    [249.092, 1, 46.092], [230, 1, 54], [203, 1, 54],
-    [160, 1, 54], [80, 1, 54], [10, 1, 85], [-20, 1, 140],
-    // Meadow ridge: the crest levels out before the descent.
-    [-30, 8, 215], [-90, 9, 250], [-180, 9, 250], [-250, 8, 200],
-    [-290, 3, 120], [-300, 1, 20], [-290, 1, -100], [-250, 1, -180],
-    [-220, 1, -210],
-    // Four alternating bends, then a sweeping southern compound corner.
-    [-160, 1, -200], [-110, 1, -220], [-60, 1, -200], [-10, 1, -220],
-    [50, 1, -210], [130, 1, -200], [190, 1, -150], [190, 1, -100],
-    [130, 1, -60], [40, 1, -80], [-13, 1, -80], [-40, 1, -80],
-    [-68.284, 1, -68.284], [-80, 1, -40], [-68.284, 1, -11.716],
-    [-40, 1, 0], [-13, 1, 0],
+    [-175, 3, 0], [-90, 3, 0], [10, 3, 0], [110, 3, 8],
+    [210, 3, 40], [280, 5, 105], [300, 8, 190], [260, 12, 260],
+    [170, 16, 290], [90, 20, 260], [50, 23, 190], [45, 23, 110],
+    [45, 23, 50], [45, 23, 0], [45, 23, -60], [40, 22, -140],
+    [0, 18, -220], [-70, 12, -280], [-170, 6, -300], [-270, 3, -270],
+    [-350, 3, -200], [-380, 3, -110], [-350, 3, -30], [-280, 3, 0],
   ],
-  scale: 1,
-  samplesPerSegment: 32,
-  roadHalfWidth: BASE_ROAD_HALF_WIDTH,
-  wallHalfWidth: BASE_WALL_HALF_WIDTH,
+  scale: 1, samplesPerSegment: 32,
+  ...full,
   checkpointCount: 24,
-  boxRows: [0.02, 0.12, 0.24, 0.36, 0.47, 0.58, 0.695, 0.81],
+  boxRows: [0.03, 0.16, 0.26, 0.39, 0.53, 0.67, 0.8, 0.92],
   boxLanes: [-5.33, 0, 5.33],
-  racingLine: [
-    { distance: 0, offset: 0 },
-    { distance: 180, offset: 0 },
-    { distance: 215, offset: 3 },
-    { distance: 272, offset: -3 },
-    { distance: 330, offset: 3 },
-    { distance: 390, offset: 0 },
-    { distance: 600, offset: 0 },
-    { distance: 780, offset: 0 },
-    { distance: 1000, offset: 0 },
-    { distance: 1240, offset: 0 },
-    { distance: 1370, offset: 0 },
-    { distance: 1660, offset: 0 },
-    { distance: 1950, offset: 0 },
-    { distance: 2120, offset: 0 },
-    { distance: 2286.353556318704, offset: 0 },
-  ],
-  surfaces: [
-    { kind: 'dirt', from: 440, to: 520 },
-    { kind: 'jump', from: 733, to: 736 },
-    { kind: 'dirt', from: 1670, to: 1750 },
-  ],
+  decks: [{ from: 1085, to: 1140 }],
   widthKeys: [
-    { distance: 1145, roadHalfWidth: BASE_ROAD_HALF_WIDTH, wallHalfWidth: BASE_WALL_HALF_WIDTH },
-    { distance: 1165, roadHalfWidth: 5.15, wallHalfWidth: 7.5 },
-    { distance: 1195, roadHalfWidth: 5.15, wallHalfWidth: 7.5 },
-    { distance: 1215, roadHalfWidth: BASE_ROAD_HALF_WIDTH, wallHalfWidth: BASE_WALL_HALF_WIDTH },
+    { distance: 880, ...full }, { distance: 905, ...narrow },
+    { distance: 950, ...narrow }, { distance: 975, ...full },
+    { distance: 1580, ...full }, { distance: 1605, ...narrow },
+    { distance: 1650, ...narrow }, { distance: 1675, ...full },
   ],
-  bankKeys: [
-    { distance: 780, roll: 0 },
-    { distance: 810, roll: 0.18 },
-    { distance: 880, roll: 0.18 },
-    { distance: 910, roll: 0 },
+  racingLine: [{ distance: 0, offset: 0 }, { distance: CAVERN_LENGTH, offset: 0 }],
+  surfaces: [
+    { kind: 'ice', from: 300, to: 390 },
+    { kind: 'ice', from: 1330, to: 1420 },
   ],
-  themeId: 'cavern',
+  barriers: [
+    { from: 580, to: 605, center: -5.8, halfWidth: 2.2, taper: 8, scenery: 'pillar',
+      motion: { kind: 'gate', amplitude: 0, period: 6, phase: 0, minWidth: 0.6 * WIDTH_SCALE } },
+    { from: 1805, to: 1835, center: 5.8, halfWidth: 2.2, taper: 8, scenery: 'pillar',
+      motion: { kind: 'gate', amplitude: 0, period: 7, phase: 1.5, minWidth: 0.6 * WIDTH_SCALE } },
+  ],
 };
