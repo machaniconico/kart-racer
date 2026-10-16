@@ -162,7 +162,7 @@ async function programCount(page: Page): Promise<number> {
   return count!;
 }
 
-test('M8-07 T1: eight consecutive courses keep the lobby alive and reuse programs', async ({ page: host, guest }, testInfo) => {
+test('M8-07 T1: every course in turn keeps the lobby alive and reuse programs', async ({ page: host, guest }, testInfo) => {
   await connect(host, guest);
   expect(await host.evaluate(() => window.__kartDebug.course)).toBe('meadow');
   const p0 = await programCount(host);
@@ -229,7 +229,13 @@ test('M8-07 T1: eight consecutive courses keep the lobby alive and reuse program
         expect.soft(hostFrameGapMs, `${trackId}: host frame gap`).toBeLessThanOrEqual(hostBudget);
         expect.soft(guestFrameGapMs, `${trackId}: guest frame gap`).toBeLessThanOrEqual(guestBudget);
         expect.soft(measurement.hostPrograms, `${trackId}: total programs`).toBeLessThanOrEqual(p0 + 8);
-        if (trackId === 'meadow') expect.soft(measurement.hostPrograms).toBe(programsBefore);
+        // A cached return to meadow compiles nothing new. three.js may release the previous course's
+        // unique programs (16 courses since M10), so the count can fall but never exceed the pre-switch count,
+        // and meadow's own programs from the start (p0) must still be there.
+        if (trackId === 'meadow') {
+          expect.soft(measurement.hostPrograms, 'meadow return compiles no new programs').toBeLessThanOrEqual(programsBefore);
+          expect.soft(measurement.hostPrograms, 'meadow return keeps its own programs').toBeGreaterThanOrEqual(p0);
+        }
         for (const page of [host, guest]) {
           expect.soft(await page.evaluate(() => window.__kartDebug.net.phase)).toBe('lobby');
           await expect.soft(page.locator('#net-dialog')).toBeHidden();

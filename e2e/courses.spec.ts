@@ -261,7 +261,7 @@ test.describe('C-011 solo touch selection', () => {
       expect(bounds.titleBottom).toBeLessThanOrEqual(viewport.width < viewport.height ? bounds.onlineTop : bounds.courseTop);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       const options = await page.locator('.course-option').all();
-      expect(options).toHaveLength(8);
+      expect(options).toHaveLength(16);
       for (const option of options) {
         const box = await option.boundingBox();
         expect(box!.width).toBeGreaterThanOrEqual(44);
