@@ -324,7 +324,7 @@ describe('SERPENT PASS', () => {
     expect(Number.isFinite(bestBrake)).toBe(true);
     expect(advantage).toBeGreaterThanOrEqual(0.5);
     expect(cleanFullThrottle / settings).toBeLessThanOrEqual(0.1);
-  }, 360_000);
+  }, 900_000); // ~82 s on darwin-arm64; CI x86 runners can be 2-3x slower
 
   it('renders orange/red foliage and gray rocks outside every road within the triangle budget', () => {
     const course = renderCourse();
