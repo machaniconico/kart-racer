@@ -119,7 +119,7 @@ describe('RoadIndex', () => {
     }));
   });
 
-  it('matches all eight courses at 20,000 seeded XZ points each, bit-for-bit', async ({ onTestFinished }) => {
+  it('matches every course at 20,000 seeded XZ points each, bit-for-bit', async ({ onTestFinished }) => {
     const jobs = Array.from({ length: 20 }, (_, i) => i * 1_000)
       .flatMap(from => TRACK_IDS.map(id => ({ id, from })));
     const workers: Worker[] = [];
@@ -165,7 +165,7 @@ describe('RoadIndex', () => {
       }
     }));
     expect(counts).toEqual(jobs.map(() => 12_000));
-  }, 120_000);
+  }, 600_000); // 16 courses since M10: ~120 s on CI ubuntu-latest exceeded the old 120 s
 
   it.each(TRACK_IDS)('%s also matches frozen oracle inputs at seams, deck ends and cell edges', id => {
     const track = getTrack(id);
