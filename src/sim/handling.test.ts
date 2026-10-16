@@ -188,9 +188,19 @@ describe('H1 handling', () => {
 // Original four values re-measured identically to M5-05; M6-09 changes rendering only.
 // M9-02: FOREST racing line (hairpins out-in-out, shallow S sections), 70.53587962962962 -> 69.52407407407406 s.
 // FOREST easy / hard: 73.37800925925927 (1.0554) / 67.94791666666666 (0.9773), 0/0 hits each (recorded, not required).
-type Baseline =
-  | { version: 'v15' | 'v16' | 'm9'; meanLap: number; wallHits: number; bandHits: number }
-  | { version: 'm10-pending' };
+// M10-10 / v18, darwin-arm64, same 72-lap method; the eight M10 rows replace 'm10-pending'.
+// The original eight rows are unchanged. Pit falls are 0 on every M10 course.
+// | Course     | Length (m)         | Mean lap (s)      | m/s    | Wall | Band |
+// | dunes      | 2239.8539616102685 | 85.47638888888889 | 26.204 | 0    | 0    |
+// | garden     | 2309.59306536773   | 65.24166666666665 | 35.401 | 0    | 0    |
+// | speedway   | 2256.391819906493  | 63.36249999999999 | 35.611 | 0    | 0    |
+// | bayou      | 2225.08435121483   | 68.79768518518519 | 32.342 | 0    | 0    |
+// | cavern     | 2118.887715389262  | 62.02824074074075 | 34.160 | 0    | 0    |
+// | temple     | 2254.1024005619706 | 63.46712962962962 | 35.516 | 0    | 0    |
+// | serpentine | 2328.5952422904697 | 68.32384259259258 | 34.082 | 1    | 0    |
+// | lunar      | 2209.8782411911293 | 65.17916666666666 | 33.905 | 0    | 0    |
+// speedway.test.ts reads this table from source to require THUNDER OVAL's speed to be the maximum.
+type Baseline = { version: 'v15' | 'v16' | 'm9' | 'm10'; meanLap: number; wallHits: number; bandHits: number };
 const BASELINE = {
   meadow: { version: 'v15', meanLap: 68.5011574074074, wallHits: 0, bandHits: 0 },
   canyon: { version: 'v15', meanLap: 68.49583333333334, wallHits: 0, bandHits: 0 },
@@ -200,14 +210,14 @@ const BASELINE = {
   forest: { version: 'm9', meanLap: 69.52407407407406, wallHits: 0, bandHits: 0 },
   volcano: { version: 'v16', meanLap: 67.82407407407408, wallHits: 0, bandHits: 0 },
   skyline: { version: 'v16', meanLap: 67.35324074074076, wallHits: 0, bandHits: 1 },
-  dunes: { version: 'm10-pending' },
-  garden: { version: 'm10-pending' },
-  speedway: { version: 'm10-pending' },
-  bayou: { version: 'm10-pending' },
-  cavern: { version: 'm10-pending' },
-  temple: { version: 'm10-pending' },
-  serpentine: { version: 'm10-pending' },
-  lunar: { version: 'm10-pending' },
+  dunes: { version: 'm10', meanLap: 85.47638888888889, wallHits: 0, bandHits: 0 },
+  garden: { version: 'm10', meanLap: 65.24166666666665, wallHits: 0, bandHits: 0 },
+  speedway: { version: 'm10', meanLap: 63.36249999999999, wallHits: 0, bandHits: 0 },
+  bayou: { version: 'm10', meanLap: 68.79768518518519, wallHits: 0, bandHits: 0 },
+  cavern: { version: 'm10', meanLap: 62.02824074074075, wallHits: 0, bandHits: 0 },
+  temple: { version: 'm10', meanLap: 63.46712962962962, wallHits: 0, bandHits: 0 },
+  serpentine: { version: 'm10', meanLap: 68.32384259259258, wallHits: 1, bandHits: 0 },
+  lunar: { version: 'm10', meanLap: 65.17916666666666, wallHits: 0, bandHits: 0 },
 } satisfies Record<(typeof tracks.TRACK_IDS)[number], Baseline>;
 const SEEDS = [1, 42, 98765];
 
@@ -231,6 +241,15 @@ function countHits(state: RaceState, track: Track): { wall: number; band: number
 }
 
 describe('H1 CPU balance: absolute range and recorded baseline', () => {
+  it('has a measured row for every course (no pending baselines remain)', () => {
+    expect(Object.keys(BASELINE)).toEqual([...tracks.TRACK_IDS]);
+    for (const [id, row] of Object.entries(BASELINE) as [string, Baseline][]) {
+      expect(row.version, id).not.toMatch(/pending/);
+      expect(Number.isFinite(row.meanLap), id).toBe(true);
+      expect(row.meanLap, id).toBeGreaterThanOrEqual(60);
+    }
+  });
+
   it.each(tracks.TRACK_IDS)('finishes and replays all 72 laps on %s within pace and hit budgets', trackId => {
     let totalLapTime = 0;
     let wallHits = 0;
@@ -292,11 +311,6 @@ describe('H1 CPU balance: absolute range and recorded baseline', () => {
     // Stage 1: absolute range, an average pace of 20 to 40 m/s.
     expect(meanLap).toBeGreaterThanOrEqual(track.length / 40);
     expect(meanLap).toBeLessThanOrEqual(track.length / 20);
-    if (baseline.version === 'm10-pending') {
-      // M10-10 で確定: retain completion, replay and absolute pace checks while recording new courses.
-      console.info('M10 pending CPU baseline', { trackId, meanLap, wallHits, bandHits, pitFalls });
-      return;
-    }
     // Stage 2: ratio to the recorded baseline.
     const ratio = meanLap / baseline.meanLap;
     expect(ratio).toBeGreaterThanOrEqual(0.95);

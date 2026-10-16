@@ -3,6 +3,8 @@
 // 8 CPUs × seeds [1, 42, 98765] × 3 laps = 72 completed laps:
 // meanLap 63.362500000000004 s, meanSpeed 35.610839532949186 m/s,
 // wallHits 0, bandHits 0, pitFalls 0 (NEON baseline: 35.488151098445165 m/s).
+// M10-10 BASELINE speeds, top four: speedway 35.611 > temple 35.516 > skyline 35.491 > neon 35.488 m/s.
+import { readFileSync } from 'node:fs';
 import * as THREE from 'three';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildCourse } from '../../render/course/buildCourse';
@@ -32,6 +34,17 @@ function longestStraight(course: Track): number {
     longest = Math.max(longest, run);
   }
   return Math.min(longest, course.length);
+}
+
+/** Mean laps by course from the BASELINE table in handling.test.ts, parsed from its source. */
+function recordedBaseline(): Record<string, number> {
+  const source = readFileSync(new URL('../handling.test.ts', import.meta.url), 'utf8');
+  const table = source.slice(source.indexOf('const BASELINE = {'), source.indexOf('} satisfies Record<'));
+  const rows: Record<string, number> = {};
+  for (const [, id, meanLap] of table.matchAll(/^ {2}(\w+): \{ version: '[^']+', meanLap: ([\d.]+),/gm)) {
+    rows[id!] = Number(meanLap);
+  }
+  return rows;
 }
 
 function renderCourse() {
@@ -245,17 +258,14 @@ describe('THUNDER OVAL', () => {
     expect(meanLap).toBeGreaterThanOrEqual(60);
     expect(meanLap).toBeGreaterThanOrEqual(track.length / 40);
     expect(meanLap).toBeLessThanOrEqual(track.length / 20);
-    // Original eight-course baselines from handling.test.ts: the same 8 CPUs,
-    // seeds [1, 42, 98765] and 3 laps. Compare speed, since lap lengths differ.
-    const originalMeanLaps = {
-      meadow: 68.5011574074074, canyon: 68.49583333333334,
-      snowpeak: 67.89120370370368, neon: 64.32939814814814,
-      harbor: 69.73750000000001, forest: 69.52407407407406,
-      volcano: 67.82407407407408, skyline: 67.35324074074076,
-    };
-    for (const [id, baselineMeanLap] of Object.entries(originalMeanLaps)) {
-      expect(meanSpeed, `average speed must exceed ${id}`)
-        .toBeGreaterThan(getTrack(id).length / baselineMeanLap);
+    // BASELINE rows read straight from handling.test.ts (same 8 CPUs, seeds [1, 42, 98765], 3 laps),
+    // so a re-pinned row is compared without a copy here. Compare speed, since lap lengths differ.
+    const baseline = recordedBaseline();
+    expect(Object.keys(baseline).sort()).toEqual([...TRACK_IDS].sort());
+    const baselineSpeed = (id: string) => getTrack(id).length / baseline[id]!;
+    for (const id of TRACK_IDS.filter(id => id !== 'speedway')) {
+      expect(meanSpeed, `average speed must exceed ${id}`).toBeGreaterThan(baselineSpeed(id));
+      expect(baselineSpeed('speedway'), `recorded speedway speed must exceed ${id}`).toBeGreaterThan(baselineSpeed(id));
     }
     expect(wallHits).toBeLessThanOrEqual(6);
     expect(bandHits).toBeLessThanOrEqual(2);

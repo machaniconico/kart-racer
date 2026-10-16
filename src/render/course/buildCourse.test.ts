@@ -52,7 +52,7 @@ import { lunar } from './themes/lunar';
 // island clearance removes a rock.
 // neon 134 / 115_360 / 38 -> 134 / 115_336 / 38; two tapered building instances removed.
 // meadow 125 / 107_048 / 34 and snowpeak 129 / 112_768 / 36 are unchanged.
-type RenderBaseline = { drawCalls: number | null; triangles: number | null; meshes: number | null };
+type RenderBaseline = { drawCalls: number; triangles: number; meshes: number };
 // M6-05 / v16: Chromium on darwin-arm64, 1280×720, DPR 1, seed 127, 10 stationary frames.
 // All ten grid frames matched; all feature views also passed the length-based trianglesCap.
 const RENDER_BASELINE: Record<TrackId, RenderBaseline> = {
@@ -64,15 +64,16 @@ const RENDER_BASELINE: Record<TrackId, RenderBaseline> = {
   forest: { drawCalls: 134, triangles: 133_980, meshes: 38 },
   volcano: { drawCalls: 132, triangles: 100_648, meshes: 37 },
   skyline: { drawCalls: 136, triangles: 90_174, meshes: 40 },
-  // M10-10 で確定: new course render measurements are pending.
-  dunes: { drawCalls: null, triangles: null, meshes: null },
-  garden: { drawCalls: null, triangles: null, meshes: null },
-  speedway: { drawCalls: null, triangles: null, meshes: null },
-  bayou: { drawCalls: null, triangles: null, meshes: null },
-  cavern: { drawCalls: null, triangles: null, meshes: null },
-  temple: { drawCalls: null, triangles: null, meshes: null },
-  serpentine: { drawCalls: null, triangles: null, meshes: null },
-  lunar: { drawCalls: null, triangles: null, meshes: null },
+  // M10-10 / v18: same Chromium darwin-arm64 setup (seed 127, all 10 grid frames identical);
+  // meshes from buildCourse in this file. Mirrored in e2e/courses-m10.spec.ts.
+  dunes: { drawCalls: 126, triangles: 91_966, meshes: 32 },
+  garden: { drawCalls: 123, triangles: 105_118, meshes: 42 },
+  speedway: { drawCalls: 125, triangles: 73_308, meshes: 30 },
+  bayou: { drawCalls: 127, triangles: 79_339, meshes: 39 },
+  cavern: { drawCalls: 130, triangles: 88_825, meshes: 36 },
+  temple: { drawCalls: 138, triangles: 97_474, meshes: 43 },
+  serpentine: { drawCalls: 123, triangles: 110_066, meshes: 28 },
+  lunar: { drawCalls: 140, triangles: 79_830, meshes: 45 },
 };
 
 // Only the browser's text drawing context is supplied. All three objects and
@@ -874,7 +875,9 @@ describe('variable widths and batched barriers', () => {
       + track.def.surfaces.filter(zone => zone.kind === 'spin').length;
     const course = build(track, theme);
     const baseline = RENDER_BASELINE[id];
-    if (baseline.meshes !== null) expect(meshCount(course.group)).toBe(baseline.meshes);
+    // Tripwire: every course needs measured, non-null render values (no pending rows).
+    for (const value of Object.values(baseline)) expect(Number.isInteger(value) && value > 0, `${id} ${value}`).toBe(true);
+    expect(meshCount(course.group)).toBe(baseline.meshes);
     expect(course.group.getObjectByName('motion')!.children).toHaveLength(motionMeshes);
   });
 });

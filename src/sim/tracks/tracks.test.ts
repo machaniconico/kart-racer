@@ -46,8 +46,8 @@ describe('course registry and MEADOW golden baseline', () => {
     expectFrozen(TRACKS);
   });
 
-  it('registers the eight M10 courses as MEADOW-layout scaffolds', () => {
-    expect(scaffoldIds()).toEqual(['dunes', 'garden', 'speedway', 'bayou', 'cavern', 'temple', 'serpentine', 'lunar']);
+  it('leaves no MEADOW-layout scaffold among the sixteen courses (M10-10)', () => {
+    expect(scaffoldIds()).toEqual([]);
   });
 
   // M5-05 lengths: M6 adds courses without changing the original four layouts.

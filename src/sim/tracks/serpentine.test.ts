@@ -37,6 +37,10 @@
  * 0/324 (0%) on both. Best clean brake / drift / advantage in seconds:
  * lower 4.466667 / 3.750000 / 0.716667; upper 4.583333 / 3.750000 / 0.833333.
  * These replace the narrower sweep's overstated to+20 advantages 0.700/0.833.
+ * Correction (M10-10): the Opus critic's continuous optimisation of the clean
+ * non-drift runs found faster schedules than this grid: best clean non-drift
+ * lower 4.383 / upper 4.417 s vs drift 3.750 s, so the true margins are
+ * 0.633 / 0.667 s (still >= 0.5 s), not the grid's 0.717 / 0.833 s.
  * Best drift controllers (outside offset, look-ahead, heading/lateral gain):
  * lower (3, 12, 4, 0.3), upper (3, 12, 8, 0.6). Best non-drift settings:
  * lower (2, 12, 4, 0.1), start -3 m, release apex, brake to 25 m/s;

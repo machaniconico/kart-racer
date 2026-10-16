@@ -14,7 +14,7 @@ import {
   decodeSnapshot, encodeSnapshot, MAX_SNAPSHOT_ENTITIES, SNAPSHOT_BOX_COUNT,
   SNAPSHOT_ENTITY_BYTES, SNAPSHOT_HEADER_BYTES, SNAPSHOT_KART_BYTES, SNAPSHOT_LAYOUT,
 } from './snapshotCodec';
-import { COURSE_FINGERPRINT, getTrack, TRACK_IDS, TRACKS } from '../sim/tracks';
+import { COURSE_FINGERPRINT, getTrack, scaffoldIds, TRACK_IDS, TRACKS } from '../sim/tracks';
 
 const track = getTrack('meadow');
 
@@ -603,11 +603,12 @@ describe('protocol layout fingerprint', () => {
     // M7-00: v17 only added RaceState.cpuLevel (513548114). M9-02 forest racingLine、v17 のまま:
     // the hello handshake rejects COURSE_FINGERPRINT mismatches ('version'), so older builds cannot mix.
     pinned[17] = 1316474231;
-    pinned[18] = undefined; // M10-10 で確定
+    pinned[18] = 2618543986; // M10-10: measured after all sixteen courses (M10-01–08)
     expect(COURSE_FINGERPRINT).toBe(Number.parseInt(fingerprint(definitions), 16));
-    if (pinned[PROTOCOL_VERSION] !== undefined) {
-      expect(COURSE_FINGERPRINT).toBe(pinned[PROTOCOL_VERSION]);
-    }
+    // Tripwire: an unpinned version is only allowed while MEADOW scaffolds remain.
+    if (pinned[PROTOCOL_VERSION] === undefined) expect(scaffoldIds().length).toBeGreaterThan(0);
+    expect(pinned[PROTOCOL_VERSION]).toBeTypeOf('number');
+    expect(COURSE_FINGERPRINT).toBe(pinned[PROTOCOL_VERSION]);
     expect(fingerprint(definitions.map((def, index) => index === 0 ? { ...def, roadHalfWidth: 8 } : def)))
       .not.toBe(fingerprint(definitions));
   });
