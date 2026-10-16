@@ -1,6 +1,6 @@
 # POCKET CIRCUIT / Kart Racer
 
-個性の違う 8 コースを、最大 8 台で走るオリジナルの 3D カートレース。1 人用（プレイヤー + CPU 7 台）と、オンライン対戦（最大 8 人、空いた枠は CPU）で、1〜3 周の順位とタイムを競います（既定 3 周）。モデル・景色は手続き生成、音は WebAudio 合成で、外部画像・モデル・音声ファイルは使いません。
+個性の違う 16 コースを、最大 8 台で走るオリジナルの 3D カートレース。1 人用（プレイヤー + CPU 7 台）と、オンライン対戦（最大 8 人、空いた枠は CPU）で、1〜3 周の順位とタイムを競います（既定 3 周）。モデル・景色は手続き生成、音は WebAudio 合成で、外部画像・モデル・音声ファイルは使いません。
 
 ▶ **今すぐ遊ぶ: https://machaniconico.github.io/kart-racer/** （PC・スマホ対応。スマホは横画面で）
 
@@ -21,10 +21,10 @@ npm test            # Vitest を一度実行
 npm run test:watch  # Vitest の監視実行
 npm run typecheck   # 型チェックのみ
 npm run preview    # ビルド済み dist/ を確認
-npm run e2e         # E2E（Playwright。オンライン対戦と 8 コース。下記）
+npm run e2e         # E2E（Playwright。オンライン対戦と 16 コース。下記）
 ```
 
-`npm run e2e` は `e2e/multiplayer.spec.ts` と `e2e/courses.spec.ts` を順に実行します。`courses.spec.ts` は 8 コースそれぞれで選択から 3 周の完走、コース別ベスト、描画負荷を確認します。`multiplayer.spec.ts` は 2 つのブラウザコンテキストで実際にルームを作って参加します。**公開の PeerJS ブローカー**を使うため、ブローカーの状態や回線によって不安定な場合があります。CI（`.github/workflows/e2e.yml`）では手動実行（`workflow_dispatch`）のみです。初回は `npx playwright install chromium` が必要です。
+`npm run e2e` は `e2e/multiplayer.spec.ts` と `e2e/courses.spec.ts` を順に実行します。`courses.spec.ts` と `courses-m10.spec.ts` は 16 コースそれぞれで選択から 3 周の完走、コース別ベスト、描画負荷を確認します。`multiplayer.spec.ts` は 2 つのブラウザコンテキストで実際にルームを作って参加します。**公開の PeerJS ブローカー**を使うため、ブローカーの状態や回線によって不安定な場合があります。CI（`.github/workflows/e2e.yml`）では手動実行（`workflow_dispatch`）のみです。初回は `npx playwright install chromium` が必要です。
 
 **視覚テスト（スクリーンショットの golden）**: `courses.spec.ts` の画面比較は platform ごとのディレクトリ（`e2e/__screenshots__/darwin/` に 27 枚）の golden と照合します。その platform の golden が無ければ `golden-skipped` の注釈を付けて比較だけを省き、他の検査は実行します（Linux は golden を追加するまでこの扱い）。閾値は `threshold 0.2`、`maxDiffPixels 0` です。描画負荷の drawCalls / triangles は platform を問わず完全一致を見ます。
 
@@ -37,7 +37,7 @@ Linux の golden の取り方: GitHub の Actions で「Capture linux goldens」
 タイトルのモード行で選びます。
 
 - **レース**: 従来どおり、プレイヤー 1 台と CPU 7 台で、選んだコースを走ります。
-- **グランプリ**: カップ（SUNRISE CUP = 01〜04、HORIZON CUP = 05〜08）の 4 コースを続けて走り、順位ごとの得点（1 位から 10・8・6・5・4・3・2・1 点）の合計で競います。レースの合間に順位表が出て、最後に表彰台が出ます。総合の同点は、直近のレースの順位、次に車の番号の小さい順で決まります。進行は保存せず、再読み込みで最初からになります。オフライン専用です。
+- **グランプリ**: カップ（SUNRISE CUP = 01〜04、HORIZON CUP = 05〜08、ZENITH CUP = 09〜12、ECLIPSE CUP = 13〜16）の 4 コースを続けて走り、順位ごとの得点（1 位から 10・8・6・5・4・3・2・1 点）の合計で競います。レースの合間に順位表が出て、最後に表彰台が出ます。総合の同点は、直近のレースの順位、次に車の番号の小さい順で決まります。進行は保存せず、再読み込みで最初からになります。オフライン専用です。
 - **タイムアタック**: 自分 1 台だけ、アイテムボックスなしで走ります。このコースと周回数で一番速い走りは「ゴースト」（半透明のカート）として次の走行に一緒に走り、ミニマップには出ません。ゴールタイムが速ければゴーストを更新し、ベストラップも別に残ります。10 分を超える走行は残りません。
 
 ### CPU の強さ
@@ -48,7 +48,7 @@ MOSSWOOD TRAIL（森のコース）の CPU は走行ラインを持ち、ヘア�
 
 ### 1 人用のコースと周回数
 
-タイトルのコース選択（番号 01〜08 の 44×44 px のボタン。PC と横画面のスマホは 1 行、縦画面のスマホは 4 つずつ 2 段）と、その下の周回数（1 / 2 / 3、既定 3 周）を選び、「レースをはじめる」で 3・2・1 の後にスタート。プレイヤー 1 台と CPU 7 台で走ります。道路の外の芝は減速し、壁や他のカートに衝突すると速度や進路が変わります。チェックポイントを順番に通過して、選んだ周回数を走ってください。ベストタイムは周回数ごとに別々に残ります（以前の記録は 3 周として引き継がれます）。逆走・チェックポイントの飛ばし・コースの瞬間移動では周回が成立しません。
+タイトルのコース選択（番号 01〜16 の 44×44 px のボタン。PC は 8 個ずつ 2 段、縦画面のスマホは 4 つずつ 4 段）と、その下の周回数（1 / 2 / 3、既定 3 周）を選び、「レースをはじめる」で 3・2・1 の後にスタート。プレイヤー 1 台と CPU 7 台で走ります。道路の外の芝は減速し、壁や他のカートに衝突すると速度や進路が変わります。チェックポイントを順番に通過して、選んだ周回数を走ってください。ベストタイムは周回数ごとに別々に残ります（以前の記録は 3 周として引き継がれます）。逆走・チェックポイントの飛ばし・コースの瞬間移動では周回が成立しません。
 
 ### オンライン（最大 8 人）
 
@@ -57,9 +57,9 @@ MOSSWOOD TRAIL（森のコース）の CPU は走行ラインを持ち、ヘア�
 3. ロビーで名前（10 文字まで）とカートの色を選ぶ。コースと周回数（1〜3 周、既定 3 周）はホストがロビーで選び、ゲストには読み取り専用で表示される。
 4. ホストが「スタート」を押すとレースが始まる。人数が 8 に満たない枠は CPU が走ります。
 
-通信プロトコルは **v17** です。旧ページ（v16 以前）とは別ルームになるため、全員が新しいページを開いてください。
+通信プロトコルは **v18** です。オンライン対戦は、ホストもゲストも同じ版（v18）のページである必要があります。旧ページ（v17 以前）とは別ルームになるため、全員が新しいページを開いてください。
 
-通信の版は **v17 のまま**です。回線が悪いと、他のプレイヤーのカートの表示が最大 250 ms 遅れることがあります（自分のカートは遅れません）。
+回線が悪いと、他のプレイヤーのカートの表示が最大 250 ms 遅れることがあります（自分のカートは遅れません）。
 
 ### コース
 
@@ -75,6 +75,14 @@ MOSSWOOD TRAIL（森のコース）の CPU は走行ラインを持ち、ヘア�
 | MOSSWOOD TRAIL | 約 2.24 km。森のテクニカルコース。ヘアピン 2 か所、S 字 2 か所、ダート 3 区間、道幅が約半分（55%）の狭路 2 か所、小川のジャンプ、バンク、丸太橋の立体交差（橋の下をくぐる）がある。 |
 | EMBER CALDERA | 約 2.27 km。火山を登るコース。登りのヘアピン 2 か所、玄武岩の陸橋、迂回できる溶岩の穴 2 か所（落ちると spin）、下りのジャンプ、狭い尾根、バンクがある。路面に火山灰が舞う。 |
 | STRATOS CITY | 約 2.39 km。空中都市の高架コース。高さ 24 m の立体交差 2 か所、跳び越える足場の切れ目 2 か所、風のゲート 2 か所、回転する足場、島、バンク 2 か所、開いたブーストチューブがある。 |
+| SIROCCO DUNES | 約 2.24 km。夕暮れの砂漠。砂丘の稜線のジャンプ 3 か所、長いダート 2 区間、傾きの向きが切り替わるバンクの S 字、道幅が約半分（55%）の峡谷がある。ダートが長く、ラップは他のコースより遅め。 |
+| BLOSSOM GARDEN | 約 2.31 km。春の日本庭園。灯籠石の島で道が分かれる区間 2 か所、迂回できる池の穴とジャンプ、木戸のゲートがある。 |
+| THUNDER OVAL | 約 2.21 km。夕方のスタジアム。いちばん速いコース。長いバンクの 2 つのカーブ、ブーストパネル 3 連、ピットウォールの動く障害物がある。 |
+| MOONLIT BAYOU | 約 2.23 km。夜の湿地。迂回できる水面の穴 2 か所、揺れる丸太 2 本、泥の区間 2 か所、丸木橋の立体交差がある。 |
+| CRYSTAL HOLLOW | 約 2.12 km。地下洞窟。結晶の凍った床 2 か所、鍾乳石のゲート 2 か所、道幅が約半分（55%）の狭路 2 か所、立体交差がある。 |
+| SUNKEN TEMPLE | 約 2.25 km。密林の遺跡。回転する石の床 2 か所、閉じる石扉 2 か所、中庭の立体交差、ブースト、柱列の島（内側が近道）がある。 |
+| SERPENT PASS | 約 2.33 km。秋の山道。道幅が約半分で**ドリフトをしないと壁に当たる**ヘアピンが 2 か所ある（ドリフトで抜ければ約 0.6 秒速い）。高低差は 20 m 以上。 |
+| LUNAR BASIN | 約 2.21 km。月面。迂回できるクレーターの穴 3 組、レゴリスのダート、居住チューブの立体交差、ブーストがある。 |
 
 ### 近道と落とし穴
 
@@ -173,7 +181,7 @@ src/
     itemTable.ts # 順位別のアイテム抽選テーブル（8 位まで）
     sim.test.ts
     surfaces.ts # 路面特性（ice / boost / jump）
-    tracks/   # 8 コースの定義（meadow / canyon / snowpeak / neon / harbor / forest / volcano / skyline）と登録
+    tracks/   # 16 コースの定義（meadow / canyon / snowpeak / neon / harbor / forest / volcano / skyline / dunes / garden / speedway / bayou / cavern / temple / serpentine / lunar）と登録
   render/     # three のカート、追従カメラ、火花。course/ はコースごとのテーマと路面の描画
   input/      # キーボード・タッチ・Gamepad を InputFrame に変換
   audio/      # WebAudio のエンジン・ドリフト・効果音
@@ -185,7 +193,7 @@ src/
 .github/workflows/
   deploy.yml  # main への push で Pages に公開
   e2e.yml     # オンライン対戦 E2E（手動実行のみ）
-e2e/          # Playwright。multiplayer.spec.ts（実 PeerJS ブローカー）と courses.spec.ts（8 コースの選択と 3 周）
+e2e/          # Playwright。multiplayer.spec.ts（実 PeerJS ブローカー）と courses.spec.ts・courses-m10.spec.ts（16 コースの選択と 3 周）
 ```
 
 シミュレーションは `stepRace(state, inputs)` で 1 tick 進みます。`RaceState` に RNG 状態を含むため、同じ seed と tick ごとの `InputFrame[]` で再現できます。`JSON.parse(JSON.stringify(state))` したスナップショットからも継続可能です。CPU も入力を作るだけで、物理を直接上書きしません。ネットワーク入力もこの境界で差し替わります。
@@ -200,7 +208,7 @@ e2e/          # Playwright。multiplayer.spec.ts（実 PeerJS ブローカー）
 
 ## 実装上の範囲
 
-- コースは 8 つ（MEADOW LOOP / SUNSCAR CANYON / FROSTBITE PEAK / NEON NIGHTLINE / TIDEWATER HARBOR / MOSSWOOD TRAIL / EMBER CALDERA / STRATOS CITY）。1 人用（CPU 戦）とオンライン対戦（最大 8 人、P2P、ホスト権威）。通信は PeerJS 既定の公開 STUN/TURN を利用します。
+- コースは 16 本（MEADOW LOOP / SUNSCAR CANYON / FROSTBITE PEAK / NEON NIGHTLINE / TIDEWATER HARBOR / MOSSWOOD TRAIL / EMBER CALDERA / STRATOS CITY / SIROCCO DUNES / BLOSSOM GARDEN / THUNDER OVAL / MOONLIT BAYOU / CRYSTAL HOLLOW / SUNKEN TEMPLE / SERPENT PASS / LUNAR BASIN）。1 人用（CPU 戦）とオンライン対戦（最大 8 人、P2P、ホスト権威）。通信は PeerJS 既定の公開 STUN/TURN を利用します。
 - 物理は平面上の簡易カート物理と路面の高さへの追従です。ホップは描画演出で、立体ジャンプや転倒は扱いません。
 - 60fps は中級スマホでの目安です。実機・ブラウザ・電力設定によって性能とゲームパッドの割り当ては異なります。
 - WebGL が利用できない場合は画面内に再読み込み案内を表示します。音声が許可されない場合もゲームは動作します。

@@ -1211,3 +1211,109 @@ M8 から送られた保守項目を片づけた。wire・`PROTOCOL_VERSION`・`
 
 ### M10 に送ったもの
 `.omc/followups.md` の「v6 M9」節の「M10 送り」のとおり。
+
+## v6 M10（16 コース・プロトコル v18）
+コースを 8 本から 16 本に倍にし、ドリフトが必須のコース（SERPENT PASS）を足した。通信の版は v18 に上がった。sim 本体（`ai.ts` / `race.ts` / `corridor.ts`）は変えていない。数値は `.omc/plans/m10-design.md`、M10 のコミットメッセージ（`facd01a`〜`c38c138`）、各コースの `src/sim/tracks/<id>.ts` と `<id>.test.ts` の先頭コメントから取った。計測は darwin-arm64。
+
+### 16 コースの一覧
+`TRACK_IDS` の順（タイトルのコース番号 01〜16 の順＝カップ順）。
+
+| 番号 | id | 名前 | カップ |
+| --- | --- | --- | --- |
+| 01 | meadow | MEADOW LOOP | SUNRISE |
+| 02 | canyon | SUNSCAR CANYON | SUNRISE |
+| 03 | snowpeak | FROSTBITE PEAK | SUNRISE |
+| 04 | neon | NEON NIGHTLINE | SUNRISE |
+| 05 | harbor | TIDEWATER HARBOR | HORIZON |
+| 06 | forest | MOSSWOOD TRAIL | HORIZON |
+| 07 | volcano | EMBER CALDERA | HORIZON |
+| 08 | skyline | STRATOS CITY | HORIZON |
+| 09 | dunes | SIROCCO DUNES | ZENITH |
+| 10 | garden | BLOSSOM GARDEN | ZENITH |
+| 11 | speedway | THUNDER OVAL | ZENITH |
+| 12 | bayou | MOONLIT BAYOU | ZENITH |
+| 13 | cavern | CRYSTAL HOLLOW | ECLIPSE |
+| 14 | temple | SUNKEN TEMPLE | ECLIPSE |
+| 15 | serpentine | SERPENT PASS | ECLIPSE |
+| 16 | lunar | LUNAR BASIN | ECLIPSE |
+
+### グランプリのカップ（`src/gp/grandPrix.ts`）
+カップは 4 つ。`CUPS` を flatMap した順は `TRACK_IDS` と等しい。
+
+| id | 名前 | コース |
+| --- | --- | --- |
+| sunrise | SUNRISE CUP | meadow, canyon, snowpeak, neon |
+| horizon | HORIZON CUP | harbor, forest, volcano, skyline |
+| zenith | ZENITH CUP | dunes, garden, speedway, bayou |
+| eclipse | ECLIPSE CUP | cavern, temple, serpentine, lunar |
+
+### 新しい 8 コース
+すべて `layoutVersion: 1`、チェックポイント 24、`boxRows` 8。CPU 平均ラップは 8 CPU × seeds [1, 42, 98765] × 3 周（コースごと 72 周）の `handling.test.ts` の BASELINE（`version: 'm10'`）。平均速度は長さ ÷ 平均ラップ。壁 / 帯は `wallHits` / `bandHits`、pit は `pitFalls`（全コース 0）。drawCalls / triangles は `buildCourse.test.ts` の RENDER_BASELINE（Chromium darwin、seed 127、10 フレームで同一）。
+
+| コース | テーマ | おもな仕掛け | 長さ (m) | CPU 平均ラップ (s) | 平均速度 (m/s) | 壁 / 帯 | drawCalls / triangles |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| dunes | 夕暮れの砂漠（黄土色、紫の空） | 砂丘の稜線ジャンプ 3（216 回の着地すべて dirt）、長い dirt 2、±0.3 のバンクの S 字、幅 55% の峡谷 | 2,239.85 | 85.476 | 26.2 | 0 / 0 | 126 / 91,966 |
+| garden | 春の日本庭園（桜、灯籠石） | 灯籠石の `islandSplit` 2、池の jump+pit（迂回あり）、木戸の gate、高低差 5.41 m | 2,309.59 | 65.242 | 35.4 | 0 / 0 | 123 / 105,118 |
+| speedway | 夕方のスタジアム | 最速コース。±0.35 の長いバンク 2、boost 3 連、sweep 障害 1 | 2,256.39 | 63.363 | 35.6 | 0 / 0 | 125 / 73,308 |
+| bayou | 夜の湿地 | 水面の pit 2、丸太の sweep 2、泥の dirt 2、丸木橋の deck（交差の高低差 18 m） | 2,225.08 | 68.798 | 32.3 | 0 / 0 | 127 / 79,339 |
+| cavern | 地下洞窟（シアンとマゼンタの結晶） | 結晶の ice 2、鍾乳石の gate 2、幅 55% の狭路 2、deck 1 | 2,118.89 | 62.028 | 34.2 | 0 / 0 | 130 / 88,825 |
+| temple | 密林の遺跡（金、苔、石） | 回転床 2、石扉 2（全開でも道路に 2.6 m 掛かる）、中庭の立体交差、boost、柱列の島（内側が 28.293 m 短い） | 2,254.10 | 63.467 | 35.5 | 0 / 0 | 138 / 97,474 |
+| serpentine | 秋の山道（紅葉、灰色の岩） | ドリフト必須の狭いヘアピン 2（次節）、ヘアピン 1、高低差 20 m 以上（初回コミット時は 27.53 m）、バンク 1 | 2,328.60 | 68.324 | 34.1 | 1 / 0 | 123 / 110,066 |
+| lunar | 月面（レゴリス、黒い空に地球） | クレーター 3 組（迂回あり）、dirt、居住チューブの deck、boost | 2,209.88 | 65.179 | 33.9 | 0 / 0 | 140 / 79,830 |
+
+- 平均速度の実測（`speedway.test.ts` が BASELINE の元を読んで検査）: speedway 35.611 > temple 35.516 > skyline 35.491 > neon 35.488 m/s。上の表の平均速度は現行の長さ ÷ 平均ラップ（speedway はバンク修正で 2,211.31 → 2,256.39 m）。THUNDER OVAL が最速であることは実測の側で検査する。
+- 長さは 2,100〜2,400 m の範囲。serpentine の長さは `SERPENTINE_LENGTH`（2,328.60）（初回コミット `d84e113` 時は 2,320.48 m。その後の形状の修正で変わった）。
+- dunes は dirt が長く、平均ラップが他より約 25% 遅い（M11 送り）。
+- meshes: dunes 32、garden 42、speedway 30、bayou 39、cavern 36、temple 43、serpentine 28、lunar 45。
+
+### ドリフト必須のヘアピン（SERPENT PASS、M10-07）
+`.omc/plans/m10-design.md` §3 の式から導いた値を、実走で確かめた。
+
+- **旋回の式（`race.ts`）**: ドリフトなしの turnRate = max(1.72, 2.1 − (v − 15) × 0.025)。v = 32 で 1.725 rad/s、最小旋回半径は 18.6 m。ドリフト中は steering = 0.75·dir + 0.6·steer で最大 1.35、つまり 2.33 rad/s で、旋回半径は 13.7 m（さらに slip 0.23 rad の分だけ内側へ寄る）。
+- **幅**: 路面は幅 50%（road 4.68 m）。中心線の半径 11 m 前後（実装は 11.043 / 11.937 m の逆向きの 2 つ）では、走れる帯が半径 5.1〜16.9 m になり、ドリフトなしの弧（18.6 m）は収まらず、ドリフト中の弧（13.7 m）は収まる。ヘアピンに roll と dirt は置かない（バンクは低い側への旋回を +30% し、dirt は旋回 ×0.85 のため、置くとドリフトなしでも曲がれてしまう）。
+- **壁の半幅 5.60 m**（`444b04d`）: 当初の 6.825 m では、壁の手前の芝をブレーキで抜ける道ができた。壁の半幅を 5.60 m にして、road 4.68 m（50% の舗装）は保ったまま、カートの中心の限界を 5.60 − `KART_RADIUS`（0.95）= 4.65 m にした。これで芝の減速帯に入れない。
+- **測定窓 [from − 20, to + 80]**（`2280280`、2026-10-16 の司令塔の判断）: 出口のドリフトターボを含めて、タイムと壁ヒットを比べる。初回の [from − 20, to + 20] は出口のターボを含まず不十分だった。
+- **台本**（P 制御、seed 1、人間 1 台、アイテムなし。時間 s / 最高速 m/s / ヒット数）:
+
+| 台本 | 下側のヘアピン | 上側のヘアピン |
+| --- | --- | --- |
+| A（全開・ドリフトなし） | 4.483 / 37.22 / 1 | 4.600 / 36.64 / 1 |
+| B（ドリフトで抜ける） | 3.883 / 54.67 / 0 | 3.917 / 54.48 / 0 |
+| C（ブレーキが遅い） | 7.067 / 37.22 / 0 | 7.467 / 36.64 / 0 |
+
+  - A − B = 0.600 / 0.683 s（ヒットの判定には 0.5 s 以上の差が要る）。C − B = 3.183 / 3.550 s。B と C は壁に触れない。
+- **総当たり**: 324 の制御器 × 320 のブレーキ / 惰行の台本（開始 40/25/15/8/3 m 手前、解除 進入/1/4/頂点/出口、目標 12〜25 m/s）を各ヘアピンで流した（スローダウン 103,680 回）。ドリフトなしで壁に当たらない最良は **4.383 / 4.417 s**、ドリフトの最良は **3.75 s**。余裕は **0.633 / 0.667 s**。全開のドリフトなしで壁に当たらないのは **0/324**（両ヘアピンとも）。ドリフトの勝者は壁に 1 度も触れない。
+- **CPU**: AI は変えていない。`ai.ts:45` の曲率ブレーキで通れる。8 CPU × 3 seeds × 3 周 = 72 周を完走、平均 68.324 s、`wallHits` **1**、`bandHits` 0、`pitFalls` 0。
+- 描画: 28 meshes、113,488 三角形（影込み）。
+
+### プロトコル v18 と pin
+- `PROTOCOL_VERSION` は 18、`ROOM_PREFIX` は `pcircuit-v18-`（`src/net/protocol.ts`）。`PROTOCOL_TRACK_IDS` の値域が 16 に広がったため。**対戦は両者とも新ページが必要**（v17 のルームは拒否する）。
+- `COURSE_FINGERPRINT` の pin は `pinned[18] = 2618543986`（`snapshotCodec.test.ts`、M10-10 で 16 コースがそろった後の値）。`pinned[17]` 以前は残す。`scaffoldIds()` は空配列（MEADOW のコピーだった仮コースは無い）。
+- 不変: sim の指紋 pin（meadow 1966540717 / neon 1211865273、linux 1670404181 / 1324528798）と `LAYOUT_FINGERPRINT` `aa03c454`。スナップショットのバイトも変えていない。
+- ガード: M10-00 が足した pending 行は M10-10 で全て確定した。tripwire が pending の行、整数でない描画値、pin されていない protocol の版を拒否する。
+
+### コース選択 UI（M10-09）
+- 選択肢は 16 個。デスクトップは **2 段 × 8**（44×44 px）で、周回数とオプションをその横に置く。幅 ≥ 1000 px かつ高さ 720〜800 px または 880 px 以上のときだけ、固定のストリップにする。それ以外のデスクトップのサイズ（幅 701〜999 px、高さ 481〜719 / 801〜879 px）は、スクロールするフローレイアウトで、オンラインパネルとは重ならない。縦向きのスマホは **4 × 4**。
+- `layout.spec.ts` に境界の 12 サイズ（480/481、719/720、800/801、879/880、701×720、844×481、999/1000×720）を足し、内容とストリップの順、選択肢どうしが交差しないこと、`elementFromPoint` の当たりを検査する。360×640、390×844、844×390 でも 16 個が交差しない。
+- `modes.spec.ts` はカップ 4 つ（ZENITH / ECLIPSE を選択できること）を検査する。ロビーのコース選択は 16 行。
+
+### E2E と golden
+- `e2e/courses-m10.spec.ts`（8 テスト）: 新 8 コースそれぞれの start-grid と minimap の golden（各 2 枚）。feature view は attachment のみ。
+- `e2e/courses.spec.ts`: タイトルの golden を `title-sixteen-courses.png` に改名。32 回の切替テスト（TRACK_IDS を 2 回、meadow を末尾へ回して 32 回すべてが実際の切替になるようにし、回数も検査する）。C-011（タッチ）は `.course-option` 16 個を期待する。`network.spec.ts` M8-07 T1 は meadow へ戻るときの条件を「プログラムが増えない（≤ 戻る前）かつ meadow 自身の集合が残る（≥ p0）」に改めた。最後の切替先が lunar になり、その固有のプログラム 3 個を three.js が戻る途中で解放する（16 → 13）ため。
+- 全体: **63 テスト、31.8 分（1,911 s）**、workers 1・retries 0。設計の基準（40 分超で workers 2、45 分超で CI の timeout 60 分）に収まり、workers と timeout は変えていない。
+- golden: darwin は新 16 枚と `title-sixteen-courses.png`（既存の 73 ファイルはバイト一致）。linux は未採取で、`goldens-linux.yml`（8 コース名を追加済み）で採取する。
+- `npm test`: 60 ファイル / 2,336 テスト。
+
+### 基準の更新（動いた pin / 動かない pin）
+| pin | 状態 |
+| --- | --- |
+| `PROTOCOL_VERSION` 17 → **18**、`ROOM_PREFIX` `pcircuit-v18-` | 動いた |
+| `COURSE_FINGERPRINT` / `pinned[18]` | 動いた: 2618543986（新規） |
+| `handling.test.ts` の BASELINE | 動いた: 新 8 コースを `version: 'm10'` で追加 |
+| `buildCourse.test.ts` の RENDER_BASELINE | 動いた: 新 8 コースを追加 |
+| `courses.spec.ts` のタイトル golden | 動いた: `title-sixteen-courses.png` に改名し darwin を再採取 |
+| sim 指紋（meadow / neon）、`LAYOUT_FINGERPRINT` aa03c454 | 不変 |
+| 既存 8 コースの TrackDef、BASELINE、RENDER_BASELINE、darwin golden | 不変 |
+
+### M11 に送ったもの
+`.omc/followups.md` の「M10」節のとおり（レビュー由来の minor と、linux golden の採取、公開版の確認）。

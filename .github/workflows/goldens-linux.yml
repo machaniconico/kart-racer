@@ -9,7 +9,7 @@ permissions:
 jobs:
   goldens:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 90  # M10: 13 tests x 2 passes; M9 ran 5 x 2 in ~20 min on SwiftShader
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
