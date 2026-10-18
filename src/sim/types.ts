@@ -112,7 +112,7 @@ export interface WidthKey {
   readonly roadHalfWidth: number;
   readonly wallHalfWidth: number;
 }
-/** Bank at an arc-length distance in metres; roll in radians, |roll| ≤ 0.35, > 0 raises the +offset side. */
+/** Bank in radians; |roll| ≤ 0.35 (0.9 with physics), > 0 raises the +offset side. */
 export interface BankKey { readonly distance: number; readonly roll: number }
 /** Deterministic motion evaluated at racingTicks × FIXED_DT seconds; countdown time is zero. */
 export interface BarrierMotion {
@@ -151,6 +151,12 @@ export interface SurfaceZone {
   readonly offsetMax?: number;
   /** Spin angular velocity in rad/s; required for spin zones, with 0 < |rate| ≤ 1.5. */
   readonly rate?: number;
+  /** Jump flight time in seconds, in (0, 2.55]; omitted means 0.8. */
+  readonly duration?: number;
+  /** Jump arc height in metres; omitted means 2.0. */
+  readonly height?: number;
+  /** Required for fall zones: centreline respawn distance in lap metres. */
+  readonly respawnAt?: number;
 }
 
 export interface TrackDef {
@@ -169,6 +175,8 @@ export interface TrackDef {
   readonly surfaces: readonly SurfaceZone[];
   readonly themeId: TrackId;
   readonly layoutVersion?: number;
+  /** Opts into extreme-course validation and physics; absent preserves legacy behavior. */
+  readonly physics?: { readonly maxRoll?: number };
   readonly widthKeys?: readonly WidthKey[];
   /** Linearly interpolated roll (rollAt), wrapping across the seam like widthKeys; absent means 0. */
   readonly bankKeys?: readonly BankKey[];

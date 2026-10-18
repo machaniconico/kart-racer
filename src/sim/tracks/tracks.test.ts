@@ -110,9 +110,20 @@ describe.each(TRACK_IDS)('%s course contract', id => {
     expect(() => validateTrackDef(track.def)).not.toThrow();
   });
 
-  it('keeps every grade within 30%, including the seam', () => {
+  it('keeps every grade within its physics gate, including the seam', () => {
+    const maxGrade = track.def.physics === undefined ? 0.30 : 0.55;
     for (const sample of track.samples) {
-      expect(Math.abs(slopeAt(track, sample.distance)), `distance ${sample.distance}`).toBeLessThanOrEqual(0.30);
+      expect(Math.abs(slopeAt(track, sample.distance)), `distance ${sample.distance}`).toBeLessThanOrEqual(maxGrade);
+    }
+  });
+
+  it('keeps at least 3.6 m of road half-width throughout every course', () => {
+    const distances = [0, track.length, ...(track.def.widthKeys ?? []).map(key => key.distance)];
+    for (let distance = 0; distance < track.length; distance += 0.5) distances.push(distance);
+    for (const distance of distances) {
+      const width = widthAt(track, distance);
+      expect(width.roadHalfWidth).toBeGreaterThanOrEqual(3.6);
+      expect(width.wallHalfWidth).toBeGreaterThanOrEqual(width.roadHalfWidth);
     }
   });
 
@@ -151,7 +162,7 @@ describe.each(TRACK_IDS)('%s course contract', id => {
     expect(largestDelta).toBeLessThan(2);
   });
 
-  it('closes exactly, with unit orthogonal tangents/normals and grade at most 0.30', () => {
+  it('closes exactly, with unit orthogonal tangents/normals and grades within the physics gate', () => {
     expect(sampleTrack(track, track.length)).toEqual(sampleTrack(track, 0));
     expect(wrapDistance(track, -1)).toBeCloseTo(track.length - 1, 10);
     let largestGrade = 0;
@@ -167,7 +178,7 @@ describe.each(TRACK_IDS)('%s course contract', id => {
       expect(Math.hypot(point.tx, point.tz)).toBeCloseTo(1, 14);
       expect(Math.hypot(point.nx, point.nz)).toBeCloseTo(1, 14);
     }
-    expect(largestGrade).toBeLessThanOrEqual(0.30);
+    expect(largestGrade).toBeLessThanOrEqual(track.def.physics === undefined ? 0.30 : 0.55);
   });
 
   it('builds 24 boxes, every checkpoint, and the declared course widths', () => {

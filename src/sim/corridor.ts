@@ -291,14 +291,18 @@ function validateCrossings(track: Track, slopes: readonly number[]): void {
   if (def.decks?.length) {
     // 2 × maximum wall half-width (13.65) + explosion radius (4.5).
     const reach = 31.8;
+    // Include the legacy 2 m arc for jumps without an explicit height.
+    const jumps = def.surfaces.filter(zone => zone.kind === 'jump');
+    const jumpHeight = jumps.length ? Math.max(...jumps.map(zone => zone.height ?? 2.0)) : 2.0;
+    const heightDifference = 6.0 + jumpHeight;
     const deckSamples = samples.filter(sample => onDeck(track, sample.distance));
     const outsideSamples = samples.filter(sample => !onDeck(track, sample.distance));
     for (const a of deckSamples) for (const b of outsideSamples) {
       const gap = Math.abs(a.distance - b.distance);
       if (Math.min(gap, length - gap) <= reach) continue;
-      if ((a.x - b.x) ** 2 + (a.z - b.z) ** 2 <= reach ** 2 + EPSILON && Math.abs(a.y - b.y) < 8 - EPSILON) {
-        // LEVEL_GAP (6.0) + maximum jump height (2.0); no dependency on race state.
-        throw new RangeError('deck surface height difference must be at least 8 m within 31.8 m');
+      if ((a.x - b.x) ** 2 + (a.z - b.z) ** 2 <= reach ** 2 + EPSILON && Math.abs(a.y - b.y) < heightDifference - EPSILON) {
+        // LEVEL_GAP (6.0) + maximum jump height; no dependency on race state.
+        throw new RangeError(`deck surface height difference must be at least ${heightDifference} m within 31.8 m`);
       }
     }
   }
@@ -316,6 +320,25 @@ export function validateTrackDef(def: TrackDef): void {
   const phase = def.checkpointPhase ?? 0;
   requireFinite(phase, 'checkpointPhase');
   if (Math.abs(phase) >= 0.5) throw new RangeError('checkpointPhase must be between -0.5 and 0.5');
+  if (def.physics?.maxRoll !== undefined) {
+    requireFinite(def.physics.maxRoll, 'physics maxRoll');
+    if (def.physics.maxRoll <= 0 || def.physics.maxRoll > 0.9) {
+      throw new RangeError('physics maxRoll must be positive and at most 0.9');
+    }
+  }
+  // Check source values: buildTrack's JSON copy turns NaN and infinities into null.
+  for (const jump of def.surfaces.filter(zone => zone.kind === 'jump')) {
+    if (jump.duration !== undefined) {
+      requireFinite(jump.duration, 'jump duration');
+      if (jump.duration <= 0 || jump.duration > 2.55) {
+        throw new RangeError('jump duration must be positive and at most 2.55 s');
+      }
+    }
+    if (jump.height !== undefined) {
+      requireFinite(jump.height, 'jump height');
+      if (jump.height < 0) throw new RangeError('jump height must be nonnegative');
+    }
+  }
 
   const distances = new Set<number>();
   const addDistance = (d: number): void => { distances.add(wrap(d, length)); };
@@ -345,7 +368,11 @@ export function validateTrackDef(def: TrackDef): void {
   }
 
   const slopes = track.samples.map(sample => slopeAt(track, sample.distance));
-  if (slopes.some(slope => !Number.isFinite(slope) || Math.abs(slope) > 0.30 + EPSILON)) {
+  if (def.physics !== undefined) {
+    if (slopes.some(slope => !Number.isFinite(slope) || Math.abs(slope) > 0.55 + EPSILON)) {
+      throw new RangeError('Track slope must not exceed 0.55');
+    }
+  } else if (slopes.some(slope => !Number.isFinite(slope) || Math.abs(slope) > 0.30 + EPSILON)) {
     throw new RangeError('Track slope must not exceed 0.30');
   }
   const bankKeys = def.bankKeys;
@@ -353,7 +380,9 @@ export function validateTrackDef(def: TrackDef): void {
     const key = bankKeys[i]!;
     checkDistance(key.distance, 'bankKeys distance');
     requireFinite(key.roll, 'bankKeys roll');
-    if (Math.abs(key.roll) > 0.35) throw new RangeError('bankKeys roll must not exceed 0.35');
+    if (def.physics !== undefined) {
+      if (Math.abs(key.roll) > 0.9) throw new RangeError('bankKeys roll must not exceed 0.9');
+    } else if (Math.abs(key.roll) > 0.35) throw new RangeError('bankKeys roll must not exceed 0.35');
     if (i > 0 && key.distance <= bankKeys[i - 1]!.distance) {
       throw new RangeError('bankKeys distances must be strictly increasing');
     }
@@ -490,7 +519,8 @@ export function validateTrackDef(def: TrackDef): void {
     }
   }
 
-  const zones = def.surfaces.filter(zone => zone.kind === 'jump' || zone.kind === 'pit' || zone.kind === 'spin');
+  const zones = def.surfaces.filter(zone => zone.kind === 'jump' || zone.kind === 'pit' ||
+    zone.kind === 'spin' || zone.kind === 'fall');
   for (const zone of zones) {
     checkDistance(zone.from, `${zone.kind} from`);
     checkDistance(zone.to, `${zone.kind} to`);
@@ -502,9 +532,78 @@ export function validateTrackDef(def: TrackDef): void {
       wrap(key.distance - zone.from, length) <= span + EPSILON).map(key => key.distance)]) {
       const offsets = zoneOffsets(track, zone, d);
       if (offsets.min >= offsets.max) throw new RangeError(`${zone.kind} offsets must be increasing`);
+      if (zone.kind === 'fall') {
+        const { roadHalfWidth: road, wallHalfWidth: wall } = widthAt(track, d);
+        if (!((offsets.min >= road - EPSILON && offsets.max <= wall + EPSILON) ||
+          (offsets.min >= -wall - EPSILON && offsets.max <= -road + EPSILON))) {
+          throw new RangeError('fall must be a band between road and wall');
+        }
+      }
     }
   }
-  const jumps = zones.filter(zone => zone.kind === 'jump');
+  const jumps = zones.filter(zone => zone.kind === 'jump').sort((a, b) =>
+    wrap(a.from, length) - wrap(b.from, length));
+  if (def.physics !== undefined) for (let i = 0; i < jumps.length; i++) {
+    const jump = jumps[i]!;
+    const next = jumps[(i + 1) % jumps.length]!;
+    const spacing = jumps.length === 1 ? length : wrap(next.from - jump.from, length);
+    if (spacing <= (jump.duration ?? 0.8) * 60) {
+      throw new RangeError('jump spacing must exceed duration * 60 m, including the seam');
+    }
+  }
+  const falls = zones.filter(zone => zone.kind === 'fall');
+  for (const fall of falls) {
+    if (fall.respawnAt === undefined) throw new RangeError('fall respawnAt is required');
+    checkDistance(fall.respawnAt, 'fall respawnAt');
+    const span = wrap(fall.to - fall.from, length);
+    // Check entry and every crossed gate: between gates the preceding checkpoint
+    // is constant, and the nearest-lap respawn can only move forward by a lap.
+    const from = wrap(fall.from, length);
+    const end = from + span;
+    let checkpoint = 0;
+    const entries: number[] = [];
+    for (let i = 0; i < def.checkpointCount; i++) {
+      const gate = i === 0 ? 0 : (i + phase) * length / def.checkpointCount;
+      if (gate <= from) checkpoint = gate;
+      const entry = gate < from ? gate + length : gate;
+      if (entry > from && entry <= end) entries.push(entry);
+    }
+    for (const entry of [from, ...entries.sort((a, b) => a - b)]) {
+      if (entry !== from) checkpoint = entry;
+      const respawn = entry + wrap(fall.respawnAt - entry + length / 2, length) - length / 2;
+      if (respawn < checkpoint - EPSILON) {
+        throw new RangeError('fall respawnAt must be at or after the preceding checkpoint');
+      }
+    }
+    const nextJump = [...jumps].sort((a, b) =>
+      wrap(a.from - fall.respawnAt!, length) - wrap(b.from - fall.respawnAt!, length))[0];
+    if (!nextJump) continue;
+    const nextIndex = jumps.indexOf(nextJump);
+    const followingJump = jumps[(nextIndex + 1) % jumps.length]!;
+    const jumpSpacing = jumps.length === 1 ? length : wrap(followingJump.from - nextJump.from, length);
+    const duration = nextJump.duration ?? 0.8;
+    const flightDistance = duration * 60;
+    const launch = zoneOffsets(track, nextJump, nextJump.from);
+    let gap = wrap(nextJump.to - nextJump.from, length);
+    // Gap is takeoff to the far edge of every hazard this jump can encounter.
+    // Overlapping bands form one gap; unrelated lanes or distant bands do not.
+    for (const hazard of zones.filter(zone => zone.kind === 'fall' || zone.kind === 'pit')) {
+      const span = wrap(hazard.to - hazard.from, length);
+      const behind = wrap(nextJump.from - hazard.from, length);
+      const start = behind <= span ? -behind : wrap(hazard.from - nextJump.from, length);
+      if (start > flightDistance || start >= jumpSpacing) continue;
+      const offsets = zoneOffsets(track, hazard, nextJump.from + Math.max(0, start));
+      if (offsets.max < launch.min || offsets.min > launch.max) continue;
+      gap = Math.max(gap, start + span);
+    }
+    if (gap > flightDistance + EPSILON) {
+      throw new RangeError('fall respawnAt next jump gap exceeds duration * 60 m');
+    }
+    const runway = wrap(nextJump.from - fall.respawnAt, length);
+    if (runway < (gap / duration) ** 2 / (2 * 19.9) * 1.3 - EPSILON) {
+      throw new RangeError('fall respawnAt needs more runway before the next jump');
+    }
+  }
   for (const jump of jumps) {
     const takeoff = slopeAt(track, jump.to);
     // slopeAt is constant until the next sample; include every change in (to, to + 40].
