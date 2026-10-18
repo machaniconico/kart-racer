@@ -76,14 +76,15 @@ describe('THUNDER OVAL', () => {
     }
   });
 
-  it('has the longest straight of all registered courses and broad, level turns', () => {
+  // M11 extreme courses (TrackDef.physics) are excluded: SUMMIT DROP's ridge is a deliberate 1 km straight.
+  it('has the longest straight of all standard courses and broad, level turns', () => {
     expect(maxSlope(track)).toBeLessThanOrEqual(0.30);
     for (const point of profile) {
       expect(1 / Math.abs(point.curvature)).toBeGreaterThanOrEqual(widthAt(track, point.distance).wallHalfWidth + 2.5);
     }
     const straight = longestStraight(track);
     expect(straight).toBeGreaterThanOrEqual(650);
-    for (const id of TRACK_IDS.filter(id => id !== 'speedway')) {
+    for (const id of TRACK_IDS.filter(id => id !== 'speedway' && getTrack(id).def.physics === undefined)) {
       expect(straight, id).toBeGreaterThan(longestStraight(getTrack(id)));
     }
   });

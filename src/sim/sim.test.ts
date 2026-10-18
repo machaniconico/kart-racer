@@ -1080,6 +1080,9 @@ describe('sim fingerprint', () => {
     'meadow', 'canyon', 'snowpeak', 'neon', 'harbor', 'forest', 'volcano', 'skyline',
     'dunes', 'garden', 'speedway', 'bayou', 'cavern', 'temple', 'serpentine', 'lunar',
   ] as const;
+  it('keeps the legacy roster equal to the first sixteen registered courses', () => {
+    expect([...LEGACY_TRACK_IDS]).toEqual(TRACK_IDS.slice(0, 16));
+  });
   type LegacyTrackId = (typeof LEGACY_TRACK_IDS)[number];
   // Measured on darwin-arm64 before M11 registration or sim changes (2026-10-19).
   const DARWIN_FINGERPRINTS: Record<LegacyTrackId, number> = {

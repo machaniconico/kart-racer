@@ -48,7 +48,7 @@ for (const vp of viewports) {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
     const targets = page.locator('.course-option, .mode-option, #start-race');
-    expect(await page.locator('.course-option').count()).toBe(16);
+    expect(await page.locator('.course-option').count()).toBe(20);
     expect(await page.locator('.mode-option').count()).toBe(3);
     expect(await page.locator('#start-race').count()).toBe(1);
     // Scroll each target into view; the title scrolls inside .title-screen on portrait phones.
@@ -63,12 +63,12 @@ for (const vp of viewports) {
       expect(box.height, box.html).toBeGreaterThanOrEqual(MIN_TARGET);
     }
 
-    // The sixteen course options must not overlap each other.
+    // The twenty course options must not overlap each other.
     const rects = await page.locator('.course-option').evaluateAll(els => els.map(el => {
       const r = el.getBoundingClientRect();
       return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
     }));
-    expect(rects).toHaveLength(16);
+    expect(rects).toHaveLength(20);
     for (let i = 0; i < rects.length; i++) {
       for (let j = i + 1; j < rects.length; j++) {
         const a = rects[i];
@@ -99,13 +99,13 @@ test('M9-04 host notice does not overlap headings at 390x844', async ({ page }, 
   }
 });
 
-// M10-09 boundary sizes around the CSS breakpoints (480/481, 700/701, 720, 800/801, 879/880, 999/1000).
+// M10-09 boundary sizes around the CSS breakpoints (480/481, 700/701, 720, 800/801, 879/880, 959/960, 999/1000).
 const boundarySizes = [
-  [1280, 480], [1280, 481], [1280, 719], [1280, 720], [1280, 800], [1280, 801], [1280, 879], [1280, 880],
-  [701, 720], [844, 481], [999, 720], [1000, 720],
+  [1280, 480], [1280, 481], [1280, 719], [1280, 720], [1280, 800], [1280, 801], [1280, 879], [1280, 880], [1280, 959], [1280, 960],
+  [701, 720], [844, 481], [999, 720], [1000, 720], [999, 960], [1000, 960],
 ] as const;
 for (const [width, height] of boundarySizes) {
-  test(`M10-09 sixteen-course title has no overlap at ${width}x${height}`, async ({ page }, info) => {
+  test(`M10-09 twenty-course title has no overlap at ${width}x${height}`, async ({ page }, info) => {
     await page.setViewportSize({ width, height });
     await page.goto('./');
     await expect(page.locator('#title-screen')).toBeVisible();

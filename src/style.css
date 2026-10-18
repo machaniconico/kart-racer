@@ -253,9 +253,9 @@ h1 span { color: var(--lime); }
   .result-actions { margin-top: 14px; }
 }
 
-/* M10-09: sixteen courses make two rows of eight; on desktop the laps/mode options sit beside the grid so the strip stays short. */
+/* M11-10: twenty courses make three rows of eight (8, 8, 4); the 394px column (8×44 + 7×6) is unchanged because the laps column and the online panel leave no room to widen it, so the pinned strip reserves one more 50px row (44 + 6) instead. On desktop the laps/mode options sit beside the grid so the strip stays short. */
 @media (min-width: 1000px) and (min-height: 481px) {
-  .title-screen { padding-bottom: 230px; }
+  .title-screen { padding-bottom: 280px; }
   .course-strip > .course-picker { display: grid; grid-template-columns: 394px auto; column-gap: 24px; row-gap: 6px; align-items: start; }
   .course-picker > small { grid-column: 1 / -1; }
   .course-picker > #course-select { grid-column: 1; }
@@ -264,8 +264,8 @@ h1 span { color: var(--lime); }
   .course-picker > .title-options { grid-column: 1 / -1; }
 }
 
-/* M10-09: the pinned strip only fits at 1000px+ wide and 720-800px or 880px+ tall; every other desktop size scrolls with the strip in normal flow (as short landscape does), clear of the online panel on the right. */
-@media (min-width: 701px) and (max-width: 999px) and (min-height: 481px), (min-width: 1000px) and (min-height: 481px) and (max-height: 719px), (min-width: 1000px) and (min-height: 801px) and (max-height: 879px) {
+/* M10-09 / M11-10: with twenty courses (three rows) the pinned strip only fits at 1000px+ wide and 960px+ tall (measured at 1280×720: strip top 449 vs content bottom 458.8; at 1280×880: 594 vs 618.8 — the strip is anchored to the bottom, so it gains the full height difference while the vertically centred content gains half, and 960px is the first height with a clear gap). Every other desktop size scrolls with the strip in normal flow (as short landscape does), clear of the online panel on the right. */
+@media (min-width: 701px) and (max-width: 999px) and (min-height: 481px), (min-width: 1000px) and (min-height: 481px) and (max-height: 959px) {
   .title-screen { flex-direction: column; align-items: stretch; padding-right: calc(4% + 300px); padding-bottom: 20px; overflow-y: auto; overflow-x: hidden; overscroll-behavior-y: contain; touch-action: pan-y; }
   .course-strip { position: relative; left: auto; right: auto; bottom: auto; flex-wrap: wrap; gap: 14px 34px; margin-top: 16px; }
   .course-picker { max-width: 100%; }
@@ -300,7 +300,8 @@ h1 span { color: var(--lime); }
   .course-strip:has(.course-picker) { gap: 14px; padding-top: 14px; }
   .course-picker { margin-left: auto; }
   .course-picker small, .course-picker ~ div { display: none; }
-  .course-select { grid-template-columns: repeat(4, 44px); gap: 5px; }
+  /* M11-10: five columns keep twenty courses in four rows (5×44 + 4×5 = 240px fits a 320px phone with the 28px gutters). */
+  .course-select { grid-template-columns: repeat(5, 44px); gap: 5px; }
   [data-screen="race"] .topbar { top: 18px; right: 16px; }
   .race-position { left: 17px; top: 21px; gap: 14px; }
   .position-group .hud-eyebrow, .lap-group .hud-eyebrow { font-size: 7px; }

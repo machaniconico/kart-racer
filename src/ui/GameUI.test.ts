@@ -3,7 +3,7 @@ import type { Track } from '../sim/types';
 
 const tracks = vi.hoisted(() => ({
   current: { def: { name: 'Init' } } as unknown,
-  // While GameUI is imported, getTrack answers per course so the title's course options see 16 distinct names.
+  // While GameUI is imported, getTrack answers per course so the title's course options see 20 distinct names.
   names: null as Record<string, string> | null,
 }));
 vi.mock('../sim/tracks', async importOriginal => {

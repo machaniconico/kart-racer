@@ -1317,3 +1317,54 @@ M8 から送られた保守項目を片づけた。wire・`PROTOCOL_VERSION`・`
 
 ### M11 に送ったもの
 `.omc/followups.md` の「M10」節のとおり（レビュー由来の minor と、linux golden の採取、公開版の確認）。
+
+## v7 M11（極端コース 20 コース・プロトコル v19）
+コースを 16 本から 20 本に増やし、5 つ目のカップ EXTREME CUP（summit / chasm / velodrome / spire）を足した。極端な勾配・バンク・ジャンプ・落下を、`TrackDef.physics` を持つコースだけで有効にした。通信の版は v19 に上がった。設計は `.omc/plans/m11-design.md`、コミットは `ecc7e3f`〜`dfed1b1`（M11-00〜07）と本節の M11-10。
+
+### 4 つの極端コース
+すべてカップ EXTREME（`CUPS` の 5 つ目）、番号 17〜20、`TrackDef.physics` あり。CPU 平均ラップは 8 CPU × seeds [1, 42, 98765] × 3 周（コースごと 72 周）の `handling.test.ts` の BASELINE（`version: 'm11'`）。平均速度は長さ ÷ 平均ラップ。壁 / 帯はすべて 0 / 0。
+
+| 番号 | id | 名前 | 長さ (m) | CPU 平均ラップ (s) | 平均速度 (m/s) | 極端な仕掛け（実測） | meshes | drawCalls / triangles |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 17 | summit | SUMMIT DROP | 2,916.85 | 85.301 | 34.2 | 標高 2.89〜100.67 m、登り最大 +0.433、下り最大 −0.487、尾根 240 m（road 半幅 3.6 m、両側の帯が fall）。人間のフルスロットルで下りのピーク 42.98 m/s（同じ平面形状の平地は 36.64 m/s、差 +6.34） | 32 | 126 / 101,126 |
+| 18 | chasm | CHASM LEAP | 2,224.36 | 62.880 | 35.4 | 谷 3 つ（fall 26 / 30 / 34 m）を越える jump 3 連。duration 1.4 / 1.6 / 1.8 s、height 4 / 5 / 6 m。進入速度 26 m/s でも着地は 237.1 / 442.8 / 638.1 m（谷の終端 232 / 436 / 630 m の先）。滞空 84 / 97 / 109 tick。normal で 1 レース（8 台 × 3 周）あたり平均約 1 回の落下（24 台周あたり約 1 回） | 34 | 130 / 72,538 |
+| 19 | velodrome | WALL BOWL | 2,145.55 | 61.601 | 34.8 | 180° のボウル 2 つ（roll 0.85、最小半径 30.28 m）、bank -0.6 / +0.6 / -0.6 の S 字、捻れ最大 0.014976 rad/m、勾配 0。バンクありの高速プローブは平均 58.08 m/s（バンクなしだと壁 1・芝 36 tick） | 28 | 124 / 93,922 |
+| 20 | spire | SKY SPIRE | 2,526.43 | 71.307 | 35.4 | スイッチバックで 3 層を登る標高 0.61〜55.56 m、最後に −0.50 級のプランジ（人間のピーク 42.98 m/s）、底に jump（duration 0.9 s、height 2 m）。交差は deck | 47 | 未計測（下記） |
+
+- CPU の落下回数（`measureCpuLaps`、3 seeds の平均）: chasm は easy 1/3、normal 1、hard 0。summit / velodrome / spire は 0。spire は 6 条件（3 難度 × アイテムあり / なし）すべて 24/24 完走、fall / wall / band / pit 0。
+- 難度別の平均ラップ: summit 90.271 / 85.301 / 82.254 s（easy / normal / hard）、velodrome 65.016 / 61.601 / 59.395 s、spire 77.2 / 71.3 / 68.6 s 前後。
+- spire の drawCalls / triangles は Chromium での計測が未了で、`RENDER_BASELINE` の値は MEADOW のまま（meshes 47 だけが検査される）。e2e の描画予算の担当が計測して置き換える。
+- `layoutVersion` は 1（M10 の 8 コースと同じ）。ベストタイムの保存キーは (コース id, layoutVersion, 周回数) で、仮コース時代の値 3 とは一致しないため、古い記録は表示されない。
+
+### physics ゲートの約束
+- 新しい挙動はすべて `TrackDef.physics`（`{ maxRoll?: number }`）または zone の任意フィールド（`duration` / `height` / `respawnAt` / `kind: 'fall'`）があるときだけ働く。旧 16 コースは else 側の式（字面不変）を通るため、sim の指紋（darwin の 16 コース分）は変わらない。
+- `KartState` / `RaceState` にフィールドを足さない。fall の回数は 'fall' イベントから数える。`LAYOUT_FINGERPRINT` が動かないのはこのため。
+- **validation の緩和（`corridor.ts`、physics のときだけ）**: 勾配 0.30 → 0.55、`bankKeys` の |roll| 0.35 → 0.9（`physics.maxRoll` ≤ 0.9）。physics なしで `duration` / `height` / `fall` を書くと RangeError。jump の `duration` は正で 2.55 s 以下、`height` は 0 以上。
+- **ジャンプの滞空値**: 発射した zone を逆引きして `duration` / `height` を決める。逆引きを一意にするため、physics のコースでは次の jump との間隔が `duration × 60 m` を超えることを検査する（seam を含む）。`duration` / `height` がない jump は 0.8 s / 2 m。
+- **fall / 谷 / リスポーン**: fall は (a) 道路と壁の間の帯（両側）か、(b) 道路全幅の谷で、その直前 5 m 以内に終わる duration つきの jump が覆うもの、のどちらか。接地中は毎 tick 判定し、着地した tick も判定する（空中で越えるだけなら落ちない）。`respawnAt` は必須で、いずれの fall zone の内側にも置けず、落ちうる全位置について「直前のチェックポイント以後、次のチェックポイントより前」でなければならない。復帰は中心線上、heading は接線、speed 0、spinTime 1.5 s（無敵）、'fall' イベントを 1 件。ゴール後の fall は対象外。周回は守る（復帰位置へ `previous` を書き換え、`lapValid` を保つ）。
+- **checkpointPhase**: physics のコースだけ、ゲート 1..n−1 を `checkpointPhase × 間隔` ずらす（ゲート 0 は動かさない）。spire −0.12、summit +0.2 など。`tracks.test.ts` の checkpoint 期待値も同じ式（`fall.test.ts` と同じ）に合わせた。
+- **maxRoll**: 旋回のグリップ補正は `physics.maxRoll ?? 0.35` で計る。補正の上限は +30% のまま。
+
+### 見送ったもの（ループ・ヘリックス）
+- **垂直ループ**: sim は「平面＋高さ参照」で、コースを xz 平面へ投影する。ループは 1 つの (x, z) に複数の高さと向きが重なるため、平面投影では表現できず、3D の sim が要る（M12 以降）。
+- **ヘリックス（螺旋の登り）**: 同じ (x, z) を高さを変えて回るので、`validateCrossings` に掛かる（交差角 ≥ 45°、交差の前後 ±20 m の勾配 ≤ 0.10、deck 必須）。そのため spire は、ヘリックスではなく、交差を deck で渡すスイッチバックにした。
+
+### プロトコル v19 と pin
+- `PROTOCOL_VERSION` は 19、`ROOM_PREFIX` は `pcircuit-v19-`。理由は、コース集合が 16 → 20 になったこと（`PROTOCOL_TRACK_IDS` と `TrackId`）と、イベントの許可リストに `'fall'` が加わったこと。**対戦は両者とも新ページが必要**（v18 のルームは拒否する）。
+- `LAYOUT_FINGERPRINT` は不変で `aa03c454`（入力はスナップショットの列定義だけで、コースを含まない）。`pinned[19]` にも同じ値を置く。
+- `COURSE_FINGERPRINT` の pin は `pinned[19] = 3592109651`（`snapshotCodec.test.ts`、4 コースの実形状がそろった後の値）。仮コース中だけ許していた未定義の枝は消した。`pinned[18]` 以前は残す。`scaffoldIds()` は空配列で、`tracks.test.ts` も `[]` を期待する。
+- 不変: sim の指紋 pin（旧 16 コース、`LEGACY_TRACK_IDS` は `TRACK_IDS.slice(0, 16)` と一致することを `sim.test.ts` が検査）。
+
+### コース選択 UI
+- 選択肢は 20 個。デスクトップは **3 段 × 8（8・8・4）**。列幅 394px（8×44 + 7×6）は、周回数の列とオンラインパネルに余裕がないため据え置いた。固定ストリップが 1 段分（50px）高くなり、1280×720（ストリップ上端 449 に対して内容の下端 458.8）と 1280×880（594 に対して 618.8）で内容と重なったため（M11-10 での実測。`padding-bottom` 230 → 280px では足りなかった）、固定ストリップにするのは幅 ≥ 1000 px かつ高さ ≥ 960 px に絞り、それ未満の高さのデスクトップはスクロールするフローレイアウトにした（M10 は 720〜800 / 880 以上）。縦向きのスマホは **5 × 4**（5×44 + 4×5 = 240px、4 段のまま）。
+- `layout.spec.ts` / `courses.spec.ts` の期待を 16 → 20 に更新した（境界のサイズに 1280×959 / 960、999×960 / 1000×960 を足し、layout.spec は全件合格）（タイトルの golden は `title-twenty-courses.png` に改名。golden は別の担当が採取する）。切替テストは 40 回（TRACK_IDS を 2 回）。
+
+### 基準の更新（動いた pin / 動かない pin）
+| pin | 状態 |
+| --- | --- |
+| `PROTOCOL_VERSION` 18 → **19**、`ROOM_PREFIX` `pcircuit-v19-` | 動いた |
+| `COURSE_FINGERPRINT` / `pinned[19]` | 動いた: 3592109651（新規） |
+| `handling.test.ts` の BASELINE | 動いた: 4 コースを `version: 'm11'` で確定 |
+| `buildCourse.test.ts` の RENDER_BASELINE | 動いた: 4 コースを実測（spire の drawCalls / triangles を除く）。`scaffoldIds()` のガードを追加 |
+| タイトルの golden | 動く予定: `title-twenty-courses.png`（未採取） |
+| sim 指紋（旧 16 コース）、`LAYOUT_FINGERPRINT` aa03c454、旧 16 コースの TrackDef / BASELINE | 不変 |

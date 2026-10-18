@@ -605,15 +605,11 @@ describe('protocol layout fingerprint', () => {
     // the hello handshake rejects COURSE_FINGERPRINT mismatches ('version'), so older builds cannot mix.
     pinned[17] = 1316474231;
     pinned[18] = 2618543986; // M10-10: measured after all sixteen courses (M10-01–08)
-    pinned[19] = undefined; // M11-00: M11-10 pins this after all four scaffolds are replaced.
+    pinned[19] = 3592109651; // M11-10: measured after all twenty courses (M11-04–07)
     expect(COURSE_FINGERPRINT).toBe(Number.parseInt(fingerprint(definitions), 16));
-    // Tripwire: an unpinned version is only allowed while MEADOW scaffolds remain.
-    if (pinned[PROTOCOL_VERSION] === undefined) {
-      expect(PROTOCOL_VERSION).toBe(19);
-      expect(scaffoldIds().length).toBeGreaterThan(0);
-    } else {
-      expect(COURSE_FINGERPRINT).toBe(pinned[PROTOCOL_VERSION]);
-    }
+    expect(PROTOCOL_VERSION).toBe(19);
+    expect(scaffoldIds()).toEqual([]);
+    expect(COURSE_FINGERPRINT).toBe(pinned[PROTOCOL_VERSION]);
     expect(fingerprint(definitions.map((def, index) => index === 0 ? { ...def, roadHalfWidth: 8 } : def)))
       .not.toBe(fingerprint(definitions));
   });

@@ -48,8 +48,8 @@ describe('course registry and MEADOW golden baseline', () => {
     expectFrozen(TRACKS);
   });
 
-  it('identifies exactly the four M11 MEADOW-layout scaffolds', () => {
-    expect(scaffoldIds()).toEqual(['summit', 'chasm', 'velodrome', 'spire']);
+  it('has no MEADOW-layout scaffold left (all twenty courses are real layouts)', () => {
+    expect(scaffoldIds()).toEqual([]);
   });
 
   // M5-05 lengths: M6 adds courses without changing the original four layouts.
@@ -188,7 +188,8 @@ describe.each(TRACK_IDS)('%s course contract', id => {
     expect(track.boxPoses).toHaveLength(24);
     expect(track.checkpointDistances).toHaveLength(track.def.checkpointCount);
     expect(track.checkpointDistances).toEqual(Array.from({ length: track.def.checkpointCount },
-      (_, i) => i * track.length / track.def.checkpointCount));
+      (_, i) => (i === 0 || track.def.physics === undefined ? i : i + (track.def.checkpointPhase ?? 0)) *
+        track.length / track.def.checkpointCount));
     expect(track.def.roadHalfWidth).toBe(BASE_ROAD_HALF_WIDTH);
     expect(track.def.wallHalfWidth).toBe(BASE_WALL_HALF_WIDTH);
     expect(buildTrack(JSON.parse(JSON.stringify(track.def)))).toEqual(track);

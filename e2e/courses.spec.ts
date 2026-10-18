@@ -222,18 +222,18 @@ for (const { id, name, drawCalls: baselineDrawCalls, triangles: baselineTriangle
   });
 }
 
-test('C-010: title shows the sixteen-course picker', async ({ page }, testInfo) => {
+test('C-010: title shows the twenty-course picker', async ({ page }, testInfo) => {
   await page.goto('./');
   await expect(page.locator('#title-screen')).toBeVisible();
-  await expect(page.locator('#course-select input')).toHaveCount(16);
+  await expect(page.locator('#course-select input')).toHaveCount(20);
   const layout = await page.evaluate(() => ({
     contentBottom: document.querySelector('.title-content')!.getBoundingClientRect().bottom,
     stripTop: document.querySelector('.course-strip')!.getBoundingClientRect().top,
   }));
   expect(layout.stripTop).toBeGreaterThanOrEqual(layout.contentBottom);
-  if (goldenPresent(testInfo, 'title-sixteen-courses.png')) {
+  if (goldenPresent(testInfo, 'title-twenty-courses.png')) {
     await page.addStyleTag({ content: 'canvas { visibility: hidden !important; }' });
-    await expect(page.locator('#title-screen')).toHaveScreenshot('title-sixteen-courses.png', {
+    await expect(page.locator('#title-screen')).toHaveScreenshot('title-twenty-courses.png', {
       animations: 'disabled',
       ...GOLDEN_THRESHOLD,
     });
@@ -261,7 +261,7 @@ test.describe('C-011 solo touch selection', () => {
       expect(bounds.titleBottom).toBeLessThanOrEqual(viewport.width < viewport.height ? bounds.onlineTop : bounds.courseTop);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       const options = await page.locator('.course-option').all();
-      expect(options).toHaveLength(16);
+      expect(options).toHaveLength(20);
       for (const option of options) {
         const box = await option.boundingBox();
         expect(box!.width).toBeGreaterThanOrEqual(44);
@@ -604,14 +604,14 @@ for (const missedBoost of [false, true]) {
   });
 }
 
-test('C-010: sixteen-course 32 switches keep renderer geometry memory bounded', async ({ page }, testInfo) => {
+test('C-010: twenty-course 40 switches keep renderer geometry memory bounded', async ({ page }, testInfo) => {
   await page.goto('./');
   await page.waitForFunction(() => !!window.__kartDebug?.rendererInfo);
-  // Visit all sixteen courses twice (32 switches).
-  // Meadow is the initial selection (selecting it again is a no-op), so rotate it to the end: all 32 selections are real switches.
+  // Visit all twenty courses twice (40 switches).
+  // Meadow is the initial selection (selecting it again is a no-op), so rotate it to the end: all 40 selections are real switches.
   const lap = [...TRACK_IDS.slice(1), TRACK_IDS[0]];
   const sequence = [...lap, ...lap];
-  expect(sequence).toHaveLength(32);
+  expect(sequence).toHaveLength(40);
   const samples = [];
   let switches = 0;
   let current = await page.evaluate(() => window.__kartDebug.render.trackId);
@@ -639,7 +639,7 @@ test('C-010: sixteen-course 32 switches keep renderer geometry memory bounded', 
   console.info('M6-05 geometry memory', JSON.stringify(samples));
   // M8-01: rebuilds reuse one WebGLRenderer (shared info), so a leak shows up as growth here, not as a
   // non-empty old renderer. Lap 2 must match lap 1 exactly: geometry, texture and program counts.
-  expect(switches).toBe(32);
+  expect(switches).toBe(40);
   const maxGeometries = Math.max(...samples.slice(0, lap.length).map(sample => sample.geometries));
   const maxTextures = Math.max(...samples.slice(0, lap.length).map(sample => sample.textures));
   const maxPrograms = Math.max(...samples.slice(0, lap.length).map(sample => sample.programs));

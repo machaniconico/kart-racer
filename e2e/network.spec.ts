@@ -230,7 +230,7 @@ test('M8-07 T1: every course in turn keeps the lobby alive and reuse programs', 
         expect.soft(guestFrameGapMs, `${trackId}: guest frame gap`).toBeLessThanOrEqual(guestBudget);
         expect.soft(measurement.hostPrograms, `${trackId}: total programs`).toBeLessThanOrEqual(p0 + 8);
         // A cached return to meadow compiles nothing new. three.js may release the previous course's
-        // unique programs (16 courses since M10), so the count can fall but never exceed the pre-switch count,
+        // unique programs (20 courses since M11), so the count can fall but never exceed the pre-switch count,
         // and meadow's own programs from the start (p0) must still be there.
         if (trackId === 'meadow') {
           expect.soft(measurement.hostPrograms, 'meadow return compiles no new programs').toBeLessThanOrEqual(programsBefore);
