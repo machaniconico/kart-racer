@@ -201,7 +201,7 @@ describe('H1 handling', () => {
 // | serpentine | 2328.5952422904697 | 68.32384259259258 | 34.082 | 1    | 0    |
 // | lunar      | 2209.8782411911293 | 65.17916666666666 | 33.905 | 0    | 0    |
 // speedway.test.ts reads this table from source to require THUNDER OVAL's speed to be the maximum.
-type Baseline = { version: 'v15' | 'v16' | 'm9' | 'm10' | 'm11-scaffold'; meanLap: number; wallHits: number; bandHits: number };
+type Baseline = { version: 'v15' | 'v16' | 'm9' | 'm10' | 'm11' | 'm11-scaffold'; meanLap: number; wallHits: number; bandHits: number };
 const BASELINE = {
   meadow: { version: 'v15', meanLap: 68.5011574074074, wallHits: 0, bandHits: 0 },
   canyon: { version: 'v15', meanLap: 68.49583333333334, wallHits: 0, bandHits: 0 },
@@ -220,7 +220,7 @@ const BASELINE = {
   serpentine: { version: 'm10', meanLap: 68.32384259259258, wallHits: 1, bandHits: 0 },
   lunar: { version: 'm10', meanLap: 65.17916666666666, wallHits: 0, bandHits: 0 },
   // M11 scaffolds inherit MEADOW's measured baseline; replace when each layout lands.
-  summit: { version: 'm11-scaffold', meanLap: 68.5011574074074, wallHits: 0, bandHits: 0 },
+  summit: { version: 'm11', meanLap: 85.3011574074074, wallHits: 0, bandHits: 0 },
   chasm: { version: 'm11-scaffold', meanLap: 68.5011574074074, wallHits: 0, bandHits: 0 },
   velodrome: { version: 'm11-scaffold', meanLap: 68.5011574074074, wallHits: 0, bandHits: 0 },
   spire: { version: 'm11-scaffold', meanLap: 68.5011574074074, wallHits: 0, bandHits: 0 },

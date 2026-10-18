@@ -1,68 +1,48 @@
-// M11 scaffold: MEADOW copy until the course story replaces this definition.
 import type { TrackDef } from '../types';
 import { BASE_ROAD_HALF_WIDTH, BASE_WALL_HALF_WIDTH } from './widths';
 
 export const spire: TrackDef = {
-  id: 'spire',
-  name: 'SKY SPIRE',
-  layoutVersion: 3,
+  id: 'spire', name: 'SKY SPIRE', layoutVersion: 1, themeId: 'spire',
+  physics: {},
+  // Three compact ascending terraces cross the ground return at right angles.
+  // Level switchbacks and crossing approaches separate the climbs from the turns.
+  // Start on the first terrace so all eight grid positions lie on a level straight.
   controlPoints: [
-    // Home straight and the east hairpin (27 m control-point radius).
-    [0, 1, 0], [80, 1, 0], [160, 1, 0], [203, 1, 0],
-    [230, 1, 0], [249.092, 1, 7.908], [257, 1, 27],
-    [249.092, 1, 46.092], [230, 1, 54], [203, 1, 54],
-    [160, 1, 54], [80, 1, 54], [10, 1, 85], [-20, 1, 140],
-    // Meadow ridge: the crest levels out before the descent.
-    [-30, 8, 215], [-90, 9, 250], [-180, 9, 250], [-250, 8, 200],
-    [-290, 3, 120], [-300, 1, 20], [-290, 1, -100], [-250, 1, -180],
-    [-220, 1, -210],
-    // Four alternating bends, then a sweeping southern compound corner.
-    [-160, 1, -200], [-110, 1, -220], [-60, 1, -200], [-10, 1, -220],
-    [50, 1, -210], [130, 1, -200], [190, 1, -150], [190, 1, -100],
-    [130, 1, -60], [40, 1, -80], [-13, 1, -80], [-40, 1, -80],
-    [-68.284, 1, -68.284], [-80, 1, -40], [-68.284, 1, -11.716],
-    [-40, 1, 0], [-13, 1, 0],
+    [40, 19, 0], [80, 19, 0], [136, 19, 0],
+    [156, 19, 5.358984], [170.641016, 19, 20], [176, 19, 40],
+    [170.641016, 19, 60], [156, 19, 74.641016], [136, 19, 80],
+    [100, 23, 80], [70, 32, 80], [40, 37, 80],
+    [10, 37, 80], [-20, 37, 80], [-80, 37, 80],
+    [-136, 37, 80], [-156, 37, 85.358984], [-170.641016, 37, 100],
+    [-176, 37, 120], [-170.641016, 37, 140], [-156, 37, 154.641016],
+    [-136, 37, 160], [-100, 41, 160], [-70, 50, 160],
+    [-40, 55, 160], [-10, 55, 160], [20, 55, 160],
+    [80, 55, 160], [136, 55, 160], [166, 55, 151.961524],
+    [187.961524, 55, 130], [196, 55, 100], [196, 55, 60],
+    [196, 47, 18], [196, 27, -24], [196, 7, -66],
+    [196, 1, -106], [196, 1, -140], [196, 1, -160],
+    [190.641016, 1, -180], [176, 1, -194.641016], [156, 1, -200],
+    [100, 1, -200], [40, 1, -200], [20, 1, -194.641016],
+    [5.358984, 1, -180], [0, 1, -160], [0, 1, -120],
+    [0, 1, -60], [0, 1, 0], [0, 1, 80],
+    [0, 1, 160], [0, 1, 210], [-5.358984, 1, 230],
+    [-20, 1, 244.641016], [-40, 1, 250], [-100, 1, 250],
+    [-156, 1, 250], [-176, 1, 244.641016], [-190.641016, 1, 230],
+    [-196, 1, 210], [-196, 1, 140], [-196, 1, 80],
+    [-196, 1, 40], [-190.641016, 1, 20], [-176, 1, 5.358984],
+    [-156, 1, 0], [-136, 1, 0], [-130, 1, 0],
+    [-100, 5, 0], [-70, 14, 0], [-40, 19, 0],
+    [-10, 19, 0], [20, 19, 0],
   ],
-  scale: 1,
-  samplesPerSegment: 32,
-  roadHalfWidth: BASE_ROAD_HALF_WIDTH,
-  wallHalfWidth: BASE_WALL_HALF_WIDTH,
-  checkpointCount: 24,
-  boxRows: [0.02, 0.12, 0.24, 0.36, 0.47, 0.58, 0.695, 0.81],
+  scale: 1, samplesPerSegment: 16, spline: 'centripetal',
+  roadHalfWidth: BASE_ROAD_HALF_WIDTH, wallHalfWidth: BASE_WALL_HALF_WIDTH,
+  // Keep all six crossing approaches over 25 m from the regular checkpoint grid.
+  checkpointCount: 24, checkpointPhase: -0.12,
+  // Spread pickups along straights so packs can separate before the switchbacks.
+  boxRows: [0.15, 0.30, 0.52, 0.61, 0.68, 0.77, 0.85, 0.935],
   boxLanes: [-5.33, 0, 5.33],
-  racingLine: [
-    { distance: 0, offset: 0 },
-    { distance: 180, offset: 0 },
-    { distance: 215, offset: 3 },
-    { distance: 272, offset: -3 },
-    { distance: 330, offset: 3 },
-    { distance: 390, offset: 0 },
-    { distance: 600, offset: 0 },
-    { distance: 780, offset: 0 },
-    { distance: 1000, offset: 0 },
-    { distance: 1240, offset: 0 },
-    { distance: 1370, offset: 0 },
-    { distance: 1660, offset: 0 },
-    { distance: 1950, offset: 0 },
-    { distance: 2120, offset: 0 },
-    { distance: 2286.353556318704, offset: 0 },
-  ],
-  surfaces: [
-    { kind: 'dirt', from: 440, to: 520 },
-    { kind: 'jump', from: 733, to: 736 },
-    { kind: 'dirt', from: 1670, to: 1750 },
-  ],
-  widthKeys: [
-    { distance: 1145, roadHalfWidth: BASE_ROAD_HALF_WIDTH, wallHalfWidth: BASE_WALL_HALF_WIDTH },
-    { distance: 1165, roadHalfWidth: 5.15, wallHalfWidth: 7.5 },
-    { distance: 1195, roadHalfWidth: 5.15, wallHalfWidth: 7.5 },
-    { distance: 1215, roadHalfWidth: BASE_ROAD_HALF_WIDTH, wallHalfWidth: BASE_WALL_HALF_WIDTH },
-  ],
-  bankKeys: [
-    { distance: 780, roll: 0 },
-    { distance: 810, roll: 0.18 },
-    { distance: 880, roll: 0.18 },
-    { distance: 910, roll: 0 },
-  ],
-  themeId: 'spire',
+  racingLine: [{ distance: 0, offset: 0 }, { distance: 2526.4347509123468, offset: 0 }],
+  decks: [{ from: 2446.4347509123477, to: 2526.4347509123468 }, { from: 317.4695200004162, to: 397.4695200004162 }, { from: 714.9394296867208, to: 794.9394296867208 }],
+  // The plunge ends on a straight launch and landing before the compact return.
+  surfaces: [{ kind: 'jump', from: 1202, to: 1206, duration: 0.9, height: 2 }],
 };

@@ -1,68 +1,47 @@
-// M11 scaffold: MEADOW copy until the course story replaces this definition.
 import type { TrackDef } from '../types';
 import { BASE_ROAD_HALF_WIDTH, BASE_WALL_HALF_WIDTH } from './widths';
 
+export const SUMMIT_RIDGE = { from: 440, to: 680 } as const;
+export const SUMMIT_DESCENT = { from: 760, to: 920 } as const;
+
 export const summit: TrackDef = {
-  id: 'summit',
-  name: 'SUMMIT DROP',
-  layoutVersion: 3,
+  id: 'summit', name: 'SUMMIT DROP', layoutVersion: 1, themeId: 'summit',
+  physics: {},
+  // A 96 m climb, an exposed level ridge, then a sustained 45% plunge.
+  // Equal spacing keeps the steep sections straight and their pitch predictable.
   controlPoints: [
-    // Home straight and the east hairpin (27 m control-point radius).
-    [0, 1, 0], [80, 1, 0], [160, 1, 0], [203, 1, 0],
-    [230, 1, 0], [249.092, 1, 7.908], [257, 1, 27],
-    [249.092, 1, 46.092], [230, 1, 54], [203, 1, 54],
-    [160, 1, 54], [80, 1, 54], [10, 1, 85], [-20, 1, 140],
-    // Meadow ridge: the crest levels out before the descent.
-    [-30, 8, 215], [-90, 9, 250], [-180, 9, 250], [-250, 8, 200],
-    [-290, 3, 120], [-300, 1, 20], [-290, 1, -100], [-250, 1, -180],
-    [-220, 1, -210],
-    // Four alternating bends, then a sweeping southern compound corner.
-    [-160, 1, -200], [-110, 1, -220], [-60, 1, -200], [-10, 1, -220],
-    [50, 1, -210], [130, 1, -200], [190, 1, -150], [190, 1, -100],
-    [130, 1, -60], [40, 1, -80], [-13, 1, -80], [-40, 1, -80],
-    [-68.284, 1, -68.284], [-80, 1, -40], [-68.284, 1, -11.716],
-    [-40, 1, 0], [-13, 1, 0],
+    [0, 4, 0], [40, 4, 0], [80, 4, 0], [120, 4, 0],
+    [160, 12, 0], [200, 28, 0], [240, 44, 0], [280, 60, 0],
+    [320, 76, 0], [360, 92, 0], [400, 100, 0], [440, 100, 0],
+    [480, 100, 0], [520, 100, 0], [560, 100, 0], [600, 100, 0],
+    [640, 100, 0], [680, 100, 0], [720, 100, 0], [760, 91, 0],
+    [800, 73, 0], [840, 55, 0], [880, 37, 0], [920, 19, 0],
+    [960, 4, 0], [1000, 4, 0], [1040, 4, 0],
+    // Broad valley turns leave room to recover from the downhill speed.
+    [1100, 4, 0], [1170.711, 4, 29.289], [1200, 4, 100],
+    [1170.711, 4, 170.711], [1100, 4, 200], [1040, 4, 200],
+    [920, 4, 200], [760, 4, 220], [600, 4, 260], [440, 4, 260],
+    [280, 4, 220], [120, 4, 200], [0, 4, 200], [-40, 4, 200],
+    [-110.711, 4, 170.711], [-140, 4, 100], [-110.711, 4, 29.289],
+    [-40, 4, 0],
   ],
-  scale: 1,
-  samplesPerSegment: 32,
-  roadHalfWidth: BASE_ROAD_HALF_WIDTH,
-  wallHalfWidth: BASE_WALL_HALF_WIDTH,
-  checkpointCount: 24,
-  boxRows: [0.02, 0.12, 0.24, 0.36, 0.47, 0.58, 0.695, 0.81],
+  scale: 1, samplesPerSegment: 24,
+  roadHalfWidth: BASE_ROAD_HALF_WIDTH, wallHalfWidth: BASE_WALL_HALF_WIDTH,
+  // Keep the entire ridge inside one checkpoint interval: a fall never skips a gate.
+  checkpointCount: 8, checkpointPhase: 0.2,
+  boxRows: [0.025, 0.12, 0.30, 0.40, 0.54, 0.67, 0.80, 0.92],
   boxLanes: [-5.33, 0, 5.33],
-  racingLine: [
-    { distance: 0, offset: 0 },
-    { distance: 180, offset: 0 },
-    { distance: 215, offset: 3 },
-    { distance: 272, offset: -3 },
-    { distance: 330, offset: 3 },
-    { distance: 390, offset: 0 },
-    { distance: 600, offset: 0 },
-    { distance: 780, offset: 0 },
-    { distance: 1000, offset: 0 },
-    { distance: 1240, offset: 0 },
-    { distance: 1370, offset: 0 },
-    { distance: 1660, offset: 0 },
-    { distance: 1950, offset: 0 },
-    { distance: 2120, offset: 0 },
-    { distance: 2286.353556318704, offset: 0 },
-  ],
-  surfaces: [
-    { kind: 'dirt', from: 440, to: 520 },
-    { kind: 'jump', from: 733, to: 736 },
-    { kind: 'dirt', from: 1670, to: 1750 },
-  ],
+  racingLine: [{ distance: 0, offset: 0 }],
   widthKeys: [
-    { distance: 1145, roadHalfWidth: BASE_ROAD_HALF_WIDTH, wallHalfWidth: BASE_WALL_HALF_WIDTH },
-    { distance: 1165, roadHalfWidth: 5.15, wallHalfWidth: 7.5 },
-    { distance: 1195, roadHalfWidth: 5.15, wallHalfWidth: 7.5 },
-    { distance: 1215, roadHalfWidth: BASE_ROAD_HALF_WIDTH, wallHalfWidth: BASE_WALL_HALF_WIDTH },
+    { distance: 380, roadHalfWidth: BASE_ROAD_HALF_WIDTH, wallHalfWidth: BASE_WALL_HALF_WIDTH },
+    { distance: SUMMIT_RIDGE.from, roadHalfWidth: 3.6, wallHalfWidth: 10 },
+    { distance: SUMMIT_RIDGE.to, roadHalfWidth: 3.6, wallHalfWidth: 10 },
+    { distance: 740, roadHalfWidth: BASE_ROAD_HALF_WIDTH, wallHalfWidth: BASE_WALL_HALF_WIDTH },
   ],
-  bankKeys: [
-    { distance: 780, roll: 0 },
-    { distance: 810, roll: 0.18 },
-    { distance: 880, roll: 0.18 },
-    { distance: 910, roll: 0 },
-  ],
-  themeId: 'summit',
+  surfaces: [-1, 1].map(side => ({
+    kind: 'fall', ...SUMMIT_RIDGE,
+    offsetMin: side < 0 ? -10 : 3.6,
+    offsetMax: side < 0 ? -3.6 : 10,
+    respawnAt: SUMMIT_RIDGE.from,
+  })),
 };

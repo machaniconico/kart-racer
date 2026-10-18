@@ -79,7 +79,7 @@ const RENDER_BASELINE: Record<TrackId, RenderBaseline> = {
   serpentine: { drawCalls: 123, triangles: 110_066, meshes: 28 },
   lunar: { drawCalls: 140, triangles: 79_830, meshes: 45 },
   // M11 scaffold budgets inherit MEADOW until the course-specific render measurements.
-  summit: { drawCalls: 125, triangles: 107_048, meshes: 34 },
+  summit: { drawCalls: 126, triangles: 101_126, meshes: 32 },
   chasm: { drawCalls: 125, triangles: 107_048, meshes: 34 },
   velodrome: { drawCalls: 125, triangles: 107_048, meshes: 34 },
   spire: { drawCalls: 125, triangles: 107_048, meshes: 34 },

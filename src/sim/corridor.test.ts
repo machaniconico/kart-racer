@@ -1238,6 +1238,143 @@ describe('validateTrackDef fall zones', () => {
   });
 });
 
+describe('validateTrackDef full-road ravines', () => {
+  const flat = syntheticDef({ physics: {} });
+  const length = buildTrack(flat).length;
+  const jump: SurfaceZone = { kind: 'jump', from: 150, to: 154, duration: 1.4,
+    offsetMin: -10.5, offsetMax: 10.5 };
+  const fall: SurfaceZone = { kind: 'fall', from: 156, to: 182,
+    offsetMin: -10.5, offsetMax: 10.5, respawnAt: 190 };
+  const def = (launch: Partial<SurfaceZone> = {}, ravine: Partial<SurfaceZone> = {}): TrackDef =>
+    ({ ...flat, surfaces: [{ ...jump, ...launch }, { ...fall, ...ravine }] });
+
+  it.each([0, 5])('accepts a covering gated jump ending %s m before the ravine', gap => {
+    const course = def({}, { from: jump.to + gap });
+    const before = JSON.stringify(course);
+    expect(() => validateTrackDef(course)).not.toThrow();
+    expect(() => validateTrackDef({ ...course, surfaces: [...course.surfaces].reverse() })).not.toThrow();
+    expect(JSON.stringify(course)).toBe(before);
+  });
+
+  it.each([-0.001, 5.001])('rejects a launch-to-ravine distance of %s m', gap => {
+    expect(() => validateTrackDef(def({}, { from: jump.to + gap }))).toThrow(/fall.*gated jump/);
+  });
+
+  it('accepts a 5 m launch but rejects longer launch bands', () => {
+    expect(() => validateTrackDef(def({ from: jump.to - 5 }))).not.toThrow();
+    for (const from of [jump.to - 5.001, 125]) {
+      expect(() => validateTrackDef(def({ from }))).toThrow(/fall.*gated jump/);
+    }
+  });
+
+  it('does not pair a ravine with an earlier long jump instead of its nearby launch', () => {
+    const early = { ...jump, from: 20 };
+    const nearby = { ...jump, duration: 1.8, offsetMin: -1, offsetMax: 1 };
+    const ravine = { ...fall, respawnAt: 135 };
+    for (const surfaces of [[early, nearby, ravine], [ravine, nearby, early]]) {
+      expect(() => validateTrackDef({ ...flat, surfaces })).toThrow(/fall.*gated jump/);
+    }
+    expect(() => validateTrackDef({ ...flat, surfaces: [
+      { ...nearby, offsetMin: jump.offsetMin, offsetMax: jump.offsetMax }, ravine,
+    ] })).not.toThrow();
+  });
+
+  it('requires physics, duration, and a jump instead of another surface', () => {
+    expect(() => validateTrackDef({ ...def(), physics: undefined })).toThrow(/requires physics/);
+    expect(() => validateTrackDef(def({ duration: undefined }))).toThrow(/fall.*gated jump/);
+    expect(() => validateTrackDef(def({ kind: 'boost' }))).toThrow(/fall.*gated jump/);
+    expect(() => validateTrackDef({ ...flat, surfaces: [fall] })).toThrow(/fall.*gated jump/);
+  });
+
+  it.each([{ offsetMin: -10.499 }, { offsetMax: 10.499 },
+    { offsetMin: undefined, offsetMax: undefined }])('rejects incomplete launch coverage %j', bounds => {
+    expect(() => validateTrackDef(def(bounds))).toThrow(/fall.*gated jump/);
+  });
+
+  it('allows default road-wide bounds when the launch covers the whole road', () => {
+    expect(() => validateTrackDef(def({ offsetMin: undefined, offsetMax: undefined },
+      { offsetMin: undefined, offsetMax: undefined }))).not.toThrow();
+  });
+
+  it.each([156, 170, 182])('rejects a centerline respawn inside its own ravine at %s m', respawnAt => {
+    expect(() => validateTrackDef(def({}, { respawnAt }))).toThrow(/respawnAt.*fall zone/);
+  });
+
+  it.each([356, 370, 382])('rejects a centerline respawn inside another ravine at %s m', respawnAt => {
+    const surfaces = [...def({}, { respawnAt }).surfaces,
+      { ...jump, from: 350, to: 354 }, { ...fall, from: 356, to: 382, respawnAt: 390 }];
+    expect(() => validateTrackDef({ ...flat, surfaces })).toThrow(/respawnAt.*fall zone/);
+    expect(() => validateTrackDef({ ...flat, surfaces: surfaces.map(zone =>
+      zone.kind === 'fall' ? { ...zone, respawnAt: zone.to + 0.001 } : zone) })).not.toThrow();
+  });
+
+  it.each([{ offsetMin: -7.199 }, { offsetMax: 7.199 },
+    { offsetMin: -10.501 }, { offsetMax: 10.501 }])('rejects partial-road or out-of-wall falls %j', bounds => {
+    expect(() => validateTrackDef(def({}, bounds))).toThrow(/fall.*between road and wall/);
+  });
+
+  it('checks road coverage and launch coverage at interior width extrema', () => {
+    const widthKeys = [
+      { distance: 150, roadHalfWidth: 7.2, wallHalfWidth: 10.5 },
+      { distance: 156, roadHalfWidth: 7.2, wallHalfWidth: 10.5 },
+      { distance: 170.25, roadHalfWidth: 8, wallHalfWidth: 10.5 },
+      { distance: 182, roadHalfWidth: 7.2, wallHalfWidth: 10.5 },
+    ];
+    expect(() => validateTrackDef({ ...def({}, { offsetMin: -7.2, offsetMax: 7.2 }), widthKeys }))
+      .toThrow(/fall.*gated jump/);
+    expect(() => validateTrackDef({ ...def({ offsetMin: undefined, offsetMax: undefined },
+      { offsetMin: undefined, offsetMax: undefined }), widthKeys })).toThrow(/fall.*gated jump/);
+    expect(() => validateTrackDef({ ...def(), widthKeys })).not.toThrow();
+  });
+
+  it.each([150, 152.25, 154])('checks launch lane coverage at %s m along the entire band', narrowAt => {
+    const widthKeys = [149.75, 150, 150.25, 152, 152.25, 152.5, 153.75, 154, 154.25, 156, 182]
+      .map(distance => ({ distance, roadHalfWidth: distance === narrowAt ? 7.19 : 7.2, wallHalfWidth: 10.5 }));
+    const course = { ...def({ offsetMin: undefined, offsetMax: undefined },
+      { offsetMin: undefined, offsetMax: undefined }), widthKeys };
+    expect(() => validateTrackDef(course)).toThrow(/fall.*gated jump/);
+    expect(() => validateTrackDef({ ...course, surfaces: [
+      { ...jump, offsetMin: -7.2, offsetMax: 7.2 }, course.surfaces[1]!,
+    ] })).not.toThrow();
+  });
+
+  it('does not associate launches across the seam or accept wrapped ravines', () => {
+    expect(() => validateTrackDef(def({ from: length - 6, to: length - 2 },
+      { from: 2, to: 28, respawnAt: 35 }))).toThrow(/fall.*gated jump/);
+    expect(() => validateTrackDef(def({ from: length - 2, to: 2 },
+      { from: 4, to: 30, respawnAt: 35 }))).toThrow(/fall.*gated jump/);
+    expect(() => validateTrackDef(def({ from: length - 10, to: length - 6 },
+      { from: length - 4, to: 22, respawnAt: 30 }))).toThrow(/fall.*gated jump/);
+  });
+
+  it.each([[0, 25.2774], [0.2, 22.74966], [0.5, 20.22192], [-0.5, 27]])(
+    'uses the far edge minus jump.from and the existing safe speed at grade %s', (grade, speed) => {
+      const course = (gap: number): TrackDef => ({ ...slopeCourse(grade), physics: {},
+        roadHalfWidth: 7.2, wallHalfWidth: 10.5, surfaces: [
+          { ...jump, duration: 1 }, { ...fall, to: jump.from + gap, respawnAt: 190 },
+        ] });
+      expect(() => validateTrackDef(course(speed))).not.toThrow();
+      expect(() => validateTrackDef(course(speed + 0.001))).toThrow(/safe unboosted easy CPU speed/);
+    },
+  );
+
+  it('checks the paired jump even when the next jump after respawn has no hazard', () => {
+    const course = def({ duration: 1 }, { to: 190, respawnAt: 200 });
+    expect(() => validateTrackDef({ ...course, surfaces: [...course.surfaces,
+      { kind: 'jump', from: 350, to: 354, duration: 1.4 },
+    ] })).toThrow(/safe unboosted easy CPU speed/);
+  });
+
+  it('keeps the exact runway boundary when respawning before another ravine', () => {
+    const runway = ((fall.to - jump.from) / 1.4) ** 2 / (2 * 19.9) * 1.3;
+    const course = (respawnAt: number): TrackDef => ({ ...def(), surfaces: [
+      { ...fall, from: 80, to: 100, offsetMin: 7.2, respawnAt }, ...def().surfaces,
+    ] });
+    expect(() => validateTrackDef(course(jump.from - runway))).not.toThrow();
+    expect(() => validateTrackDef(course(jump.from - runway + 0.001))).toThrow(/runway/);
+  });
+});
+
 describe('validateCoursePlayability', () => {
   const band: Barrier = { from: 125, to: 140, center: 0, halfWidth: 2, taper: 4 };
   const fixture = (overrides: Partial<TrackDef> = {}): TrackDef => ({

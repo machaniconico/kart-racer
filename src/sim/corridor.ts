@@ -1,5 +1,5 @@
 import { buildTrack, rollAt, slopeAt } from './track';
-import { racingLineOffset } from './surfaces';
+import { insideZone, racingLineOffset } from './surfaces';
 import type { Barrier, SurfaceZone, Track, TrackDef } from './types';
 
 /** Same kart radius as race.ts; keep this geometry module independent of race state. */
@@ -528,6 +528,17 @@ export function validateTrackDef(def: TrackDef): void {
 
   const zones = def.surfaces.filter(zone => zone.kind === 'jump' || zone.kind === 'pit' ||
     zone.kind === 'spin' || zone.kind === 'fall');
+  const jumps = zones.filter(zone => zone.kind === 'jump').sort((a, b) =>
+    wrap(a.from, length) - wrap(b.from, length));
+  const checkClearSpeed = (jump: SurfaceZone, gap: number): void => {
+    // Leave 10% headroom below the slowest easy CPU's uphill-adjusted speed,
+    // with an absolute unboosted cap even when the takeoff points downhill.
+    const takeoffGrade = slopeAt(track, jump.from);
+    const clearSpeed = 0.9 * Math.min(30.2 * 0.93 * Math.max(0.80, 1 - 0.5 * takeoffGrade), 30);
+    if (gap / (jump.duration ?? 0.8) > clearSpeed + EPSILON) {
+      throw new RangeError('fall respawnAt next jump gap exceeds duration * safe unboosted easy CPU speed');
+    }
+  };
   for (const zone of zones) {
     checkDistance(zone.from, `${zone.kind} from`);
     checkDistance(zone.to, `${zone.kind} to`);
@@ -535,21 +546,42 @@ export function validateTrackDef(def: TrackDef): void {
     if (zone.offsetMin !== undefined) requireFinite(zone.offsetMin, `${zone.kind} offsetMin`);
     if (zone.offsetMax !== undefined) requireFinite(zone.offsetMax, `${zone.kind} offsetMax`);
     const span = wrap(zone.to - zone.from, length);
-    for (const d of [zone.from, zone.to, ...keys.filter(key =>
-      wrap(key.distance - zone.from, length) <= span + EPSILON).map(key => key.distance)]) {
+    const distances = [zone.from, zone.to, ...keys.filter(key =>
+      wrap(key.distance - zone.from, length) <= span + EPSILON).map(key => key.distance)];
+    let shoulder = true;
+    let fullRoad = true;
+    for (const d of distances) {
       const offsets = zoneOffsets(track, zone, d);
       if (offsets.min >= offsets.max) throw new RangeError(`${zone.kind} offsets must be increasing`);
       if (zone.kind === 'fall') {
         const { roadHalfWidth: road, wallHalfWidth: wall } = widthAt(track, d);
-        if (!((offsets.min >= road - EPSILON && offsets.max <= wall + EPSILON) ||
-          (offsets.min >= -wall - EPSILON && offsets.max <= -road + EPSILON))) {
-          throw new RangeError('fall must be a band between road and wall');
-        }
+        shoulder &&= (offsets.min >= road - EPSILON && offsets.max <= wall + EPSILON) ||
+          (offsets.min >= -wall - EPSILON && offsets.max <= -road + EPSILON);
+        fullRoad &&= offsets.min <= -road + EPSILON && offsets.max >= road - EPSILON &&
+          offsets.min >= -wall - EPSILON && offsets.max <= wall + EPSILON;
       }
     }
+    if (zone.kind === 'fall' && !shoulder) {
+      // A road-wide hole is a ravine only with a covering, gated launch in
+      // this lap. Do not wrap the association across the start/finish line.
+      const launch = fullRoad && def.physics !== undefined && zone.from < zone.to && jumps.find(jump => {
+        if (jump.duration === undefined || jump.from >= jump.to || jump.to - jump.from > 5 + EPSILON ||
+          jump.to > zone.from ||
+          zone.from - jump.to > 5 + EPSILON) return false;
+        const launchDistances = [jump.from, jump.to, ...keys.filter(key =>
+          key.distance >= jump.from && key.distance <= jump.to).map(key => key.distance)];
+        return launchDistances.every(d => {
+          const lane = zoneOffsets(track, jump, d);
+          return distances.every(distance => {
+            const offsets = zoneOffsets(track, zone, distance);
+            return lane.min <= offsets.min + EPSILON && lane.max >= offsets.max - EPSILON;
+          });
+        });
+      });
+      if (!launch) throw new RangeError('fall must be a band between road and wall or a full-road ravine with a covering gated jump at most 5 m long and within 5 m');
+      checkClearSpeed(launch, zone.to - launch.from);
+    }
   }
-  const jumps = zones.filter(zone => zone.kind === 'jump').sort((a, b) =>
-    wrap(a.from, length) - wrap(b.from, length));
   if (def.physics !== undefined) for (let i = 0; i < jumps.length; i++) {
     const jump = jumps[i]!;
     const next = jumps[(i + 1) % jumps.length]!;
@@ -562,6 +594,9 @@ export function validateTrackDef(def: TrackDef): void {
   for (const fall of falls) {
     if (fall.respawnAt === undefined) throw new RangeError('fall respawnAt is required');
     checkDistance(fall.respawnAt, 'fall respawnAt');
+    if (insideZone(track, 'fall', fall.respawnAt, 0)) {
+      throw new RangeError('fall respawnAt must place the centerline outside every fall zone');
+    }
     const span = wrap(fall.to - fall.from, length);
     // Check both ends and every gate: a fixed destination must remain in the
     // same checkpoint interval for every grounded position in this fall.
@@ -594,25 +629,20 @@ export function validateTrackDef(def: TrackDef): void {
     const duration = nextJump.duration ?? 0.8;
     const flightDistance = duration * 60;
     const launch = zoneOffsets(track, nextJump, nextJump.from);
-    let gap = wrap(nextJump.to - nextJump.from, length);
+    const takeoff = nextJump.from;
+    let gap = wrap(nextJump.to - takeoff, length);
     // Gap is takeoff to the far edge of every hazard this jump can encounter.
     // Overlapping bands form one gap; unrelated lanes or distant bands do not.
     for (const hazard of zones.filter(zone => zone.kind === 'fall' || zone.kind === 'pit')) {
       const span = wrap(hazard.to - hazard.from, length);
-      const behind = wrap(nextJump.from - hazard.from, length);
-      const start = behind <= span ? -behind : wrap(hazard.from - nextJump.from, length);
+      const behind = wrap(takeoff - hazard.from, length);
+      const start = behind <= span ? -behind : wrap(hazard.from - takeoff, length);
       if (start > flightDistance || start >= jumpSpacing) continue;
-      const offsets = zoneOffsets(track, hazard, nextJump.from + Math.max(0, start));
+      const offsets = zoneOffsets(track, hazard, takeoff + Math.max(0, start));
       if (offsets.max < launch.min || offsets.min > launch.max) continue;
       gap = Math.max(gap, start + span);
     }
-    // Leave 10% headroom below the slowest easy CPU's uphill-adjusted speed,
-    // with an absolute unboosted cap even when the takeoff points downhill.
-    const takeoffGrade = slopeAt(track, nextJump.from);
-    const clearSpeed = 0.9 * Math.min(30.2 * 0.93 * Math.max(0.80, 1 - 0.5 * takeoffGrade), 30);
-    if (gap / duration > clearSpeed + EPSILON) {
-      throw new RangeError('fall respawnAt next jump gap exceeds duration * safe unboosted easy CPU speed');
-    }
+    checkClearSpeed(nextJump, gap);
     const runway = wrap(nextJump.from - fall.respawnAt, length);
     let uphill = Math.max(0, slopeAt(track, fall.respawnAt));
     for (let i = 0; i < track.samples.length; i++) {
