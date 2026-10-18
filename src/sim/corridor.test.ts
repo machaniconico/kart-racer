@@ -820,13 +820,13 @@ describe('validateTrackDef elevation', () => {
       { kind: 'jump', from: 10, to: 12, height: 1 },
       { kind: 'jump', from: 80, to: 82, height: 6 },
     ];
-    reject({ ...nearbyDeck(11.99), surfaces }, /deck surface height.*12 m/);
-    expect(() => validateTrackDef({ ...nearbyDeck(12), surfaces })).not.toThrow();
-    expect(() => validateTrackDef({ ...nearbyDeck(7), surfaces: [surfaces[0]!] })).not.toThrow();
+    reject({ physics: {}, ...nearbyDeck(11.99), surfaces }, /deck surface height.*12 m/);
+    expect(() => validateTrackDef({ physics: {}, ...nearbyDeck(12), surfaces })).not.toThrow();
+    expect(() => validateTrackDef({ physics: {}, ...nearbyDeck(7), surfaces: [surfaces[0]!] })).not.toThrow();
     const mixed = [surfaces[0]!, { ...surfaces[1]!, height: undefined }];
-    reject({ ...nearbyDeck(7.99), surfaces: mixed }, /deck surface height.*8 m/);
-    expect(() => validateTrackDef({ ...nearbyDeck(8), surfaces: mixed })).not.toThrow();
-    reject({ ...nearbyDeck(12), surfaces: [{ ...surfaces[0]!, height: NaN }] }, /jump height/);
+    reject({ physics: {}, ...nearbyDeck(7.99), surfaces: mixed }, /deck surface height.*8 m/);
+    expect(() => validateTrackDef({ physics: {}, ...nearbyDeck(8), surfaces: mixed })).not.toThrow();
+    reject({ physics: {}, ...nearbyDeck(12), surfaces: [{ ...surfaces[0]!, height: NaN }] }, /jump height/);
   });
 
   it('rejects a crossing angle of 30 degrees', () => {
@@ -859,6 +859,18 @@ describe('validateTrackDef elevation', () => {
       const upper = track.samples[upperIndex * def.samplesPerSegment]!.distance;
       reject({ ...def, decks: [{ from: upper - 20, to: upper + 20 }] }, /checkpoint gate.*25 m/);
     }
+  });
+
+  it('uses phased physics checkpoints for crossing clearance while preserving legacy gates', () => {
+    const track = buildTrack(eight);
+    const step = track.length / eight.checkpointCount;
+    const gate = Math.round(crossing.lower / step);
+    const checkpointPhase = crossing.lower / step - gate;
+    expect(gate).toBeGreaterThan(0);
+    expect(gate).toBeLessThan(eight.checkpointCount);
+    expect(Math.abs(checkpointPhase)).toBeLessThan(0.5);
+    expect(() => validateTrackDef({ ...eight, checkpointPhase })).not.toThrow();
+    reject({ ...eight, checkpointPhase, physics: {} }, /checkpoint gate.*25 m/);
   });
 
   it('rejects an upper crossing pass without a declared deck', () => {
@@ -979,6 +991,21 @@ describe('validateTrackDef extreme-course gates', () => {
     expect(() => validateTrackDef({ ...flat, physics: { maxRoll } })).toThrow(/maxRoll/);
   });
 
+  it('uses 0.9 as the bank limit independently of the turn normalization maxRoll', () => {
+    expect(() => validateTrackDef({ ...flat, physics: { maxRoll: 0.2 },
+      bankKeys: [{ distance: 0, roll: 0.9 }],
+    })).not.toThrow();
+  });
+
+  it.each([
+    { kind: 'jump' as const, from: 100, to: 102, duration: 1.8 },
+    { kind: 'jump' as const, from: 100, to: 102, height: 6 },
+    { kind: 'fall' as const, from: 100, to: 120, offsetMin: 7.2, offsetMax: 10.5, respawnAt: 90 },
+  ])('requires physics for new zone fields (%j)', zone => {
+    expect(() => validateZones([zone], { physics: undefined })).toThrow(/requires physics/);
+    expect(() => validateZones([zone])).not.toThrow();
+  });
+
   it.each([NaN, Infinity, -Infinity, 0, -1, 2.551])('rejects invalid jump duration %s with or without physics', duration => {
     expect(() => validateZones([jump(100, duration)])).toThrow(/jump duration/);
     expect(() => validateZones([jump(100, duration)], { physics: undefined })).toThrow(/jump duration/);
@@ -1078,12 +1105,17 @@ describe('validateTrackDef fall zones', () => {
     expect(() => validate(zone, extra)).not.toThrow();
     expect(() => validate({ ...zone, respawnAt: gate - 0.01 }, extra)).toThrow(/preceding checkpoint/);
     expect(() => validate({ ...zone, from: gate - 10, respawnAt: gate - 1 }, extra)).toThrow(/preceding checkpoint/);
+    const next = (2 + checkpointPhase) * length / 4;
+    expect(() => validate({ ...zone, respawnAt: next - 0.001 }, extra)).not.toThrow();
+    expect(() => validate({ ...zone, respawnAt: next }, extra)).toThrow(/next checkpoint/);
+    expect(() => validate({ ...zone, respawnAt: next + 0.001 }, extra)).toThrow(/next checkpoint/);
+    expect(() => validate({ ...zone, from: gate - 10, respawnAt: gate }, extra)).toThrow(/next checkpoint/);
   });
 
   it('checks checkpoints and width keys across the start line', () => {
     const zone = { from: length - 10, to: 10, respawnAt: 0 };
-    expect(() => validate(zone, { checkpointCount: 4 })).not.toThrow();
-    expect(() => validate({ ...zone, respawnAt: length }, { checkpointCount: 4 })).not.toThrow();
+    expect(() => validate(zone, { checkpointCount: 4 })).toThrow(/next checkpoint/);
+    expect(() => validate({ ...zone, respawnAt: length }, { checkpointCount: 4 })).toThrow(/next checkpoint/);
     expect(() => validate({ ...zone, respawnAt: length - 1 }, { checkpointCount: 4 })).toThrow(/preceding checkpoint/);
     expect(() => validate(zone, { widthKeys: [
       { distance: 0, roadHalfWidth: 7.3, wallHalfWidth: 10.5 },
@@ -1106,20 +1138,21 @@ describe('validateTrackDef fall zones', () => {
 
   it.each([undefined, 1.4, 2.55])('requires the acceleration runway to clear the next gap (duration %s)', duration => {
     const jump: SurfaceZone = { kind: 'jump', from: 292, to: 294, duration };
-    const gap = 38; // takeoff at 292 to landing edge at 330, including the 8 m approach.
+    const gap = 25 * (duration ?? 0.8); // includes the 8 m approach, below the easy CPU speed limit.
     const runway = (gap / (duration ?? 0.8)) ** 2 / (2 * 19.9) * 1.3;
     const def = (respawnAt: number): TrackDef => ({ ...flat,
-      surfaces: [jump, { ...fall, from: 300, to: 330, respawnAt }],
+      surfaces: [jump, { ...fall, from: 300, to: jump.from + gap, respawnAt }],
     });
     expect(() => validateTrackDef(def(jump.from - runway))).not.toThrow();
+    expect(() => validateTrackDef(def(jump.from - runway - 0.001))).not.toThrow();
     expect(() => validateTrackDef(def(jump.from - runway + 0.001))).toThrow(/runway/);
     expect(() => validateTrackDef(def(330))).not.toThrow();
   });
 
   it('uses the next jump and its own gap, regardless of declaration order or the previous fall', () => {
-    const jump: SurfaceZone = { kind: 'jump', from: 300, to: 302, duration: 1.6 };
+    const jump: SurfaceZone = { kind: 'jump', from: 300, to: 302, duration: 1.8 };
     const nextFall = { ...fall, from: 308, to: 342, respawnAt: 350 };
-    const runway = (42 / 1.6) ** 2 / (2 * 19.9) * 1.3;
+    const runway = (42 / 1.8) ** 2 / (2 * 19.9) * 1.3;
     const def = (respawnAt: number): TrackDef => ({ ...flat, surfaces: [
       nextFall, jump, { ...fall, from: 80, to: 110, respawnAt },
     ] });
@@ -1127,27 +1160,33 @@ describe('validateTrackDef fall zones', () => {
     expect(() => validateTrackDef(def(300 - runway + 0.001))).toThrow(/runway/);
   });
 
-  it('measures the runway and the gap through the lap seam', () => {
-    const jump: SurfaceZone = { kind: 'jump', from: length - 15, to: length - 13, duration: 1.4 };
-    const runway = (35 / 1.4) ** 2 / (2 * 19.9) * 1.3;
-    const def = (respawnAt: number): TrackDef => ({ ...flat, surfaces: [
-      { ...fall, from: length - 100, to: length - 80, respawnAt }, jump,
-      { ...fall, from: length - 5, to: 20, respawnAt: 25 },
+  it('measures the next runway across the seam without skipping the start gate on respawn', () => {
+    const jump: SurfaceZone = { kind: 'jump', from: 5, to: 7, duration: 1.4 };
+    const runway = (30 / 1.4) ** 2 / (2 * 19.9) * 1.3;
+    const respawnAt = length + jump.from - runway;
+    const def = (respawnAt: number): TrackDef => ({ ...flat, checkpointCount: 4, surfaces: [jump,
+      { ...fall, from: length - 20, to: length - 10, respawnAt },
+      { ...fall, from: 13, to: 35, respawnAt: 40 },
     ] });
-    expect(() => validateTrackDef(def(jump.from - runway))).not.toThrow();
-    expect(() => validateTrackDef(def(jump.from - runway + 0.001))).toThrow(/runway/);
+    expect(respawnAt).toBeLessThan(length);
+    expect(() => validateTrackDef(def(respawnAt - 0.001))).not.toThrow();
+    expect(() => validateTrackDef(def(respawnAt))).not.toThrow();
+    expect(() => validateTrackDef(def(respawnAt + 0.001))).toThrow(/runway/);
+    expect(() => validateTrackDef({ ...def(respawnAt), surfaces: [jump,
+      { ...fall, from: length - 5, to: 20, respawnAt: 25 },
+    ] })).toThrow(/next checkpoint/);
   });
 
   it('clears the full union of overlapping falls, including a band that starts before takeoff', () => {
-    const jump: SurfaceZone = { kind: 'jump', from: 300, to: 302, duration: 1.6 };
-    const surfaces = [jump, { ...fall, from: 308, to: 320, respawnAt: 280 },
-      { ...fall, from: 315, to: 342, respawnAt: 280 }];
+    const jump: SurfaceZone = { kind: 'jump', from: 300, to: 302, duration: 1.8 };
+    const surfaces = [jump, { ...fall, from: 308, to: 320, respawnAt: 284 },
+      { ...fall, from: 315, to: 342, respawnAt: 284 }];
     expect(() => validateTrackDef({ ...flat, surfaces })).toThrow(/runway/);
     expect(() => validateTrackDef({ ...flat, surfaces: [jump,
-      { ...fall, from: 295, to: 342, respawnAt: 280 },
+      { ...fall, from: 295, to: 342, respawnAt: 284 },
     ] })).toThrow(/runway/);
     expect(() => validateTrackDef({ ...flat, surfaces: surfaces.map(zone =>
-      zone.kind === 'fall' ? { ...zone, respawnAt: 275 } : zone) })).not.toThrow();
+      zone.kind === 'fall' ? { ...zone, respawnAt: 280 } : zone) })).not.toThrow();
   });
 
   it('ignores distant falls and other lanes when measuring the next jump gap', () => {
@@ -1163,6 +1202,39 @@ describe('validateTrackDef fall zones', () => {
       { kind: 'jump', from: 300, to: 302, duration: 1 },
       { ...fall, from: 308, to: 361, respawnAt: 200 },
     ] })).toThrow(/gap exceeds duration/);
+  });
+
+  it.each([
+    [0, 25.2774], [0.2, 22.74966], [0.5, 20.22192], [-0.5, 27],
+  ])('reserves 10%% of unboosted easy CPU speed at takeoff grade %s', (grade, limit) => {
+    const def = (gap: number): TrackDef => ({ ...slopeCourse(grade), physics: {},
+      roadHalfWidth: 7.2, wallHalfWidth: 10.5, surfaces: [
+        { kind: 'jump', from: 150, to: 152, duration: 1 },
+        { ...fall, from: 158, to: 150 + gap, respawnAt: 50 },
+      ],
+    });
+    expect(slopeAt(buildTrack(def(limit)), 150)).toBeCloseTo(grade, 12);
+    expect(() => validateTrackDef(def(limit - 0.001))).not.toThrow();
+    expect(() => validateTrackDef(def(limit))).not.toThrow();
+    expect(() => validateTrackDef(def(limit + 0.001))).toThrow(/safe unboosted easy CPU speed/);
+    expect(() => validateTrackDef(def(30))).toThrow(/safe unboosted easy CPU speed/);
+  });
+
+  it('accounts for the steepest uphill segment anywhere on the runway', () => {
+    const def = (grade: number, respawnAt: number): TrackDef => ({ ...flat, samplesPerSegment: 1,
+      controlPoints: [[0, 0, 0], [280, 0, 0], [280.25, grade * 0.25, 0],
+        [400, grade * 0.25, 0], [400, 0, 300], [0, 0, 300]],
+      surfaces: [{ kind: 'jump', from: 300, to: 302, duration: 1.4 },
+        { ...fall, from: 308, to: 335, respawnAt }],
+    });
+    const flatRunway = 25 ** 2 / (2 * 19.9) * 1.3;
+    const slopeRunway = 25 ** 2 / (2 * (22 * (1 - 0.8 * 0.5) - 2.1)) * 1.3;
+    expect(() => validateTrackDef(def(0, 300 - flatRunway))).not.toThrow();
+    expect(() => validateTrackDef(def(0.5, 300 - flatRunway))).toThrow(/runway/);
+    expect(() => validateTrackDef(def(0.5, 300 - slopeRunway))).not.toThrow();
+    expect(() => validateTrackDef(def(0.5, 300 - slopeRunway + 0.001))).toThrow(/runway/);
+    // A descent cannot subsidize a shorter run-up.
+    expect(() => validateTrackDef(def(-0.5, 300 - flatRunway + 0.001))).toThrow(/runway/);
   });
 });
 

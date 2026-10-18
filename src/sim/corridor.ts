@@ -327,6 +327,13 @@ export function validateTrackDef(def: TrackDef): void {
     }
   }
   // Check source values: buildTrack's JSON copy turns NaN and infinities into null.
+  for (const zone of def.surfaces) {
+    if (def.physics === undefined) {
+      if (zone.duration !== undefined) throw new RangeError('jump duration requires physics');
+      if (zone.height !== undefined) throw new RangeError('jump height requires physics');
+      if (zone.kind === 'fall') throw new RangeError('fall requires physics');
+    }
+  }
   for (const jump of def.surfaces.filter(zone => zone.kind === 'jump')) {
     if (jump.duration !== undefined) {
       requireFinite(jump.duration, 'jump duration');
@@ -556,23 +563,26 @@ export function validateTrackDef(def: TrackDef): void {
     if (fall.respawnAt === undefined) throw new RangeError('fall respawnAt is required');
     checkDistance(fall.respawnAt, 'fall respawnAt');
     const span = wrap(fall.to - fall.from, length);
-    // Check entry and every crossed gate: between gates the preceding checkpoint
-    // is constant, and the nearest-lap respawn can only move forward by a lap.
+    // Check both ends and every gate: a fixed destination must remain in the
+    // same checkpoint interval for every grounded position in this fall.
     const from = wrap(fall.from, length);
     const end = from + span;
-    let checkpoint = 0;
+    const gates = track.checkpointDistances;
     const entries: number[] = [];
-    for (let i = 0; i < def.checkpointCount; i++) {
-      const gate = i === 0 ? 0 : (i + phase) * length / def.checkpointCount;
-      if (gate <= from) checkpoint = gate;
+    for (const gate of gates) {
       const entry = gate < from ? gate + length : gate;
       if (entry > from && entry <= end) entries.push(entry);
     }
-    for (const entry of [from, ...entries.sort((a, b) => a - b)]) {
-      if (entry !== from) checkpoint = entry;
+    for (const entry of [from, ...entries, end]) {
+      const lap = Math.floor(entry / length) * length;
+      const checkpoint = lap + gates.filter(gate => gate <= entry - lap).at(-1)!;
+      const nextCheckpoint = lap + (gates.find(gate => gate > entry - lap) ?? length);
       const respawn = entry + wrap(fall.respawnAt - entry + length / 2, length) - length / 2;
       if (respawn < checkpoint - EPSILON) {
         throw new RangeError('fall respawnAt must be at or after the preceding checkpoint');
+      }
+      if (respawn >= nextCheckpoint) {
+        throw new RangeError('fall respawnAt must be before the next checkpoint');
       }
     }
     const nextJump = [...jumps].sort((a, b) =>
@@ -596,11 +606,22 @@ export function validateTrackDef(def: TrackDef): void {
       if (offsets.max < launch.min || offsets.min > launch.max) continue;
       gap = Math.max(gap, start + span);
     }
-    if (gap > flightDistance + EPSILON) {
-      throw new RangeError('fall respawnAt next jump gap exceeds duration * 60 m');
+    // Leave 10% headroom below the slowest easy CPU's uphill-adjusted speed,
+    // with an absolute unboosted cap even when the takeoff points downhill.
+    const takeoffGrade = slopeAt(track, nextJump.from);
+    const clearSpeed = 0.9 * Math.min(30.2 * 0.93 * Math.max(0.80, 1 - 0.5 * takeoffGrade), 30);
+    if (gap / duration > clearSpeed + EPSILON) {
+      throw new RangeError('fall respawnAt next jump gap exceeds duration * safe unboosted easy CPU speed');
     }
     const runway = wrap(nextJump.from - fall.respawnAt, length);
-    if (runway < (gap / duration) ** 2 / (2 * 19.9) * 1.3 - EPSILON) {
+    let uphill = Math.max(0, slopeAt(track, fall.respawnAt));
+    for (let i = 0; i < track.samples.length; i++) {
+      if (wrap(track.samples[i]!.distance - fall.respawnAt, length) <= runway) {
+        uphill = Math.max(uphill, slopes[i]!);
+      }
+    }
+    const acceleration = 22 * Math.max(0.5, Math.min(1.3, 1 - 0.8 * uphill)) - 2.1;
+    if (runway < (gap / duration) ** 2 / (2 * acceleration) * 1.3 - EPSILON) {
       throw new RangeError('fall respawnAt needs more runway before the next jump');
     }
   }

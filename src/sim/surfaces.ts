@@ -55,9 +55,27 @@ export function crossedZone(track: Track, kind: SurfaceZone['kind'], previousDis
 
 /** Closed [from, to] membership (with lane bounds), for the landing tick of a pit. */
 export function insideZone(track: Track, kind: SurfaceZone['kind'], distance: number, offset: number): boolean {
+  return zoneAt(track, kind, distance, offset) !== undefined;
+}
+
+/** The matching zone is also needed for its respawn destination. */
+export function zoneAt(track: Track, kind: SurfaceZone['kind'], distance: number, offset: number): SurfaceZone | undefined {
   const d = wrap(track, distance);
-  return track.def.surfaces.some(zone => zone.kind === kind && containsOffset(track, zone, d, offset) &&
+  return track.def.surfaces.find(zone => zone.kind === kind && containsOffset(track, zone, d, offset) &&
     wrap(track, d - zone.from) <= wrap(track, zone.to - zone.from));
+}
+
+/** Validated jump spacing keeps the launch zone behind the kart throughout flight.
+ * Lane bounds apply at takeoff only: crossing lanes in the air must not change the arc. */
+export function jumpAt(track: Track, distance: number): { duration: number; height: number } {
+  let launch: SurfaceZone | undefined;
+  let nearest = Infinity;
+  if (track.def.physics !== undefined) for (const zone of track.def.surfaces) {
+    if (zone.kind !== 'jump') continue;
+    const behind = wrap(track, distance - zone.from);
+    if (behind < nearest) { launch = zone; nearest = behind; }
+  }
+  return { duration: launch?.duration ?? JUMP_DURATION, height: launch?.height ?? JUMP_HEIGHT };
 }
 
 /** Periodic linear interpolation, including the segment across the start line. */

@@ -1,4 +1,4 @@
-import { DEFAULT_LAPS, isLapCount, raceProgress, updateLapTracking } from './laps';
+import { DEFAULT_LAPS, isLapCount, raceProgress, respawnLapTracking, updateLapTracking } from './laps';
 import { getAIInput } from './ai';
 import { random } from './random';
 import { advanceItems, getKartModifiers, giveBoost, onKartContact, useItem } from './items';
@@ -7,7 +7,7 @@ import { corridorAt, exclusionAt, freeIntervalFor, widthAt } from './corridor';
 import type { CorridorNormal } from './corridor';
 import { barrierEscape, insideBarrier, projectToTrack, rollAt, sameLevel, sampleTrack, slopeAt, surfaceHeightAt } from './track';
 import { getTrack } from './tracks';
-import { crossedZone, insideZone, JUMP_DURATION, JUMP_HEIGHT, spinRateAt, surfaceAt } from './surfaces';
+import { crossedZone, insideZone, jumpAt, JUMP_DURATION, JUMP_HEIGHT, spinRateAt, surfaceAt, zoneAt } from './surfaces';
 import type { InputFrame, KartState, RaceOptions, RaceState, Track } from './types';
 import { isCpuLevel } from './types';
 
@@ -103,8 +103,14 @@ function updateProjection(track: Track, kart: KartState): void {
   const roll = rollAt(track, kart.trackDistance);
   if (roll !== 0) kart.y += Math.sin(roll) * kart.lateralOffset;
   if (kart.airTime > 0) {
-    const t = 1 - kart.airTime / JUMP_DURATION;
-    kart.y += JUMP_HEIGHT * 4 * t * (1 - t);
+    if (track.def.physics !== undefined) {
+      const jump = jumpAt(track, kart.trackDistance);
+      const t = 1 - kart.airTime / jump.duration;
+      kart.y += jump.height * 4 * t * (1 - t);
+    } else {
+      const t = 1 - kart.airTime / JUMP_DURATION;
+      kart.y += JUMP_HEIGHT * 4 * t * (1 - t);
+    }
   }
 }
 
@@ -376,7 +382,11 @@ function advanceKart(track: Track, state: RaceState, kart: KartState, input: Inp
     const steering = kart.driftDirection === 0 ? kart.steer : kart.driftDirection * 0.75 + kart.steer * 0.6;
     // A banked turn grips harder when steering toward its low (−sign(roll)) side.
     const roll = rollAt(track, kart.trackDistance);
-    if (roll !== 0 && steering * roll < 0) turnRate *= 1 + 0.3 * Math.abs(roll) / 0.35;
+    if (track.def.physics !== undefined) {
+      if (roll !== 0 && steering * roll < 0) {
+        turnRate *= 1 + 0.3 * Math.min(1, Math.abs(roll) / (track.def.physics.maxRoll ?? 0.35));
+      }
+    } else if (roll !== 0 && steering * roll < 0) turnRate *= 1 + 0.3 * Math.abs(roll) / 0.35;
     kart.heading += steering * turnRate * FIXED_DT;
     kart.heading = Math.atan2(Math.sin(kart.heading), Math.cos(kart.heading));
   }
@@ -460,6 +470,31 @@ export function stepRace(state: RaceState, inputs: readonly InputFrame[]): void 
   for (let i = 0; i < state.karts.length; i++) {
     const kart = state.karts[i]!;
     if (kart.airTime > 0) continue;
+    const fall = track.def.physics !== undefined && kart.finishTime === null ?
+      zoneAt(track, 'fall', kart.trackDistance, kart.lateralOffset) : undefined;
+    if (fall) {
+      const distance = respawnLapTracking(track, kart, previous[i]!, fall.respawnAt!);
+      const sample = sampleTrack(track, distance);
+      kart.x = sample.x;
+      kart.y = sample.y;
+      kart.z = sample.z;
+      kart.heading = Math.atan2(sample.tx, sample.tz);
+      kart.trackDistance = distance;
+      kart.lateralOffset = 0;
+      kart.speed = 0;
+      kart.spinTime = 1.5;
+      kart.steer = 0;
+      kart.boostTime = 0;
+      kart.driftTime = 0;
+      kart.driftDirection = 0;
+      kart.previousDrift = false;
+      kart.hopTime = 0;
+      kart.airTime = 0;
+      kart.lastBand = -1;
+      kart.hitCooldown = 0;
+      state.events.push({ type: 'fall', kartId: kart.id });
+      continue;
+    }
     const from = previous[i]!.trackDistance;
     // A pit catches a grounded forward crossing of its entry, or a landing inside it; never "while inside",
     // so a kart stopped in the pit is not punished again. Jumping over it lands past `to`.
@@ -472,7 +507,7 @@ export function stepRace(state: RaceState, inputs: readonly InputFrame[]): void 
     }
     if (crossedZone(track, 'boost', from, kart.trackDistance, kart.lateralOffset)) giveBoost(state, kart, 0.5);
     if (kart.speed >= 10 && crossedZone(track, 'jump', from, kart.trackDistance, kart.lateralOffset)) {
-      kart.airTime = JUMP_DURATION;
+      kart.airTime = track.def.physics !== undefined ? jumpAt(track, kart.trackDistance).duration : JUMP_DURATION;
       kart.driftTime = 0;
       kart.driftDirection = 0;
       kart.hopTime = 0;

@@ -4,8 +4,8 @@ import { getAIInput } from './ai';
 import { getSteeringError } from './itemAi';
 import { createRace, FIXED_DT, KART_RADIUS, NEUTRAL_INPUT, stepRace } from './race';
 import { decodeSnapshot, encodeSnapshot } from '../net/snapshotCodec';
-import { crossedZone, JUMP_DURATION, JUMP_HEIGHT, racingLineOffset, spinRateAt, surfaceAt } from './surfaces';
-import { buildTrack, projectToTrack, sampleTrack } from './track';
+import { crossedZone, jumpAt, JUMP_DURATION, JUMP_HEIGHT, racingLineOffset, spinRateAt, surfaceAt } from './surfaces';
+import { buildTrack, projectToTrack, sampleTrack, surfaceHeightAt } from './track';
 import * as tracks from './tracks';
 import type { InputFrame, RaceState, Track, TrackDef } from './types';
 
@@ -86,6 +86,73 @@ function soloRace(track: Track, distance = 1500, speed = 0, offset = 0): RaceSta
   });
   return state;
 }
+
+describe('physics jump profiles and bank normalization', () => {
+  const jump = { kind: 'jump' as const, from: 1500, to: 1502, duration: 1.8, height: 6 };
+
+  it('launches with 1.8 s, reaches exactly 6 m, and keeps its profile through flight and JSON restore', () => {
+    const track = syntheticTrack({ physics: {}, surfaces: [
+      { ...jump, from: 1700, to: 1702, duration: 1.4, height: 4 }, jump,
+    ] });
+    let state = soloRace(track, 1499.9, 30);
+    stepRace(state, [NEUTRAL_INPUT]);
+    expect(state.karts[0]!.airTime).toBe(1.8);
+    const keys = Object.keys(state.karts[0]!);
+    let peak = 0;
+    for (let tick = 0; tick < 109; tick++) {
+      const kart = state.karts[0]!;
+      expect(jumpAt(track, kart.trackDistance)).toEqual({ duration: 1.8, height: 6 });
+      peak = Math.max(peak, kart.y - surfaceHeightAt(track, kart.trackDistance, kart.lateralOffset));
+      if (tick === 40) state = JSON.parse(JSON.stringify(state));
+      stepRace(state, [NEUTRAL_INPUT]);
+    }
+    expect(Math.abs(peak - 6)).toBeLessThanOrEqual(1e-9);
+    expect(state.karts[0]!.airTime).toBe(0);
+    expect(Object.keys(state.karts[0]!)).toEqual(keys);
+  });
+
+  it('recovers the launch across the lap seam and after leaving its lane', () => {
+    const base = syntheticTrack();
+    const track = syntheticTrack({ physics: {}, surfaces: [
+      { ...jump, from: base.length - 20, to: base.length - 18, offsetMin: -4, offsetMax: -2 },
+      { ...jump, from: 200, to: 202, duration: 1.4, height: 4 },
+    ] });
+    for (const d of [base.length - 20, base.length - 1, 0, 20, base.length + 20]) {
+      expect(jumpAt(track, d)).toEqual({ duration: 1.8, height: 6 });
+    }
+    const state = soloRace(track, 0, 20, 3);
+    state.karts[0]!.airTime = 0.9 + FIXED_DT;
+    stepRace(state, [NEUTRAL_INPUT]);
+    const kart = state.karts[0]!;
+    expect(kart.y - surfaceHeightAt(track, kart.trackDistance, kart.lateralOffset)).toBeCloseTo(6, 9);
+  });
+
+  it('uses the legacy duration and height when physics is absent', () => {
+    const track = syntheticTrack({ surfaces: [jump] });
+    const state = soloRace(track, 1499.9, 30);
+    stepRace(state, [NEUTRAL_INPUT]);
+    expect(state.karts[0]!.airTime).toBe(JUMP_DURATION);
+    expect(jumpAt(track, 1505)).toEqual({ duration: JUMP_DURATION, height: JUMP_HEIGHT });
+    for (let tick = 0; tick < 24; tick++) stepRace(state, [NEUTRAL_INPUT]);
+    expect(state.karts[0]!.y - 3).toBeCloseTo(JUMP_HEIGHT, 10);
+  });
+
+  it.each([
+    [0.75, 0.75, 1.3], [0.85, 0.75, 1.3], [0.375, 0.75, 1.15],
+    [0.35, undefined, 1.3], [-0.85, 0.85, 1.3],
+  ])('normalizes roll %s by maxRoll %s to a %s turn factor', (roll, maxRoll, factor) => {
+    const turn = (bank: number): number => {
+      const track = syntheticTrack({ physics: { maxRoll }, bankKeys: [{ distance: 0, roll: bank }] });
+      const state = soloRace(track, 1500, 20);
+      const kart = state.karts[0]!;
+      const heading = kart.heading;
+      kart.steer = -Math.sign(roll!);
+      stepRace(state, [{ ...NEUTRAL_INPUT, steer: kart.steer }]);
+      return kart.heading - heading;
+    };
+    expect(turn(roll!) / turn(0)).toBeCloseTo(factor!, 12);
+  });
+});
 
 describe('pure surface queries', () => {
   const base = syntheticTrack();

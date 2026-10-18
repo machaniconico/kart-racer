@@ -13,6 +13,23 @@ export function isLapCount(n: unknown): n is number {
 
 export interface PreviousPosition { x: number; z: number; trackDistance: number }
 
+/** Keep progress aligned with the respawn; validation confines it to the same gate interval. */
+export function respawnLapTracking(track: Track, kart: KartState, previous: PreviousPosition, distance: number): number {
+  let delta = (distance - kart.trackDistance) % track.length;
+  if (delta >= track.length / 2) delta -= track.length;
+  if (delta < -track.length / 2) delta += track.length;
+  const destination = kart.trackDistance + delta;
+  let progressDelta = (destination - previous.trackDistance) % track.length;
+  if (progressDelta >= track.length / 2) progressDelta -= track.length;
+  if (progressDelta < -track.length / 2) progressDelta += track.length;
+  if (kart.startedLap) kart.lapProgress += progressDelta;
+  const sample = sampleTrack(track, destination);
+  previous.x = sample.x;
+  previous.z = sample.z;
+  previous.trackDistance = destination;
+  return destination;
+}
+
 /** A lap requires every finite gate, in order, crossed in its forward direction. */
 export function updateLapTracking(track: Track, state: RaceState, kart: KartState, previous: PreviousPosition): void {
   if (kart.finishTime !== null) return;

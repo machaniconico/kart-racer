@@ -91,7 +91,9 @@ export function buildTrack(definition: TrackDef): Track {
   const boxPoses: Pose[] = [];
   const track: Track = {
     def, samples, length,
-    checkpointDistances: Array.from({ length: def.checkpointCount }, (_, i) => i * length / def.checkpointCount),
+    checkpointDistances: Array.from({ length: def.checkpointCount }, (_, i) =>
+      def.physics !== undefined && i !== 0 ? (i + (def.checkpointPhase ?? 0)) * length / def.checkpointCount :
+        i * length / def.checkpointCount),
     boxPoses,
   };
   for (const fraction of def.boxRows) {
