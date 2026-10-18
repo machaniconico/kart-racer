@@ -272,9 +272,9 @@ export function buildCourse(track: Track, theme: CourseTheme): Course {
   }));
   group.add(sky);
   buildRoad(track, theme, group, roadIndex);
-  const surfaces = new Map<Exclude<SurfaceZone['kind'], 'spin'>, THREE.BufferGeometry[]>();
+  const surfaces = new Map<Exclude<SurfaceZone['kind'], 'spin' | 'fall'>, THREE.BufferGeometry[]>();
   for (const zone of track.def.surfaces) {
-    if (zone.kind === 'spin') continue;
+    if (zone.kind === 'spin' || zone.kind === 'fall') continue;
     // Sampling beyond length also handles a single zone crossing the finish line.
     const to = zone.to < zone.from ? zone.to + track.length : zone.to;
     const geometry = ribbonGeometry(track, roadIndex, d => {

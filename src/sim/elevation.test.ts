@@ -88,7 +88,7 @@ describe('slope physics', () => {
     expect(state.karts[0]!.speed).toBeCloseTo(5 - 5.5 * FIXED_DT + 9.8 * 0.6 * 0.3 * FIXED_DT, 12);
   });
 
-  it('matches the sample segment grade on all sixteen courses and is exactly 0 on a flat fixture', () => {
+  it('matches the sample segment grade on all twenty courses and is exactly 0 on a flat fixture', () => {
     for (const id of tracks.TRACK_IDS) {
       const track = tracks.getTrack(id);
       const { samples } = track;
@@ -202,6 +202,7 @@ describe('elevation fixtures', () => {
     expect(tracks.TRACK_IDS).toEqual([
       'meadow', 'canyon', 'snowpeak', 'neon', 'harbor', 'forest', 'volcano', 'skyline',
       'dunes', 'garden', 'speedway', 'bayou', 'cavern', 'temple', 'serpentine', 'lunar',
+      'summit', 'chasm', 'velodrome', 'spire',
     ]);
   });
 

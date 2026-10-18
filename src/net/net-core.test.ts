@@ -109,9 +109,10 @@ describe('control protocol', () => {
     }
   });
 
-  it('isolates protocol v18 rooms from earlier versions', () => {
-    expect(PROTOCOL_VERSION).toBe(18);
-    expect(ROOM_PREFIX).toBe('pcircuit-v18-');
+  it('isolates protocol v19 rooms from earlier versions', () => {
+    expect(PROTOCOL_VERSION).toBe(19);
+    expect(ROOM_PREFIX).toBe('pcircuit-v19-');
+    expect(fromPeerId('pcircuit-v18-AB2X')).toBeNull();
     expect(fromPeerId('pcircuit-v17-AB2X')).toBeNull();
     expect(fromPeerId('pcircuit-v15-AB2X')).toBeNull();
     expect(fromPeerId('pcircuit-v13-AB2X')).toBeNull();
@@ -122,7 +123,7 @@ describe('control protocol', () => {
     expect(fromPeerId('pcircuit-v5-AB2X')).toBeNull();
   });
 
-  it('rejects a v17 hello before allocating a guest slot', async () => {
+  it('rejects a v18 hello before allocating a guest slot', async () => {
     const network = new MockTransport({ latencyMs: 0 });
     const host = await HostSession.create(network, { roomCode: 'AB2X', now: () => network.now });
     try {
@@ -135,7 +136,7 @@ describe('control protocol', () => {
         }
       });
       guest.send('reliable', encodeControlMessage({
-        type: 'hello', protocol: 17, course: COURSE_FINGERPRINT, name: 'GUEST', color: 0xff5f80,
+        type: 'hello', protocol: 18, course: COURSE_FINGERPRINT, name: 'GUEST', color: 0xff5f80,
       }));
       network.flush();
       expect(received).toEqual([{ type: 'reject', reason: 'version' }]);
@@ -228,6 +229,19 @@ describe('control protocol', () => {
     expect(controlGuards.events({ ...messages[6], events: Array(257).fill({ type: 'go', kartId: -1 }) })).toBe(false);
     expect(controlGuards.race_start({ ...messages[5], raceId: 256 })).toBe(false);
     expect(() => encodeControlMessage({ type: 'reject', reason: 'unknown' } as unknown as ControlMessage)).toThrow();
+  });
+
+  it('round-trips fall events through v19 event batches and final states', () => {
+    const event = { type: 'fall' as const, kartId: 0, x: 12, z: 34 };
+    expect(isRaceEvent(event)).toBe(true);
+    const batch: ControlMessage = { type: 'events', raceId: 1, tick: 600, events: [event] };
+    expect(parseControlMessage(encodeControlMessage(batch))).toEqual(batch);
+    const state = { ...finalState(), events: [event] };
+    expect(isRaceState(state)).toBe(true);
+    const end: ControlMessage = { type: 'race_end', raceId: 1, finalState: state };
+    expect(parseControlMessage(encodeControlMessage(end))).toEqual(end);
+    expect(isRaceEvent({ ...event, kartId: 8 })).toBe(false);
+    expect(isRaceEvent({ ...event, x: NaN })).toBe(false);
   });
 
   it('validates the entire final state, not only the race_end envelope', () => {

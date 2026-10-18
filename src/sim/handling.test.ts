@@ -200,7 +200,7 @@ describe('H1 handling', () => {
 // | serpentine | 2328.5952422904697 | 68.32384259259258 | 34.082 | 1    | 0    |
 // | lunar      | 2209.8782411911293 | 65.17916666666666 | 33.905 | 0    | 0    |
 // speedway.test.ts reads this table from source to require THUNDER OVAL's speed to be the maximum.
-type Baseline = { version: 'v15' | 'v16' | 'm9' | 'm10'; meanLap: number; wallHits: number; bandHits: number };
+type Baseline = { version: 'v15' | 'v16' | 'm9' | 'm10' | 'm11-scaffold'; meanLap: number; wallHits: number; bandHits: number };
 const BASELINE = {
   meadow: { version: 'v15', meanLap: 68.5011574074074, wallHits: 0, bandHits: 0 },
   canyon: { version: 'v15', meanLap: 68.49583333333334, wallHits: 0, bandHits: 0 },
@@ -218,8 +218,16 @@ const BASELINE = {
   temple: { version: 'm10', meanLap: 63.46712962962962, wallHits: 0, bandHits: 0 },
   serpentine: { version: 'm10', meanLap: 68.32384259259258, wallHits: 1, bandHits: 0 },
   lunar: { version: 'm10', meanLap: 65.17916666666666, wallHits: 0, bandHits: 0 },
+  // M11 scaffolds inherit MEADOW's measured baseline; replace when each layout lands.
+  summit: { version: 'm11-scaffold', meanLap: 68.5011574074074, wallHits: 0, bandHits: 0 },
+  chasm: { version: 'm11-scaffold', meanLap: 68.5011574074074, wallHits: 0, bandHits: 0 },
+  velodrome: { version: 'm11-scaffold', meanLap: 68.5011574074074, wallHits: 0, bandHits: 0 },
+  spire: { version: 'm11-scaffold', meanLap: 68.5011574074074, wallHits: 0, bandHits: 0 },
 } satisfies Record<(typeof tracks.TRACK_IDS)[number], Baseline>;
 const SEEDS = [1, 42, 98765];
+// M11-00 budget: max across the old sixteen H1 normal-CPU runs
+// (8 CPUs × seeds [1, 42, 98765] × 3 laps per course); SERPENT PASS reaches 1.
+const WALL_HITS_MAX_EXISTING = 1;
 
 /**
  * Splits hit events: value 1 (collideCorridor) is a band hit; a hit without a value with the kart
@@ -241,10 +249,16 @@ function countHits(state: RaceState, track: Track): { wall: number; band: number
 }
 
 describe('H1 CPU balance: absolute range and recorded baseline', () => {
+  it('pins the old sixteen-course maximum wall-hit budget for M11', () => {
+    const legacyRows = tracks.TRACK_IDS.slice(0, 16).map(id => BASELINE[id]);
+    expect(Math.max(...legacyRows.map(row => row.wallHits))).toBe(WALL_HITS_MAX_EXISTING);
+  });
+
   it('has a measured row for every course (no pending baselines remain)', () => {
     expect(Object.keys(BASELINE)).toEqual([...tracks.TRACK_IDS]);
     for (const [id, row] of Object.entries(BASELINE) as [string, Baseline][]) {
       expect(row.version, id).not.toMatch(/pending/);
+      if (row.version === 'm11-scaffold') expect(tracks.scaffoldIds()).toContain(id);
       expect(Number.isFinite(row.meanLap), id).toBe(true);
       expect(row.meanLap, id).toBeGreaterThanOrEqual(60);
     }
@@ -316,6 +330,7 @@ describe('H1 CPU balance: absolute range and recorded baseline', () => {
     expect(ratio).toBeGreaterThanOrEqual(0.95);
     expect(ratio).toBeLessThanOrEqual(1.05);
     expect(wallHits).toBeLessThanOrEqual(baseline.wallHits);
+    expect(wallHits).toBeLessThanOrEqual(WALL_HITS_MAX_EXISTING);
     expect(bandHits).toBeLessThanOrEqual(baseline.bandHits);
   }, 120_000);
 });

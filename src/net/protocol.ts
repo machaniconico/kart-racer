@@ -4,7 +4,7 @@ import type { RosterPlayer } from './session';
 export type { InputFrame, RaceEvent, RaceState } from '../sim/types';
 export type { RosterPlayer } from './session';
 
-export const PROTOCOL_VERSION = 18;
+export const PROTOCOL_VERSION = 19;
 export const ROOM_PREFIX = `pcircuit-v${PROTOCOL_VERSION}-`;
 // Kept local: the net core may only type-import from sim (sim/types CPU_LEVELS is the source of truth).
 const CPU_LEVELS: readonly CpuLevel[] = ['easy', 'normal', 'hard'];
@@ -76,7 +76,7 @@ export function isRosterPlayers(value: unknown): value is RosterPlayer[] {
 }
 
 const eventTypes = ['countdown', 'go', 'pickup', 'hit', 'boost', 'lap', 'finish', 'use',
-  'block', 'explode', 'storm', 'ink', 'aura_start', 'auto_start'];
+  'block', 'explode', 'storm', 'ink', 'aura_start', 'auto_start', 'fall'];
 export function isRaceEvent(value: unknown): value is RaceEvent {
   return record(value) && keys(value, ['type', 'kartId'], ['value', 'x', 'z']) &&
     oneOf(value.type, eventTypes) && integer(value.kartId, -1, MAX_PLAYERS - 1) &&
@@ -89,6 +89,7 @@ const itemTypes = ['dash', 'trap', 'bolt', 'seeker', 'skycomet', 'tripleDash', '
 export const PROTOCOL_TRACK_IDS: readonly TrackId[] = [
   'meadow', 'canyon', 'snowpeak', 'neon', 'harbor', 'forest', 'volcano', 'skyline',
   'dunes', 'garden', 'speedway', 'bayou', 'cavern', 'temple', 'serpentine', 'lunar',
+  'summit', 'chasm', 'velodrome', 'spire',
 ];
 const poseFields = ['x', 'y', 'z', 'heading'];
 const kartNumbers = [...poseFields, 'speed', 'steer', 'trackDistance', 'lateralOffset',

@@ -30,6 +30,10 @@ import { cavern } from './themes/cavern';
 import { temple } from './themes/temple';
 import { serpentine } from './themes/serpentine';
 import { lunar } from './themes/lunar';
+import { summit } from './themes/summit';
+import { chasm } from './themes/chasm';
+import { velodrome } from './themes/velodrome';
+import { spire } from './themes/spire';
 
 // M2.5 re-measured by e2e/courses.spec.ts, 2026-10-11: Chromium, 1280x720, DPR 1,
 // desktop shadows, createRace(127, { trackId }), 8 stationary grid karts.
@@ -74,6 +78,11 @@ const RENDER_BASELINE: Record<TrackId, RenderBaseline> = {
   temple: { drawCalls: 138, triangles: 97_474, meshes: 43 },
   serpentine: { drawCalls: 123, triangles: 110_066, meshes: 28 },
   lunar: { drawCalls: 140, triangles: 79_830, meshes: 45 },
+  // M11 scaffold budgets inherit MEADOW until the course-specific render measurements.
+  summit: { drawCalls: 125, triangles: 107_048, meshes: 34 },
+  chasm: { drawCalls: 125, triangles: 107_048, meshes: 34 },
+  velodrome: { drawCalls: 125, triangles: 107_048, meshes: 34 },
+  spire: { drawCalls: 125, triangles: 107_048, meshes: 34 },
 };
 
 // Only the browser's text drawing context is supplied. All three objects and
@@ -869,6 +878,7 @@ describe('variable widths and batched barriers', () => {
     ['harbor', harbor], ['forest', forest], ['volcano', volcano], ['skyline', skyline],
     ['dunes', dunes], ['garden', garden], ['speedway', speedway], ['bayou', bayou],
     ['cavern', cavern], ['temple', temple], ['serpentine', serpentine], ['lunar', lunar],
+    ['summit', summit], ['chasm', chasm], ['velodrome', velodrome], ['spire', spire],
   ] as const)('%s stays within its measured mesh budget', (id, theme) => {
     const track = getTrack(id);
     const motionMeshes = (track.def.barriers ?? []).filter(barrier => barrier.motion).length

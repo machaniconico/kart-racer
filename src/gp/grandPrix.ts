@@ -2,7 +2,7 @@ import { getRank } from '../sim/laps';
 import { createRace } from '../sim/race';
 import type { CpuLevel, KartState, RaceState, TrackId } from '../sim/types';
 
-export type CupId = 'sunrise' | 'horizon' | 'zenith' | 'eclipse';
+export type CupId = 'sunrise' | 'horizon' | 'zenith' | 'eclipse' | 'extreme';
 
 export interface Cup {
   readonly id: CupId;
@@ -15,6 +15,7 @@ export const CUPS: readonly Cup[] = [
   { id: 'horizon', name: 'HORIZON CUP', tracks: ['harbor', 'forest', 'volcano', 'skyline'] },
   { id: 'zenith', name: 'ZENITH CUP', tracks: ['dunes', 'garden', 'speedway', 'bayou'] },
   { id: 'eclipse', name: 'ECLIPSE CUP', tracks: ['cavern', 'temple', 'serpentine', 'lunar'] },
+  { id: 'extreme', name: 'EXTREME CUP', tracks: ['summit', 'chasm', 'velodrome', 'spire'] },
 ];
 
 export const GP_POINTS = [10, 8, 6, 5, 4, 3, 2, 1] as const;

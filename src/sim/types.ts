@@ -71,7 +71,7 @@ export interface Projectile extends Pose {
 export interface Trap extends Pose { kind: TrapKind; id: number; ownerId: number; life: number; age: number }
 export interface RaceEvent {
   type: 'countdown' | 'go' | 'pickup' | 'hit' | 'boost' | 'lap' | 'finish' | 'use' |
-    'block' | 'explode' | 'storm' | 'ink' | 'aura_start' | 'auto_start';
+    'block' | 'explode' | 'storm' | 'ink' | 'aura_start' | 'auto_start' | 'fall';
   kartId: number;
   value?: number;
   x?: number;
@@ -104,7 +104,8 @@ export interface TrackProjection {
 }
 
 export type TrackId = 'meadow' | 'canyon' | 'snowpeak' | 'neon' | 'harbor' | 'forest' | 'volcano' | 'skyline'
-  | 'dunes' | 'garden' | 'speedway' | 'bayou' | 'cavern' | 'temple' | 'serpentine' | 'lunar';
+  | 'dunes' | 'garden' | 'speedway' | 'bayou' | 'cavern' | 'temple' | 'serpentine' | 'lunar'
+  | 'summit' | 'chasm' | 'velodrome' | 'spire';
 
 export interface WidthKey {
   readonly distance: number;
@@ -143,7 +144,7 @@ export interface SplitSection {
 }
 
 export interface SurfaceZone {
-  readonly kind: 'ice' | 'boost' | 'jump' | 'dirt' | 'pit' | 'spin';
+  readonly kind: 'ice' | 'boost' | 'jump' | 'dirt' | 'pit' | 'spin' | 'fall';
   readonly from: number;
   readonly to: number;
   readonly offsetMin?: number;

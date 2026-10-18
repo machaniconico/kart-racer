@@ -27,12 +27,13 @@ function freezeDeep(value: object): void {
 }
 
 describe('Grand Prix', () => {
-  it('defines four four-race cups in TRACK_IDS order and the eight-place points table', () => {
+  it('defines five four-race cups in TRACK_IDS order and the eight-place points table', () => {
     expect(CUPS).toEqual([
       { id: 'sunrise', name: 'SUNRISE CUP', tracks: ['meadow', 'canyon', 'snowpeak', 'neon'] },
       { id: 'horizon', name: 'HORIZON CUP', tracks: ['harbor', 'forest', 'volcano', 'skyline'] },
       { id: 'zenith', name: 'ZENITH CUP', tracks: ['dunes', 'garden', 'speedway', 'bayou'] },
       { id: 'eclipse', name: 'ECLIPSE CUP', tracks: ['cavern', 'temple', 'serpentine', 'lunar'] },
+      { id: 'extreme', name: 'EXTREME CUP', tracks: ['summit', 'chasm', 'velodrome', 'spire'] },
     ]);
     for (const cup of CUPS) {
       expect(cup.tracks).toHaveLength(4);

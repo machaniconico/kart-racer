@@ -27,12 +27,14 @@ describe('course registry and MEADOW golden baseline', () => {
     expect(TRACK_IDS).toEqual([
       'meadow', 'canyon', 'snowpeak', 'neon', 'harbor', 'forest', 'volcano', 'skyline',
       'dunes', 'garden', 'speedway', 'bayou', 'cavern', 'temple', 'serpentine', 'lunar',
+      'summit', 'chasm', 'velodrome', 'spire',
     ]);
     expect(TRACK_IDS.map(id => TRACKS[id].name)).toEqual([
       'MEADOW LOOP', 'SUNSCAR CANYON', 'FROSTBITE PEAK', 'NEON NIGHTLINE',
       'TIDEWATER HARBOR', 'MOSSWOOD TRAIL', 'EMBER CALDERA', 'STRATOS CITY',
       'SIROCCO DUNES', 'BLOSSOM GARDEN', 'THUNDER OVAL', 'MOONLIT BAYOU',
       'CRYSTAL HOLLOW', 'SUNKEN TEMPLE', 'SERPENT PASS', 'LUNAR BASIN',
+      'SUMMIT DROP', 'CHASM LEAP', 'WALL BOWL', 'SKY SPIRE',
     ]);
     for (const id of TRACK_IDS) {
       expect(getTrack(id).def.id).toBe(id);
@@ -40,14 +42,14 @@ describe('course registry and MEADOW golden baseline', () => {
       expect(getTrack(id).def).toBe(TRACKS[id]);
       expect(getTrack(id)).toBe(getTrack(id));
     }
-    expect(new Set(TRACK_IDS.map(getTrack)).size).toBe(16);
+    expect(new Set(TRACK_IDS.map(getTrack)).size).toBe(20);
     expect(COURSE_FINGERPRINT).toBe(fnv1a32(TRACK_IDS.map(id => TRACKS[id])));
     expectFrozen(TRACK_IDS);
     expectFrozen(TRACKS);
   });
 
-  it('leaves no MEADOW-layout scaffold among the sixteen courses (M10-10)', () => {
-    expect(scaffoldIds()).toEqual([]);
+  it('identifies exactly the four M11 MEADOW-layout scaffolds', () => {
+    expect(scaffoldIds()).toEqual(['summit', 'chasm', 'velodrome', 'spire']);
   });
 
   // M5-05 lengths: M6 adds courses without changing the original four layouts.

@@ -89,16 +89,17 @@ function upperPaths(decks: Track['def']['decks']): string[] {
 }
 
 describe('GameUI title course options', () => {
-  it('renders all 16 courses labelled 01 to 16 with their definition names', () => {
+  it('renders all 20 courses labelled 01 to 20 with their definition names', () => {
     const ids = Object.keys(courseNames);
-    expect(ids).toHaveLength(16);
+    expect(ids).toHaveLength(20);
     const labels = [...courseOptions.matchAll(/aria-label="([^"]*)"/g)].map(match => match[1]);
     expect(labels).toEqual(ids.map((id, index) => `${String(index + 1).padStart(2, '0')} ${courseNames[id]}`));
     expect(labels[7]).toBe('08 STRATOS CITY');
     expect(labels[15]).toBe('16 LUNAR BASIN');
+    expect(labels[19]).toBe('20 SKY SPIRE');
     expect(ids.map(courseNumber)).toEqual([
       '01', '02', '03', '04', '05', '06', '07', '08',
-      '09', '10', '11', '12', '13', '14', '15', '16',
+      '09', '10', '11', '12', '13', '14', '15', '16', '17', '18', '19', '20',
     ]);
   });
 });
@@ -248,12 +249,12 @@ const labelsOf = (html: string): string[] => [...html.matchAll(/aria-label="([^"
 const valuesOf = (html: string): string[] => [...html.matchAll(/value="([^"]*)"/g)].map(match => match[1]);
 
 describe('GameUI title mode / cup / cpu options', () => {
-  it('renders 3 modes, 4 cups and 3 cpu levels with labels and defaults', () => {
+  it('renders 3 modes, 5 cups and 3 cpu levels with labels and defaults', () => {
     expect(valuesOf(modeOptions)).toEqual(['race', 'gp', 'timeattack']);
     expect(labelsOf(modeOptions)).toEqual(['レース', 'グランプリ', 'タイムアタック']);
     expect(valuesOf(cupOptions)).toEqual(CUPS.map(cup => cup.id));
     expect(labelsOf(cupOptions)).toEqual([
-      'SUNRISE CUP 01–04', 'HORIZON CUP 05–08', 'ZENITH CUP 09–12', 'ECLIPSE CUP 13–16',
+      'SUNRISE CUP 01–04', 'HORIZON CUP 05–08', 'ZENITH CUP 09–12', 'ECLIPSE CUP 13–16', 'EXTREME CUP 17–20',
     ]);
     expect(valuesOf(cpuOptions)).toEqual(['easy', 'normal', 'hard']);
     expect(labelsOf(cpuOptions)).toEqual(['やさしい', 'ふつう', 'つよい']);
@@ -302,14 +303,17 @@ describe('GameUI play modes', () => {
     expect(refs['retry-label'].textContent).toBe('順位表へ');
     expect(refs['course-name'].textContent).toBe('SUNRISE CUP · 4 RACES');
     ui.setCup('horizon');
-    expect(refs['cup-select'].inputs.map(input => input.checked)).toEqual([false, true, false, false]);
+    expect(refs['cup-select'].inputs.map(input => input.checked)).toEqual([false, true, false, false, false]);
     expect(refs['course-name'].textContent).toBe('HORIZON CUP · 4 RACES');
     ui.setCup('zenith');
-    expect(refs['cup-select'].inputs.map(input => input.checked)).toEqual([false, false, true, false]);
+    expect(refs['cup-select'].inputs.map(input => input.checked)).toEqual([false, false, true, false, false]);
     expect(refs['course-name'].textContent).toBe('ZENITH CUP · 4 RACES');
     ui.setCup('eclipse');
-    expect(refs['cup-select'].inputs.map(input => input.checked)).toEqual([false, false, false, true]);
+    expect(refs['cup-select'].inputs.map(input => input.checked)).toEqual([false, false, false, true, false]);
     expect(refs['course-name'].textContent).toBe('ECLIPSE CUP · 4 RACES');
+    ui.setCup('extreme');
+    expect(refs['cup-select'].inputs.map(input => input.checked)).toEqual([false, false, false, false, true]);
+    expect(refs['course-name'].textContent).toBe('EXTREME CUP · 4 RACES');
     ui.setPlayMode('timeattack');
     expect([refs['cup-select'].hidden, refs['course-select'].hidden, refs['cpu-select'].hidden, refs['position-group'].hidden])
       .toEqual([true, false, true, true]);

@@ -1075,13 +1075,32 @@ describe('sim fingerprint', () => {
   // libm differs between platforms, so each platform keeps its own column (as in surfaces.test.ts).
   // linux-x64 was copied from CI run 38685104421 (a4dbd77); that run also passed the pre-M7
   // linux MEADOW full-race hashes in surfaces.test.ts, so normal CPUs are unchanged on linux too.
-  const FINGERPRINTS: Record<string, Record<'meadow' | 'neon', number>> = {
-    'darwin-arm64': { meadow: 1966540717, neon: 1211865273 },
+  // M11-00: freeze the pre-M11 roster so new scaffolds cannot alter this regression set.
+  const LEGACY_TRACK_IDS = [
+    'meadow', 'canyon', 'snowpeak', 'neon', 'harbor', 'forest', 'volcano', 'skyline',
+    'dunes', 'garden', 'speedway', 'bayou', 'cavern', 'temple', 'serpentine', 'lunar',
+  ] as const;
+  type LegacyTrackId = (typeof LEGACY_TRACK_IDS)[number];
+  // Measured on darwin-arm64 before M11 registration or sim changes (2026-10-19).
+  const DARWIN_FINGERPRINTS: Record<LegacyTrackId, number> = {
+    meadow: 1966540717, canyon: 3341480753, snowpeak: 3467777940, neon: 1211865273,
+    harbor: 574551284, forest: 3540472050, volcano: 1670979859, skyline: 2169329929,
+    dunes: 3978778904, garden: 2518970942, speedway: 423780863, bayou: 4231114521,
+    cavern: 3010529552, temple: 11197763, serpentine: 3716402600, lunar: 3214773241,
+  };
+  const FINGERPRINTS: Record<string, Partial<Record<LegacyTrackId, number>>> = {
+    'darwin-arm64': DARWIN_FINGERPRINTS,
+    // The remaining fourteen linux-x64 pins await CI measurement; keep the original two unchanged.
     'linux-x64': { meadow: 1670404181, neon: 1324528798 },
   };
   const platform = `${process.platform}-${process.arch}`;
 
-  it.each(['meadow', 'neon'] as const)('%s seed 7 stays bit-exact for 1800 ticks', (trackId) => {
+  it('pins every pre-M11 course on darwin-arm64', () => {
+    expect(Object.keys(DARWIN_FINGERPRINTS)).toEqual(LEGACY_TRACK_IDS);
+    for (const digest of Object.values(DARWIN_FINGERPRINTS)) expect(Number.isInteger(digest)).toBe(true);
+  });
+
+  it.each(LEGACY_TRACK_IDS)('%s seed 7 stays bit-exact for 1800 ticks', (trackId) => {
     const state = createRace(7, { trackId, racers: [] });
     for (let i = 0; i < 1800; i++) stepRace(state, state.karts.map((kart) => getAIInput(state, kart.id)));
     const digest = fnv1a(state.karts.map((k) => [k.x, k.z, k.speed, k.trackDistance, k.heading]));

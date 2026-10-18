@@ -566,6 +566,7 @@ describe('protocol layout fingerprint', () => {
       16: 'aa03c454',
       17: 'aa03c454',
       18: 'aa03c454',
+      19: 'aa03c454',
     };
     expect(SNAPSHOT_LAYOUT.slice(0, 2)).toEqual([KART_EFFECT_LAYOUT, ENTITY_KINDS]);
     expect(fingerprint(SNAPSHOT_LAYOUT)).toBe(LAYOUT_FINGERPRINT);
@@ -604,11 +605,15 @@ describe('protocol layout fingerprint', () => {
     // the hello handshake rejects COURSE_FINGERPRINT mismatches ('version'), so older builds cannot mix.
     pinned[17] = 1316474231;
     pinned[18] = 2618543986; // M10-10: measured after all sixteen courses (M10-01–08)
+    pinned[19] = undefined; // M11-00: M11-10 pins this after all four scaffolds are replaced.
     expect(COURSE_FINGERPRINT).toBe(Number.parseInt(fingerprint(definitions), 16));
     // Tripwire: an unpinned version is only allowed while MEADOW scaffolds remain.
-    if (pinned[PROTOCOL_VERSION] === undefined) expect(scaffoldIds().length).toBeGreaterThan(0);
-    expect(pinned[PROTOCOL_VERSION]).toBeTypeOf('number');
-    expect(COURSE_FINGERPRINT).toBe(pinned[PROTOCOL_VERSION]);
+    if (pinned[PROTOCOL_VERSION] === undefined) {
+      expect(PROTOCOL_VERSION).toBe(19);
+      expect(scaffoldIds().length).toBeGreaterThan(0);
+    } else {
+      expect(COURSE_FINGERPRINT).toBe(pinned[PROTOCOL_VERSION]);
+    }
     expect(fingerprint(definitions.map((def, index) => index === 0 ? { ...def, roadHalfWidth: 8 } : def)))
       .not.toBe(fingerprint(definitions));
   });

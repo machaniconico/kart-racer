@@ -23,11 +23,16 @@ import { cavern } from './course/themes/cavern';
 import { temple } from './course/themes/temple';
 import { serpentine } from './course/themes/serpentine';
 import { lunar } from './course/themes/lunar';
+import { summit } from './course/themes/summit';
+import { chasm } from './course/themes/chasm';
+import { velodrome } from './course/themes/velodrome';
+import { spire } from './course/themes/spire';
 import { attachKartEffects, createEntityMesh, entityPose, updateKartEffects, type KartEffectVisuals } from './itemVisuals';
 
 const themes: Readonly<Record<TrackId, CourseTheme>> = {
   meadow, canyon, snowpeak, neon, harbor, forest, volcano, skyline,
   dunes, garden, speedway, bayou, cavern, temple, serpentine, lunar,
+  summit, chasm, velodrome, spire,
 };
 
 const mix = (a: number, b: number, t: number) => a + (b - a) * t;
