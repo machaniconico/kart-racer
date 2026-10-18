@@ -1,12 +1,33 @@
 import { sampleTrack } from './track';
 import { getTrack } from './tracks';
 import { crossedZone, racingLineOffset, surfaceAt } from './surfaces';
-import { decideItemUse, getSteeringError } from './itemAi';
-import { corridorAt, freeIntervalFor, KART_RADIUS } from './corridor';
-import type { InputFrame, RaceState } from './types';
+import { decideItemUse, getAiLineOffset, getSteeringError } from './itemAi';
+import { corridorAt, freeIntervalFor, KART_RADIUS, widthAt } from './corridor';
+import type { InputFrame, KartState, RaceState, SurfaceZone, Track } from './types';
 
 function angleDifference(angle: number): number {
   return Math.atan2(Math.sin(angle), Math.cos(angle));
+}
+
+/** Remove the CPU weave early enough to settle on the launch line, including across the lap seam. */
+function jumpAlignmentError(state: RaceState, track: Track, kart: KartState, lookAhead: number): number | undefined {
+  const hasFall = track.def.surfaces.some(zone => zone.kind === 'fall');
+  let nearest = Infinity;
+  let jump: SurfaceZone | undefined;
+  for (const zone of track.def.surfaces) {
+    if (zone.kind !== 'jump' || (zone.duration === undefined && !hasFall)) continue;
+    const ahead = ((zone.from - kart.trackDistance) % track.length + track.length) % track.length;
+    if (ahead < nearest) { nearest = ahead; jump = zone; }
+  }
+  if (!jump || nearest > Math.max(60, Math.max(0, kart.speed) * 2)) return undefined;
+  const distance = kart.trackDistance + Math.min(lookAhead, nearest);
+  const target = sampleTrack(track, distance);
+  const lineOffset = getAiLineOffset(state, kart, { weave: false, distance });
+  const { roadHalfWidth } = widthAt(track, jump.from);
+  const offset = Math.max(jump.offsetMin ?? -roadHalfWidth, Math.min(jump.offsetMax ?? roadHalfWidth, lineOffset));
+  const desired = Math.atan2(target.x + target.nx * offset - kart.x, target.z + target.nz * offset - kart.z);
+  const travelHeading = kart.heading - kart.driftDirection * Math.min(0.23, kart.driftTime * 0.35);
+  return angleDifference(desired - travelHeading);
 }
 
 /** AI only produces the same input frame consumed by human/network drivers. */
@@ -16,7 +37,9 @@ export function getAIInput(state: RaceState, kartId: number): InputFrame {
   if (!kart) return { steer: 0, throttle: 0, brake: false, drift: false, useItem: false };
   const lookAhead = 7.5 + Math.max(0, kart.speed) * 0.24;
   const target = sampleTrack(track, kart.trackDistance + lookAhead);
-  const error = getSteeringError(state, kart);
+  const alignmentError = track.def.physics !== undefined && kart.finishTime === null && kart.airTime === 0
+    ? jumpAlignmentError(state, track, kart, lookAhead) : undefined;
+  const error = alignmentError ?? getSteeringError(state, kart);
   const surfaceAhead = surfaceAt(track, kart.trackDistance + lookAhead,
     racingLineOffset(track, kart.trackDistance + lookAhead));
   const icyAhead = surfaceAhead === 'ice';
@@ -46,7 +69,7 @@ export function getAIInput(state: RaceState, kartId: number): InputFrame {
     !crossedZone(track, 'pit', kart.trackDistance, kart.trackDistance + 20, kart.lateralOffset);
   const driftWindow = (state.racingTicks + kartId * 61) % 220;
   const approachingJump = crossedZone(track, 'jump', kart.trackDistance, kart.trackDistance + lookAhead + 12, kart.lateralOffset);
-  const drift = kart.airTime === 0 && !approachingJump && !approachingBomb && driftWindow < (state.cpuLevel === 'easy' ? 70 : state.cpuLevel === 'hard' ? 150 : 115) &&
+  const drift = alignmentError === undefined && kart.airTime === 0 && !approachingJump && !approachingBomb && driftWindow < (state.cpuLevel === 'easy' ? 70 : state.cpuLevel === 'hard' ? 150 : 115) &&
     Math.abs(error) > 0.1 && Math.abs(error) < 0.75 && kart.speed > 16 &&
     (kart.driftDirection === 0 || error * kart.driftDirection > 0.1);
   if (drift && kart.driftDirection !== 0) {

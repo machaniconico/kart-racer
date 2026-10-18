@@ -1,5 +1,9 @@
-import { widthAt } from '../corridor';
-import type { Track } from '../types';
+import { getAIInput } from '../ai';
+import { KART_RADIUS, widthAt } from '../corridor';
+import { createRace, stepRace } from '../race';
+import { getTrack } from './index';
+import { CPU_LEVELS } from '../types';
+import type { CpuLevel, RaceState, Track, TrackId } from '../types';
 
 /**
  * Shape measurements for course design checks. Course tests import these to verify the
@@ -59,6 +63,90 @@ export interface CompoundCorner extends Bend {
 
 function wrap(distance: number, length: number): number {
   return ((distance % length) + length) % length;
+}
+
+// Maximum H1 totals across seeds [1, 42, 98765] on the old sixteen courses (8 CPUs × 3 laps).
+// Pinned against the recorded rows in handling.test.ts; shared with the M11 lap harness.
+export const WALL_HITS_MAX_EXISTING = 1;
+export const BAND_HITS_MAX_EXISTING = 1;
+
+export interface CpuLapOptions {
+  readonly seeds?: readonly number[];
+  readonly cpuLevels?: readonly CpuLevel[];
+  readonly maxTicks?: number;
+  /** Maximum falls per seed, assessed separately at each difficulty. Required on courses with fall zones. */
+  readonly fallBudget?: number;
+  /** Total wall hits across seeds at each difficulty; M11-00 measured a legacy maximum of 1. */
+  readonly wallHitBudget?: number;
+  /** Total band hits across seeds at each difficulty; defaults to the legacy H1 maximum. */
+  readonly bandHitBudget?: number;
+  readonly itemBoxes?: boolean;
+}
+
+export interface CpuLapRun {
+  readonly seed: number;
+  readonly state: RaceState;
+  readonly falls: number;
+  readonly wallHits: number;
+  readonly bandHits: number;
+  readonly pitFalls: number;
+  readonly finished: boolean;
+}
+
+export interface CpuLapMetrics {
+  readonly cpuLevel: CpuLevel;
+  readonly runs: readonly CpuLapRun[];
+  readonly falls: number;
+  readonly meanFalls: number;
+  readonly wallHits: number;
+  readonly bandHits: number;
+  readonly passed: boolean;
+}
+
+/** Eight CPUs × three laps, with event counts kept outside the serialized simulation state. */
+export function measureCpuLaps(trackId: TrackId, options: CpuLapOptions = {}): CpuLapMetrics[] {
+  const { seeds = [1, 42, 98765], cpuLevels = CPU_LEVELS, maxTicks = 60 * 420,
+    fallBudget = Infinity, wallHitBudget = WALL_HITS_MAX_EXISTING,
+    bandHitBudget = BAND_HITS_MAX_EXISTING, itemBoxes = true } = options;
+  if (!seeds.length || !cpuLevels.length || !Number.isInteger(maxTicks) || maxTicks < 1 ||
+    !(fallBudget >= 0) || !(wallHitBudget >= 0) || !(bandHitBudget >= 0)) {
+    throw new RangeError('Invalid CPU lap measurement options');
+  }
+  const track = getTrack(trackId);
+  if (options.fallBudget === undefined && track.def.surfaces.some(zone => zone.kind === 'fall')) {
+    throw new RangeError('fallBudget is required for courses with fall zones');
+  }
+  return cpuLevels.map(cpuLevel => {
+    const runs = seeds.map(seed => {
+      const state = createRace(seed, { trackId, racers: [], karts: 8, laps: 3, cpuLevel, itemBoxes });
+      let falls = 0;
+      let wallHits = 0;
+      let bandHits = 0;
+      let pitFalls = 0;
+      for (let tick = 0; tick < maxTicks && state.phase !== 'finished'; tick++) {
+        stepRace(state, state.karts.map(kart => getAIInput(state, kart.id)));
+        for (const event of state.events) {
+          if (event.type === 'fall') { falls++; continue; }
+          if (event.type !== 'hit') continue;
+          if (event.value === 1) { bandHits++; continue; }
+          if (event.value === 2) { pitFalls++; continue; }
+          const kart = state.karts.find(candidate => candidate.id === event.kartId)!;
+          const limit = widthAt(track, kart.trackDistance).wallHalfWidth - KART_RADIUS;
+          if (Math.abs(kart.lateralOffset) >= limit - 0.01) wallHits++;
+        }
+      }
+      const finished = state.phase === 'finished' && state.karts.every(kart =>
+        kart.lap === 3 && kart.lapTimes.length === 3 && kart.finishTime !== null);
+      return { seed, state, falls, wallHits, bandHits, pitFalls, finished };
+    });
+    const falls = runs.reduce((sum, run) => sum + run.falls, 0);
+    const meanFalls = falls / seeds.length;
+    const wallHits = runs.reduce((sum, run) => sum + run.wallHits, 0);
+    const bandHits = runs.reduce((sum, run) => sum + run.bandHits, 0);
+    return { cpuLevel, runs, falls, meanFalls, wallHits, bandHits,
+      passed: runs.every(run => run.finished) && meanFalls <= fallBudget &&
+        wallHits <= wallHitBudget && bandHits <= bandHitBudget };
+  });
 }
 
 /** Signed curvature at every sample (3-point circumcircle in x-z), wrapping at the seam. */

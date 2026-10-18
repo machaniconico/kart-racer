@@ -8,6 +8,7 @@ import { corridorAt, exclusionAt, widthAt } from './corridor';
 import { applySteerAssist } from '../input/assist';
 import { getAiLineOffset } from './itemAi';
 import { islandSplit } from './tracks/features';
+import { BAND_HITS_MAX_EXISTING, WALL_HITS_MAX_EXISTING } from './tracks/shapeMetrics';
 import type { Barrier, RaceState, Track } from './types';
 
 afterEach(() => vi.restoreAllMocks());
@@ -225,9 +226,6 @@ const BASELINE = {
   spire: { version: 'm11-scaffold', meanLap: 68.5011574074074, wallHits: 0, bandHits: 0 },
 } satisfies Record<(typeof tracks.TRACK_IDS)[number], Baseline>;
 const SEEDS = [1, 42, 98765];
-// M11-00 budget: max across the old sixteen H1 normal-CPU runs
-// (8 CPUs × seeds [1, 42, 98765] × 3 laps per course); SERPENT PASS reaches 1.
-const WALL_HITS_MAX_EXISTING = 1;
 
 /**
  * Splits hit events: value 1 (collideCorridor) is a band hit; a hit without a value with the kart
@@ -249,9 +247,10 @@ function countHits(state: RaceState, track: Track): { wall: number; band: number
 }
 
 describe('H1 CPU balance: absolute range and recorded baseline', () => {
-  it('pins the old sixteen-course maximum wall-hit budget for M11', () => {
+  it('pins the old sixteen-course maximum hit budgets shared with the M11 lap harness', () => {
     const legacyRows = tracks.TRACK_IDS.slice(0, 16).map(id => BASELINE[id]);
     expect(Math.max(...legacyRows.map(row => row.wallHits))).toBe(WALL_HITS_MAX_EXISTING);
+    expect(Math.max(...legacyRows.map(row => row.bandHits))).toBe(BAND_HITS_MAX_EXISTING);
   });
 
   it('has a measured row for every course (no pending baselines remain)', () => {
