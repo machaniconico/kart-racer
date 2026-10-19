@@ -2,11 +2,13 @@ import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: ['multiplayer.spec.ts', 'courses.spec.ts', 'courses-m10.spec.ts', 'roulette.spec.ts', 'handling.spec.ts', 'modes.spec.ts', 'network.spec.ts', 'layout.spec.ts'],
+  testMatch: ['multiplayer.spec.ts', 'courses.spec.ts', 'courses-m10.spec.ts', 'courses-m11.spec.ts', 'roulette.spec.ts', 'handling.spec.ts', 'modes.spec.ts', 'network.spec.ts', 'layout.spec.ts'],
   fullyParallel: false,
   // M6-05: 29 tests / 23.95 min on darwin; below the 35 min threshold for workers 2.
   // M10-10: 63 tests / 31.8 min (1911 s wall incl. build) on darwin-arm64, workers 1, retries 0;
   // below the 40 min threshold for workers 2 (and the 45 min threshold for a 60 min CI timeout).
+  // M11-10: 73 tests, all passed / 37.1 min (2228 s wall incl. build)
+  // on darwin-arm64, workers 1; below the 40 min threshold, so workers stays 1.
   workers: 1,
   forbidOnly: !!process.env.CI,
   retries: 0,

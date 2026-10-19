@@ -13,8 +13,8 @@
 // minimum 46.353, wall/grass 0. Roll 0 only: 231 ticks, mean 45.338, minimum
 // 20.010, wall 1 / grass 36 ticks. Identical steering probe measures yaw ×1.3.
 // This high-speed comparison is separate from the ordinary CPU lap benchmark.
-// M11-08 render handoff: 28 meshes / 87,174 geometry triangles; Chromium
-// 1280×720 DPR 1, seed 127 start grid: 124 calls / 93,922 triangles.
+// M11-10 render (point lights → additive beams): 29 meshes / 87,374 geometry triangles; Chromium
+// 1280×720 DPR 1, seed 127 start grid: 125 calls / 94,122 triangles.
 import * as THREE from 'three';
 import { describe, expect, it, vi } from 'vitest';
 import { buildCourse } from '../../render/course/buildCourse';
@@ -116,22 +116,20 @@ describe('WALL BOWL', () => {
     try {
       const road = course.group.getObjectByName('road') as THREE.Mesh<THREE.BufferGeometry, THREE.MeshLambertMaterial>;
       expect(road.material.color.getHex()).toBe(velodromePalette.timber);
-      const lights: THREE.PointLight[] = [];
-      course.group.traverse(object => { if (object instanceof THREE.PointLight) lights.push(object); });
-      expect(lights).toHaveLength(6);
+      // M8 shader reuse: a scene light would change the light count and so every lit program.
+      const lights: THREE.Light[] = [];
+      course.group.traverse(object => { if (object instanceof THREE.Light) lights.push(object); });
+      expect(lights).toHaveLength(0);
+      expect(road.material.emissiveIntensity).toBeGreaterThan(0);
       const lamps = course.group.getObjectByName('velodrome:floodlights') as THREE.InstancedMesh;
       expect((lamps.material as THREE.MeshLambertMaterial).emissiveIntensity).toBeGreaterThan(1);
-      // Raised floodlights must reach the high bowls from above the tilted road,
-      // not just glow against the sky. Test the Lambert normal dot light vector.
-      for (let d = 0; d < track.length; d += 1) {
-        if (rollAt(track, d) < 0.75) continue;
-        const p = sampleTrack(track, d), roll = rollAt(track, d);
-        const normal = new THREE.Vector3(-p.nx * Math.sin(roll), 1, -p.nz * Math.sin(roll)).normalize();
-        expect(lights.some(light => {
-          const direction = light.position.clone().sub(new THREE.Vector3(p.x, p.y, p.z));
-          return direction.length() < light.distance && direction.dot(normal) > 0;
-        }), `lit bowl at ${d}m`).toBe(true);
-      }
+      // One unlit additive beam per floodlight reaches down to the track centre (bowls included).
+      const beams = course.group.getObjectByName('velodrome:light-beams') as THREE.Mesh;
+      expect(beams.material).toBeInstanceOf(THREE.MeshBasicMaterial);
+      expect((beams.material as THREE.MeshBasicMaterial).blending).toBe(THREE.AdditiveBlending);
+      expect(beams.geometry.index!.count / 3).toBe(theme.budget.trees * 10);
+      beams.geometry.computeBoundingBox();
+      expect(beams.geometry.boundingBox!.min.y).toBeLessThan(Math.min(...track.samples.map(s => s.y)) + 1);
       const counts = {
         'light-towers': theme.budget.trees, floodlights: theme.budget.trees,
         seating: theme.budget.rocks, canopies: theme.budget.flowers, 'neon-ribbons': theme.budget.flowers,

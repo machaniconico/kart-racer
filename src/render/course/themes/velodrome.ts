@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { sampleTrack } from '../../../sim/track';
 import type { Track } from '../../../sim/types';
 import type { SceneryBudget } from '../CourseTheme';
@@ -23,14 +24,22 @@ export const velodrome: CourseTheme = {
   },
   fog: { color: 0x281724, near: 160, far: 700 },
   lighting: {
-    hemisphere: { sky: 0xc9b8ce, ground: 0x3c2932, intensity: 0.8 },
-    sun: { color: 0xffe3a1, intensity: 0.7, position: [-130, 170, -100], offset: [-100, 140, -80] },
+    hemisphere: { sky: 0xffd9a8, ground: 0x4a3236, intensity: 1.05 },
+    sun: { color: 0xffe3a1, intensity: 0.9, position: [-130, 170, -100], offset: [-100, 140, -80] },
   },
   signFractions: [0.20, 0.39, 0.69, 0.89],
   // Existing budget slots count lighting towers, seating tiers and canopies.
   budget: { trees: 20, rocks: 60, flowers: 20 },
   buildProps,
-  buildLandmarks() {},
+  buildLandmarks(_track, scene) {
+    // Floodlit timber without scene lights: buildCourse owns the road material, and an emissive
+    // tint is a uniform, so the course keeps the shared shader programs (no light-count variant).
+    const road = scene.getObjectByName('road') as THREE.Mesh<THREE.BufferGeometry, THREE.MeshLambertMaterial>;
+    if (road) {
+      road.material.emissive.setHex(velodromePalette.amber);
+      road.material.emissiveIntensity = 0.12;
+    }
+  },
 };
 
 function buildProps(track: Track, scene: THREE.Group, budget: SceneryBudget): void {
@@ -38,7 +47,7 @@ function buildProps(track: Track, scene: THREE.Group, budget: SceneryBudget): vo
     material(velodromePalette.steel), budget.trees);
   const lamps = new THREE.InstancedMesh(new THREE.BoxGeometry(8, 1.5, 2),
     new THREE.MeshLambertMaterial({ color: velodromePalette.lamp,
-      emissive: velodromePalette.lamp, emissiveIntensity: 2 }), budget.trees);
+      emissive: velodromePalette.lamp, emissiveIntensity: 2, flatShading: true }), budget.trees);
   const seats = new THREE.InstancedMesh(new THREE.BoxGeometry(6, 1, 38),
     material(0xffffff), budget.rocks);
   const roofs = new THREE.InstancedMesh(new THREE.BoxGeometry(21, 0.8, 42),
@@ -61,19 +70,30 @@ function buildProps(track: Track, scene: THREE.Group, budget: SceneryBudget): vo
   };
   // Positive offset is outside both bowls. All footprints start beyond the
   // wall + 22 m terrain ribbon, on the level stadium concourse at y = -1.35.
+  // Unlit additive beams from every floodlight to the track centre. Scene lights would change
+  // the light count and so the shader variant of every lit material (karts included).
+  const beam = new THREE.ConeGeometry(9, 1, 10, 1, true).translate(0, -0.5, 0);
+  const beams: THREE.BufferGeometry[] = [];
+  const down = new THREE.Vector3(0, -1, 0), target = new THREE.Vector3(), direction = new THREE.Vector3();
   for (let i = 0; i < budget.trees; i++) {
     const d = (i + 0.5) / budget.trees * track.length;
     place(masts, i, d, 43, 30);
     place(lamps, i, d, 43, 60);
-    // Six unshadowed stadium lights illuminate the timber; the other fixtures
-    // share the emissive mesh. This keeps mobile shader/light costs bounded.
-    if (i % 4 === 0 || i === budget.trees - 1) {
-      const light = new THREE.PointLight(velodromePalette.lamp, 14000, 200, 2);
-      light.name = 'velodrome:stadium-light';
-      light.position.copy(transform.position);
-      scene.add(light);
-    }
+    const point = sampleTrack(track, d);
+    target.set(point.x, point.y, point.z);
+    direction.subVectors(target, transform.position);
+    const length = direction.length();
+    beams.push(beam.clone().applyMatrix4(new THREE.Matrix4().compose(transform.position,
+      new THREE.Quaternion().setFromUnitVectors(down, direction.normalize()),
+      new THREE.Vector3(1, length, 1))));
   }
+  beam.dispose();
+  const light = new THREE.Mesh(mergeGeometries(beams)!, new THREE.MeshBasicMaterial({
+    color: velodromePalette.lamp, transparent: true, opacity: 0.09, blending: THREE.AdditiveBlending,
+    depthWrite: false, side: THREE.DoubleSide, forceSinglePass: true, fog: false }));
+  for (const part of beams) part.dispose();
+  light.name = 'velodrome:light-beams';
+  scene.add(light);
   for (let i = 0; i < budget.rocks; i++) {
     const row = i % 3;
     const d = (Math.floor(i / 3) + 0.5) / Math.ceil(budget.rocks / 3) * track.length;

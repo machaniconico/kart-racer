@@ -176,7 +176,7 @@ for (const viewport of [{ width: 360, height: 640 }, { width: 390, height: 844 }
         await expectTouchTargets(page.locator('.cpu-option'), 3);
       }
       if (mode === 'gp') {
-        await expectTouchTargets(page.locator('.cup-option'), 4);
+        await expectTouchTargets(page.locator('.cup-option'), 5);
         for (const name of [/ZENITH CUP/, /ECLIPSE CUP/]) {
           await page.getByRole('radio', { name }).check();
           await expect(page.getByRole('radio', { name })).toBeChecked();

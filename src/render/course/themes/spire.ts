@@ -29,7 +29,10 @@ function buildProps(track: Track, scene: THREE.Group, budget: CourseTheme['budge
   const geometry = new THREE.BoxGeometry(1, 1, 1);
   const columns = new THREE.InstancedMesh(geometry, material(0xd8e8e5), budget.trees);
   const bases = new THREE.InstancedMesh(geometry, material(0x547d78), budget.rocks);
-  const lights = new THREE.InstancedMesh(geometry, material(0x23c9be), budget.flowers);
+  // Unlit beacons share meadow's instanced MeshBasicMaterial program (M8 reuse): spire precedes the
+  // meadow return in the course order, so a lobby switch back to meadow compiles nothing new.
+  // 0x1cad9c is the mid shade of the former lit Lambert 0x23c9be faces under the spire sun.
+  const lights = new THREE.InstancedMesh(geometry, new THREE.MeshBasicMaterial({ color: 0x1cad9c }), budget.flowers);
   columns.name = 'spire:columns'; bases.name = 'spire:foundations'; lights.name = 'spire:beacons';
   for (const mesh of [columns, bases, lights]) {
     const count = mesh.count;

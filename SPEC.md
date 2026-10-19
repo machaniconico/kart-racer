@@ -1197,6 +1197,11 @@ M8 から送られた保守項目を片づけた。wire・`PROTOCOL_VERSION`・`
 - `GuestSession.latenessStats`（適応遅延時のみ。最後のフレームの `now` を使う）と、デバッグブリッジの `net.jitterStats`。`GuestSession` の getter 名を `jitterStats` にしなかったのは、その文字列を本番バンドルに入れないため（コミットメッセージ）。
 - `network.spec` T3 の基準 B は、劣化前に 100 ms 間隔で取った 5 標本の中央値。回復条件は不変。単独 2 回通過（B = 120.5 / 121.9 ms）。5 s 時点でも標本はまだ下降中だった（M10 送り）。推定器そのものは変えていない。実機 2 台の lateness を取ってから見直す。
 
+### M11-10 の E2E と golden
+- `e2e/courses-m11.spec.ts`（6 テスト）: 4 つの極端コースそれぞれの 3 周完走・描画予算・start-grid と minimap の golden、CHASM LEAP の落下リスポーン（respawnAt 付近、黒画面なし、2 秒以内に操作復帰）、EXTREME CUP（5 カップ目）の 4 レース。SKY SPIRE の Chromium 実測は 133 draw / 78,424 tris（`RENDER_BASELINE` に反映）。
+- golden: darwin は新 8 枚と `title-twenty-courses.png`。linux は未採取で、`goldens-linux.yml` の `-g` に 4 コース名と `twenty-course picker` を追加済み。
+- 全体: 73 テスト、37.2 分（2,232 s）、workers 1。`npm test`: 66 ファイル / 2,739 テスト（342 s）。
+
 ### 基準の更新（動いた pin / 動かない pin）
 | pin | 状態 |
 | --- | --- |

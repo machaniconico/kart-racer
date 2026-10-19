@@ -80,12 +80,10 @@ const RENDER_BASELINE: Record<TrackId, RenderBaseline> = {
   lunar: { drawCalls: 140, triangles: 79_830, meshes: 45 },
   // M11-10 / v19: meshes from buildCourse in this file (darwin-arm64); drawCalls / triangles are Chromium
   // 1280x720 DPR 1, seed 127, start-grid frames recorded in each course's test header.
-  // spire's drawCalls / triangles are NOT yet measured in Chromium (still the MEADOW values); only its
-  // meshes are enforced here, and the e2e budget story must replace them.
   summit: { drawCalls: 126, triangles: 101_126, meshes: 32 },
   chasm: { drawCalls: 130, triangles: 72_538, meshes: 34 },
-  velodrome: { drawCalls: 124, triangles: 93_922, meshes: 28 },
-  spire: { drawCalls: 125, triangles: 107_048, meshes: 47 },
+  velodrome: { drawCalls: 125, triangles: 94_122, meshes: 29 },
+  spire: { drawCalls: 133, triangles: 78_424, meshes: 47 },
 };
 
 // Only the browser's text drawing context is supplied. All three objects and

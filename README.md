@@ -24,7 +24,7 @@ npm run preview    # ビルド済み dist/ を確認
 npm run e2e         # E2E（Playwright。オンライン対戦と 20 コース。下記）
 ```
 
-`npm run e2e` は `e2e/multiplayer.spec.ts` と `e2e/courses.spec.ts` を順に実行します。`courses.spec.ts` と `courses-m10.spec.ts` は M10 までの 16 コースそれぞれで選択から 3 周の完走、コース別ベスト、描画負荷を確認します（M11 の 4 コースは `courses-m11.spec.ts` で追加予定）。`multiplayer.spec.ts` は 2 つのブラウザコンテキストで実際にルームを作って参加します。**公開の PeerJS ブローカー**を使うため、ブローカーの状態や回線によって不安定な場合があります。CI（`.github/workflows/e2e.yml`）では手動実行（`workflow_dispatch`）のみです。初回は `npx playwright install chromium` が必要です。
+`npm run e2e` は `e2e/multiplayer.spec.ts` と `e2e/courses.spec.ts` を順に実行します。`courses.spec.ts`・`courses-m10.spec.ts`・`courses-m11.spec.ts` は 20 コースそれぞれで選択から 3 周の完走、コース別ベスト、描画負荷を確認します。`courses-m11.spec.ts` は加えて CHASM LEAP の落下リスポーン（黒画面なし、2 秒以内に操作復帰）と EXTREME CUP（5 カップ目）の 4 レースを確認します。`multiplayer.spec.ts` は 2 つのブラウザコンテキストで実際にルームを作って参加します。**公開の PeerJS ブローカー**を使うため、ブローカーの状態や回線によって不安定な場合があります。CI（`.github/workflows/e2e.yml`）では手動実行（`workflow_dispatch`）のみです。初回は `npx playwright install chromium` が必要です。
 
 **視覚テスト（スクリーンショットの golden）**: `courses.spec.ts` の画面比較は platform ごとのディレクトリ（`e2e/__screenshots__/darwin/` に 27 枚）の golden と照合します。その platform の golden が無ければ `golden-skipped` の注釈を付けて比較だけを省き、他の検査は実行します（Linux は golden を追加するまでこの扱い）。閾値は `threshold 0.2`、`maxDiffPixels 0` です。描画負荷の drawCalls / triangles は platform を問わず完全一致を見ます。
 
@@ -197,7 +197,7 @@ src/
 .github/workflows/
   deploy.yml  # main への push で Pages に公開
   e2e.yml     # オンライン対戦 E2E（手動実行のみ）
-e2e/          # Playwright。multiplayer.spec.ts（実 PeerJS ブローカー）と courses.spec.ts・courses-m10.spec.ts（M10 までの 16 コースの選択と 3 周。M11 の 4 コースは courses-m11.spec.ts で追加予定）
+e2e/          # Playwright。multiplayer.spec.ts（実 PeerJS ブローカー）と courses.spec.ts・courses-m10.spec.ts・courses-m11.spec.ts（20 コースの選択と 3 周、落下リスポーン、EXTREME CUP）
 ```
 
 シミュレーションは `stepRace(state, inputs)` で 1 tick 進みます。`RaceState` に RNG 状態を含むため、同じ seed と tick ごとの `InputFrame[]` で再現できます。`JSON.parse(JSON.stringify(state))` したスナップショットからも継続可能です。CPU も入力を作るだけで、物理を直接上書きしません。ネットワーク入力もこの境界で差し替わります。
