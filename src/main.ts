@@ -141,6 +141,11 @@ let recorder: GhostRecorder | null = null;
 let lastCheckpointTick = -1;
 let ghost: GhostPlayer | null = null;
 let ghostPrevious: RenderSnapshot | null = null;
+// Fall respawns on every tick of the latest frame that stepped (state.events only holds the last
+// tick), kept through frames that run no tick. Valid only with the `previous` they were taken for.
+let respawned = new Set<number>();
+let respawnedFor: RenderSnapshot | null = null;
+let ghostRespawned = false;
 let ghostRecordTime: number | null = null;
 /** Invalidates a pending create/join when the player cancels or leaves. */
 let netGeneration = 0;
@@ -497,6 +502,7 @@ function stepOnce(inputs: InputFrame[]): void {
   if (ghost) {
     ghostPrevious = captureRenderSnapshot(ghost.state);
     ghost.step();
+    if (ghost.state.events.some((event) => event.type === 'fall' && event.kartId === 0)) ghostRespawned = true;
   }
   // Every tick: HostSession counts ticks to schedule snapshots.
   if (mode === 'host') host?.afterTick(state);
@@ -788,6 +794,8 @@ function frame(now: number): void {
         state = view.state;
         previous = view.previous;
         guestAlpha = view.alpha;
+        respawned = new Set(view.respawned);
+        respawnedFor = previous;
         audio.playEvents(state.events);
         audio.update(state);
         ui.update(state);
@@ -799,13 +807,17 @@ function frame(now: number): void {
     if (waiting) host?.frame();
     accumulator = waiting ? 0 : accumulator + elapsed;
     // No wall-clock variable step enters sim. Long background frames are paused/clamped.
+    let stepped = false;
     while (accumulator >= FIXED_DT && state.phase !== 'finished') {
+      if (!stepped) { respawned = new Set(); ghostRespawned = false; stepped = true; }
       previous = captureRenderSnapshot(state);
       const inputs: InputFrame[] = state.karts.map((kart) => inputSources[kart.id].sample(state, kart.id));
       stepOnce(inputs);
+      for (const event of state.events) if (event.type === 'fall') respawned.add(event.kartId);
       audio.playEvents(state.events);
       accumulator -= FIXED_DT;
     }
+    if (stepped) respawnedFor = previous;
     audio.update(state);
     ui.update(state);
     if (state.phase === 'finished') finish();
@@ -820,8 +832,10 @@ function frame(now: number): void {
     const alpha = mode === 'guest' ? guestAlpha : accumulator / FIXED_DT;
     const drawAlpha = screen === 'race' && !paused ? alpha : 1;
     const showGhost = ghost && !ghost.diverged && screen === 'race';
-    renderer.updateGhost(showGhost ? ghost!.state.karts[0]! : null, showGhost ? ghostPrevious?.karts[0] ?? null : null, drawAlpha, paused ? 0 : elapsed);
-    renderer.update(state, previous, drawAlpha, paused ? 0 : elapsed, rendererScreen());
+    renderer.updateGhost(showGhost ? ghost!.state.karts[0]! : null, showGhost ? ghostPrevious?.karts[0] ?? null : null, drawAlpha, paused ? 0 : elapsed,
+      ghostRespawned && respawnedFor === previous);
+    renderer.update(state, previous, drawAlpha, paused ? 0 : elapsed, rendererScreen(),
+      respawnedFor === previous ? respawned : new Set());
   }
   frameId = requestAnimationFrame(frame);
 }

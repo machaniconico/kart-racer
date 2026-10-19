@@ -34,7 +34,8 @@ export interface GuestSessionOptions {
   renderDelay?: 'fixed' | 'adaptive';
 }
 
-export interface GuestFrame { state: RaceState; previous: RenderSnapshot; alpha: number }
+/** `respawned`: karts drawn at a respawn this frame (interpolation or prediction jumped); GameRenderer cuts to them. */
+export interface GuestFrame { state: RaceState; previous: RenderSnapshot; alpha: number; respawned: number[] }
 export type GuestCloseReason = 'host_lost' | 'left' | RejectReason | TransportErrorCode;
 
 /** Call frame every render and tick once per fixed 60Hz step. */
@@ -75,6 +76,8 @@ export class GuestSession {
   private latestTick = 0;
   private eventTick = -1;
   private pendingEvents: RaceEvent[] = [];
+  /** Predictor.localFallCount the last frame() consumed: a change is a pending local cut, reported once. */
+  private consumedFalls = 0;
   private lastSnapshotAt = 0;
   private lastHostSeenAt = 0;
   private graceUntil = 0;
@@ -251,6 +254,7 @@ export class GuestSession {
     this.snapshots.push(initial);
     if (this.prediction) {
       this.predictor = new Predictor(initial, this.slot);
+      this.consumedFalls = 0;
       this.predictor.setRoster(this.players);
       this.predictionAt = this.visualAt = now;
     }
@@ -352,6 +356,12 @@ export class GuestSession {
         break;
       case 'events':
         if (!this.activeRace || message.raceId !== this.raceId || message.tick < this.eventTick) return;
+        for (const event of message.events) {
+          if (event.type !== 'fall') continue;
+          this.snapshots.markFall(event.kartId, message.tick);
+          // The batch covers the host ticks since the previous one.
+          if (event.kartId === this.slot) this.predictor?.markFall(this.eventTick, message.tick);
+        }
         this.eventTick = message.tick;
         this.pendingEvents.push(...message.events);
         break;
@@ -472,7 +482,7 @@ export class GuestSession {
     if (this.phase === 'results' && this.result) {
       const state = structuredClone(this.result);
       state.events = this.pendingEvents.splice(0);
-      return { state, previous: captureRenderSnapshot(state), alpha: 1 };
+      return { state, previous: captureRenderSnapshot(state), alpha: 1, respawned: [] };
     }
     if (!this.activeRace) return null;
     let renderHostTime: number;
@@ -491,6 +501,15 @@ export class GuestSession {
     }
     let alpha = 1;
     const previous = captureRenderSnapshot(state);
+    const respawned = new Set(this.snapshots.respawned);
+    // A local respawn (predicted, replayed or host-reported) since the last reported one. It is
+    // reported by this frame whichever pose source shows the local kart (prediction, or the
+    // interpolation pair after a re-anchor), so it is consumed exactly once and never swallowed.
+    const falls = this.predictor?.localFallCount ?? 0;
+    const localCut = falls !== this.consumedFalls;
+    this.consumedFalls = falls;
+    if (this.predictor && this.inputTick !== null) respawned.delete(this.slot);
+    if (localCut) respawned.add(this.slot);
     if (this.predictor && this.inputTick !== null) {
       this.decayPrediction(now);
       const local = this.predictor.kart;
@@ -508,6 +527,6 @@ export class GuestSession {
     // Prediction events are discarded inside Predictor; only reliable host
     // events feed audio/HUD, exactly once even when several frames are rendered.
     state.events = this.pendingEvents.splice(0);
-    return { state, previous, alpha };
+    return { state, previous, alpha, respawned: [...respawned] };
   }
 }

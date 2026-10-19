@@ -697,3 +697,188 @@ describe('GuestSession prediction', () => {
     host.close();
   });
 });
+
+describe('Predictor respawns (guest-local)', () => {
+  const chasmTrack = getTrack('chasm');
+  const ravine = chasmTrack.def.surfaces.find(zone => zone.kind === 'fall')!;
+  const straight = quantizeInput({ ...NEUTRAL_INPUT, throttle: 1 });
+  function placed(tick: number, trackId: TrackId, distance: number, extra: Partial<RaceState['karts'][number]> = {}): Snapshot {
+    const value = snapshot(tick, trackId);
+    const track = getTrack(trackId);
+    const p = sampleTrack(track, distance);
+    Object.assign(value.state.karts[1], { x: p.x, y: p.y, z: p.z, heading: Math.atan2(p.tx, p.tz),
+      trackDistance: distance, lateralOffset: 0, speed: 30, airTime: 0, ...extra });
+    return value;
+  }
+
+  it('counts a predicted fall once (not again on replay), drops an outstanding offset and never blends from the lip', () => {
+    const predictor = new Predictor(placed(180, 'chasm', ravine.from - 3), 1);
+    predictor.recordInput(181, straight);
+    predictor.advanceTo(181);
+    // The host saw the kart 0.6 m to the side: a small correction eases out through the visual offset.
+    const host = new Predictor(placed(180, 'chasm', ravine.from - 3), 1);
+    host.advanceTo(181);
+    const shifted = host.state;
+    shifted.karts[1].x += 0.6;
+    predictor.reconcile({ ...placed(181, 'chasm', 0), state: shifted });
+    expect(Math.hypot(predictor.visualOffset.x, predictor.visualOffset.z)).toBeGreaterThan(0.3);
+    expect(predictor.localFallCount).toBe(0);
+    predictor.advanceTo(195);
+    expect(predictor.localFallCount).toBe(1);
+    expect(predictor.kart.trackDistance).toBeCloseTo(ravine.respawnAt!, 0);
+    expect(predictor.visualOffset).toEqual({ x: 0, y: 0, z: 0 });
+    // The host confirms the same fall, in the replay and in its events batch: still one respawn.
+    const hostLine = new Predictor({ ...placed(181, 'chasm', 0), state: shifted }, 1);
+    hostLine.advanceTo(188);
+    predictor.markFall(183, 189);
+    predictor.reconcile({ ...placed(188, 'chasm', 0), state: hostLine.state });
+    expect(predictor.localFallCount).toBe(1);
+    expect(predictor.visualOffset).toEqual({ x: 0, y: 0, z: 0 });
+  });
+
+  it('a large correction without a fall is not a cut (legacy multiplayer behaviour)', () => {
+    const predictor = new Predictor(placed(180, 'meadow', 100), 1);
+    predictor.advanceTo(184);
+    predictor.reconcile(placed(182, 'meadow', 112));
+    expect(predictor.lastCorrectionMetres).toBeGreaterThan(5);
+    expect(predictor.localFallCount).toBe(0);
+  });
+
+  /** A guest predicting slot 1 over a hand-driven wire, with snapshots placed relative to its clock. */
+  async function guestOn(trackId: TrackId, first: (tick: number) => Snapshot) {
+    const network = new MockTransport({ latencyMs: 0 });
+    const host = await network.host('AB2X');
+    let peer!: PeerLink;
+    host.onJoin(link => { peer = link; });
+    const guest = new GuestSession(network, { now: () => network.now, prediction: true });
+    await guest.join('AB2X');
+    const initial = first(180);
+    const players = roster(initial.state);
+    const send = (data: Parameters<typeof encodeControlMessage>[0]) => peer.send('reliable', encodeControlMessage(data));
+    send({ type: 'welcome', trackId, laps: 3, slot: 1, roster: players, hostTime: 0 });
+    send({ type: 'race_start', trackId, laps: 3, raceId: 1, seed: 431, roster: players, startAtHostTime: 0 });
+    peer.send('unreliable', encodeSnapshot(initial.state, 1, network.now));
+    network.advance(0);
+    const snapshotNow = (value: Snapshot) => peer.send('unreliable', encodeSnapshot(value.state, 1, network.now));
+    return { network, host, guest, send, snapshotNow };
+  }
+
+  it.each([
+    ['together: event and snapshot, tick, frame', 'together'],
+    ['event first: event, frame, snapshot, tick, frame', 'event-first'],
+    ['snapshot first: snapshot, tick, frame, event, frame', 'snapshot-first'],
+  ] as const)('reports a host-only short summit ridge respawn exactly when the kart moves (%s)', async (_name, order) => {
+    const summitTrack = getTrack('summit');
+    const band = summitTrack.def.surfaces.find(zone => zone.kind === 'fall')!;
+    // Predicted: centred on the ridge 4 m past the respawn point, so the prediction never falls.
+    const h = await guestOn('summit', tick => placed(tick, 'summit', band.respawnAt! + 4));
+    try {
+      h.guest.tick(straight);
+      expect(h.guest.frame()!.respawned).not.toContain(1);
+      const tick = h.guest.predictedState!.tick;
+      const at = () => h.guest.frame()!;
+      const event = () => { h.send({ type: 'events', raceId: 1, tick, events: [{ type: 'fall', kartId: 1 }] }); h.network.advance(0); };
+      // The host's kart slid into the band: its snapshot already shows the respawn, 4+ m back.
+      const snapshotThenTick = () => {
+        h.snapshotNow(placed(tick, 'summit', band.respawnAt!, { speed: 0, spinTime: 1.5 }));
+        h.network.advance(TICK_MS);
+        h.guest.tick(straight); // Reconciles onto the respawn, then advances a tick.
+      };
+      const point = sampleTrack(summitTrack, band.respawnAt!);
+      const before = h.guest.predictedState!.karts[1]!;
+      let cut: ReturnType<typeof at>;
+      if (order === 'together') {
+        h.send({ type: 'events', raceId: 1, tick, events: [{ type: 'fall', kartId: 1 }] });
+        snapshotThenTick();
+        cut = at();
+      } else if (order === 'event-first') {
+        event();
+        // The kart has not moved yet: no cut may be spent on the old predicted position.
+        const early = at();
+        expect(early.respawned).not.toContain(1);
+        expect(Math.hypot(before.x - point.x, before.z - point.z)).toBeGreaterThan(3.5);
+        snapshotThenTick();
+        cut = at();
+      } else {
+        snapshotThenTick();
+        at(); // The reconcile moved the kart before the host's event arrived.
+        event();
+        cut = at();
+      }
+      expect(cut.respawned).toContain(1);
+      const kart = cut.state.karts.find(entry => entry.id === 1)!;
+      expect(Math.hypot(kart.x - point.x, kart.z - point.z)).toBeLessThan(0.5);
+      expect(h.guest.visualOffset).toEqual({ x: 0, y: 0, z: 0 });
+      expect(cut.previous.karts[1]).toEqual({ x: kart.x, y: kart.y, z: kart.z, heading: kart.heading });
+      expect(at().respawned).not.toContain(1); // Consumed exactly once.
+    } finally {
+      h.host.close();
+    }
+  });
+
+  it('reports a pending host fall once after a re-anchor (> 40 ticks) onto post-fall snapshots, then nothing', async () => {
+    const summitTrack = getTrack('summit');
+    const band = summitTrack.def.surfaces.find(zone => zone.kind === 'fall')!;
+    const h = await guestOn('summit', tick => placed(tick, 'summit', band.respawnAt! + 4));
+    try {
+      h.guest.tick(straight);
+      expect(h.guest.frame()!.respawned).not.toContain(1);
+      const tick = h.guest.predictedState!.tick;
+      // The fall's event arrives, then the link stalls: no snapshot yet, so the cut stays pending.
+      h.send({ type: 'events', raceId: 1, tick, events: [{ type: 'fall', kartId: 1 }] });
+      h.network.advance(0);
+      expect(h.guest.frame()!.respawned).not.toContain(1);
+      // The backlog lands at once, all after the respawn and the newest 60 ticks on: a re-anchor.
+      for (const later of [3, 6, 30, 45, 60]) {
+        h.snapshotNow(placed(tick + later, 'summit', band.respawnAt! + later * 0.05, { speed: 3, spinTime: 1.5 }));
+      }
+      // Render after the backlog: frame() itself reconciles, re-anchors (dropping the input tick) and
+      // shows the local kart from an interpolation pair that is entirely post-fall.
+      h.network.advance(300);
+      const cut = h.guest.frame()!;
+      expect(h.guest.predictedState!.tick).toBe(tick + 60);
+      expect(cut.respawned).toEqual([1]);
+      const kart = cut.state.karts.find(entry => entry.id === 1)!;
+      expect(Math.hypot(kart.x - sampleTrack(summitTrack, band.respawnAt!).x, kart.z - sampleTrack(summitTrack, band.respawnAt!).z))
+        .toBeLessThan(4);
+      expect(h.guest.frame()!.respawned).toEqual([]);
+    } finally {
+      h.host.close();
+    }
+  });
+
+  it('a re-anchor without any fall is not a cut (legacy multiplayer behaviour)', async () => {
+    const h = await guestOn('meadow', tick => placed(tick, 'meadow', 100));
+    try {
+      h.guest.tick(straight);
+      h.guest.frame();
+      const tick = h.guest.predictedState!.tick;
+      for (const later of [3, 30, 60]) h.snapshotNow(placed(tick + later, 'meadow', 100 + later * 0.5));
+      h.network.advance(300);
+      expect(h.guest.frame()!.respawned).toEqual([]);
+      expect(h.guest.predictedState!.tick).toBe(tick + 60);
+    } finally {
+      h.host.close();
+    }
+  });
+
+  it('reports a fall found in a reconcile replay: tick N, snapshot, tick N+1 (replay falls), frame', async () => {
+    const h = await guestOn('chasm', tick => placed(tick, 'chasm', ravine.from - 6));
+    try {
+      h.guest.tick(straight);
+      expect(h.guest.frame()!.respawned).not.toContain(1);
+      const tick = h.guest.predictedState!.tick;
+      // The host has the kart 5 m further on, right at the lip: the replay to N+1 drops it in.
+      h.snapshotNow(placed(tick - 1, 'chasm', ravine.from - 0.2));
+      h.network.advance(TICK_MS);
+      h.guest.tick(straight);
+      const cut = h.guest.frame()!;
+      expect(cut.respawned).toContain(1);
+      expect(cut.state.karts.find(entry => entry.id === 1)!.trackDistance).toBeCloseTo(ravine.respawnAt!, 0);
+      expect(h.guest.visualOffset).toEqual({ x: 0, y: 0, z: 0 });
+      expect(h.guest.frame()!.respawned).not.toContain(1);
+    } finally {
+      h.host.close();
+    }
+  });
+});

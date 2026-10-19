@@ -8,7 +8,7 @@ import { COURSE_GRACE_MS, GuestSession, LOBBY_TIMEOUT_MS } from './guestSession'
 import { HostSession } from './hostSession';
 import { InputBuffer, NEUTRAL_INPUT, unpack } from './inputBuffer';
 import type { InputPacket } from './inputBuffer';
-import { interpolateState, MAX_EXTRAPOLATION_MS, SnapshotBuffer } from './interpolation';
+import { interpolateState, MAX_EXTRAPOLATION_MS, respawnedBetween, SnapshotBuffer } from './interpolation';
 import { MockTransport } from './mockTransport';
 import type { MockTransportOptions } from './mockTransport';
 import { encodeControlMessage, PacketKind, parseControlMessage, PROTOCOL_VERSION } from './protocol';
@@ -1109,5 +1109,56 @@ describe('Guest lobby liveness (M8-02)', () => {
     expect(closedAt! - host.startAtHostTime).toBeGreaterThanOrEqual(5000);
     expect(closedAt! - host.startAtHostTime).toBeLessThan(5000 + 20 + 10);
     host.close();
+  });
+});
+
+describe('respawn discontinuities (remote karts)', () => {
+  it('shows the newer snapshot for a kart with a host fall marker, even for a short respawn', () => {
+    const from = snapshot(3, 1000, 10);
+    const to = snapshot(6, 1050, 10);
+    to.state.karts[2].x = from.state.karts[2].x - 5; // Respawned 5 m back: inside the displacement backstop.
+    to.state.karts[3].x = from.state.karts[3].x + 40; // No marker, but far beyond any 50 ms of travel.
+    const buffer = new SnapshotBuffer();
+    buffer.push(from);
+    buffer.push(to);
+    expect(buffer.sample(1025)!.karts[2].x).toBeCloseTo(9.5); // Without the marker: blended.
+    buffer.markFall(2, 6);
+    const view = buffer.sample(1025)!;
+    expect(view.karts[2].x).toBe(to.state.karts[2].x);
+    expect(view.karts[3].x).toBe(to.state.karts[3].x);
+    expect(view.karts[1].x).toBe(11);
+    expect([...buffer.respawned].sort()).toEqual([2, 3]);
+    // A marker outside the pair (an earlier batch) does not cut it.
+    expect(respawnedBetween(from, to, [{ kartId: 4, tick: 3 }, { kartId: 5, tick: 7 }]).has(4)).toBe(false);
+    expect(interpolateState(from, to, 1025, to, new Set([1])).karts[1].x).toBe(11);
+  });
+
+  it('GuestSession marks host fall events and reports the cut in its frame', async () => {
+    const h = await setup({}, 5000);
+    h.pump(500);
+    h.start(1, 5000);
+    const from = snapshot(27, 5450, 10);
+    const to = snapshot(30, 5500, 10);
+    to.state.karts[2].x = from.state.karts[2].x - 5;
+    h.send({ type: 'events', raceId: 1, tick: 30, events: [{ type: 'fall', kartId: 2 }] });
+    h.sendSnapshot(from);
+    h.sendSnapshot(to);
+    h.network.advance(0);
+    h.network.advance(75);
+    const frame = h.guest.frame(h.network.now)!;
+    expect(frame.state.karts[2].x).toBeCloseTo(to.state.karts[2].x);
+    expect(frame.state.karts[1].x).toBeCloseTo(11);
+    expect(frame.respawned).toEqual([2]);
+    // The host event still reaches audio/HUD once.
+    expect(frame.state.events).toEqual([{ type: 'fall', kartId: 2 }]);
+    // The next pair (no marker, no jump) interpolates again.
+    const next = snapshot(33, 5550, 10);
+    next.state.karts[2].x = to.state.karts[2].x;
+    h.sendSnapshot(next);
+    h.network.advance(75);
+    const later = h.guest.frame()!;
+    expect(later.respawned).toEqual([]);
+    expect(later.state.karts[2].x).toBeCloseTo(to.state.karts[2].x);
+    h.host.close();
   });
 });

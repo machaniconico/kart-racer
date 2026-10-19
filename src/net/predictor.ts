@@ -8,6 +8,8 @@ import type { Snapshot } from './snapshotCodec';
 export const MAX_REPLAY_TICKS = 40;
 export const VISUAL_DECAY_SECONDS = 0.08;
 export const VISUAL_SNAP_METRES = 1.5;
+/** Local falls this close in ticks are one respawn seen twice (prediction, replay, host batch). */
+export const FALL_DEDUPE_TICKS = 6;
 const TIMER_SCALES = { boostTime: 50, spinTime: 50, hopTime: 100, airTime: 100, hitCooldown: 100, driftTime: 100,
   rouletteTime: 20 } as const;
 type Timers = Pick<KartState, Exclude<keyof typeof TIMER_SCALES, 'rouletteTime'>> & { id: number; rouletteTime: number };
@@ -27,6 +29,15 @@ export class Predictor {
   private replayCount = 0;
   private correctionMetres = 0;
   private readonly timerHistory = new Map<number, Timers[]>();
+  /** Ticks of the local kart's respawns already counted, predicted or reported by the host. */
+  private localFalls: number[] = [];
+  /**
+   * Host-reported local respawns not yet applied: the batch covered ticks (from, to], so the fall is
+   * at or before `to`. They wait for a reconcile onto a snapshot at tick >= to, which moves the kart.
+   */
+  private hostFalls: { from: number; to: number }[] = [];
+  private fallCount = 0;
+  private fellThisReconcile = false;
 
   constructor(snapshot: Snapshot, readonly localSlot: number) {
     this.predicted = structuredClone(snapshot.state);
@@ -52,6 +63,37 @@ export class Predictor {
   get previous(): Pose { return { ...this.previousPose }; }
   get kart(): KartState { return structuredClone(this.localKart); }
   private get localKart(): KartState { return this.predicted.karts.find(kart => kart.id === this.localSlot)!; }
+
+  /** Generation of local respawns (falls): it changes once per respawn, however it was learnt. */
+  get localFallCount(): number { return this.fallCount; }
+
+  /**
+   * The host reported a local fall in an events batch covering ticks (fromTick, toTick]. Already
+   * predicted or replayed: nothing to do. Otherwise it counts when a snapshot at or after toTick is
+   * reconciled (that is when the kart moves), or now if one already was.
+   */
+  markFall(fromTick: number, toTick: number): void {
+    if (this.seenFall(fromTick, toTick)) return;
+    if (toTick > this.authoritativeTick) {
+      this.hostFalls.push({ from: fromTick, to: toTick });
+      return;
+    }
+    this.noteLocalFall(fromTick, toTick);
+    this.previousPose = this.pose(this.localKart);
+  }
+
+  private seenFall(fromTick: number, toTick: number): boolean {
+    return this.localFalls.some(tick => tick > fromTick - FALL_DEDUPE_TICKS && tick <= toTick + FALL_DEDUPE_TICKS);
+  }
+
+  /** A respawn snaps exactly onto its point: no visual correction is carried across it. */
+  private noteLocalFall(fromTick: number, toTick: number): void {
+    if (!this.seenFall(fromTick, toTick)) {
+      this.localFalls = [...this.localFalls.slice(-7), toTick];
+      this.fallCount++;
+    }
+    this.offset = { x: 0, y: 0, z: 0 };
+  }
 
   setRoster(players: readonly RosterPlayer[]): void {
     this.cpuSlots = new Set(players.filter(player => player.kind === 'cpu').map(player => player.slot));
@@ -83,6 +125,12 @@ export class Predictor {
           : kart.id === this.localSlot ? this.localInput : this.lastInputs[kart.id] ?? NEUTRAL_INPUT;
       }
       stepRace(this.predicted, inputs);
+      if (this.predicted.events.some(event => event.type === 'fall' && event.kartId === this.localSlot)) {
+        this.noteLocalFall(this.predicted.tick - 1, this.predicted.tick);
+        // Never interpolate from the pre-fall pose: the respawn is drawn as it is.
+        this.previousPose = this.pose(this.localKart);
+        this.fellThisReconcile = true;
+      }
       this.predicted.events = [];
       this.rememberTimers();
     }
@@ -116,6 +164,13 @@ export class Predictor {
     this.restoreRapidTimers();
     this.rememberTimers();
     this.previousPose = this.pose(this.localKart);
+    // Host falls this snapshot now contains (batch tick at or before it): the kart moves now, so cut now.
+    this.fellThisReconcile = false;
+    for (const fall of this.hostFalls.filter(fall => fall.to <= this.authoritativeTick)) {
+      this.noteLocalFall(fall.from, fall.to);
+      this.fellThisReconcile = true;
+    }
+    this.hostFalls = this.hostFalls.filter(fall => fall.to > this.authoritativeTick);
     if (!snap) this.advanceTo(target);
     this.replayCount = this.tick - this.authoritativeTick;
     const corrected = this.localKart;
@@ -123,10 +178,11 @@ export class Predictor {
     this.offset.x += old.x - corrected.x;
     this.offset.y += old.y - corrected.y;
     this.offset.z += old.z - corrected.z;
-    if (snap || !(Math.hypot(this.offset.x, this.offset.y, this.offset.z) <= VISUAL_SNAP_METRES)) {
+    if (snap || this.fellThisReconcile || !(Math.hypot(this.offset.x, this.offset.y, this.offset.z) <= VISUAL_SNAP_METRES)) {
       this.offset = { x: 0, y: 0, z: 0 };
       this.previousPose = this.pose(corrected);
     }
+    this.fellThisReconcile = false;
     return snap;
   }
 

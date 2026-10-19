@@ -74,7 +74,9 @@ function buildLandmarks(_track: Track, scene: THREE.Group): void {
   for (const height of [19, 37, 55]) {
     // Frames sit between the switchbacks, well above the low return spine.
     for (const z of [40, 120]) addBeam(0, height - 2, z, 184, 3, 4, frame);
-    for (const x of [-90, 90]) addBeam(x, height - 2, 80, 6, 2, 84, accent);
+    // The +90 m middle cross-beam spans the terrace-1 climb (road ≈ 26 m there): at 35 m the chase
+    // camera (kart + 5.1 m, ≈ 33.7 m) passed through it, so it sits 14 m over that road instead.
+    for (const x of [-90, 90]) addBeam(x, x > 0 && height === 37 ? 41 : height - 2, 80, 6, 2, 84, accent);
   }
   addBeam(0, 80, 80, 184, 3, 84, frame);
   const beacon = new THREE.Mesh(new THREE.ConeGeometry(13, 24, 4), accent);

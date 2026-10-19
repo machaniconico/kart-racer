@@ -1416,3 +1416,45 @@ describe('course resource ownership', () => {
     expect([...disposalCounts.values()]).toEqual([1, 1, 1, 1, 1, 1]);
   });
 });
+
+describe('fall zones stay open', () => {
+  it.each([['summit', summit], ['chasm', chasm]] as const)('%s builds no road, shoulder, grass, paint, curb or wall over a fall zone', (id, theme) => {
+    const track = getTrack(id);
+    const falls = track.def.surfaces.filter(zone => zone.kind === 'fall');
+    expect(falls.length).toBeGreaterThan(0);
+    // Strictly inside, so geometry ending exactly on a zone edge (the summit wall line) passes.
+    const inFall = (point: THREE.Vector3): boolean => {
+      const p = projectToTrack(track, point.x, point.z, undefined, point.y);
+      return falls.some(zone => p.distance > zone.from + 0.05 && p.distance < zone.to - 0.05
+        && p.offset > (zone.offsetMin ?? -Infinity) + 0.05 && p.offset < (zone.offsetMax ?? Infinity) - 0.05);
+    };
+    const course = build(track, theme);
+    const point = new THREE.Vector3(), matrix = new THREE.Matrix4();
+    let checked = 0;
+    for (const name of ['road', 'shoulder:-1', 'shoulder:1', 'ground:-1', 'ground:1', 'line:-1', 'line:1']) {
+      const mesh = course.group.getObjectByName(name) as THREE.Mesh;
+      const positions = mesh.geometry.getAttribute('position'), index = mesh.geometry.index!;
+      for (let i = 0; i < index.count; i += 3) {
+        point.set(0, 0, 0);
+        for (let j = 0; j < 3; j++) point.add(new THREE.Vector3().fromBufferAttribute(positions, index.getX(i + j)));
+        expect(inFall(point.divideScalar(3)), `${name} triangle ${i / 3}`).toBe(false);
+        checked++;
+      }
+    }
+    // Curbs, rails, posts and the unnamed centre dashes: every corner of every instance.
+    const instanced = course.group.children.filter((child): child is THREE.InstancedMesh =>
+      child instanceof THREE.InstancedMesh && ['curbs', 'rails', 'posts', ''].includes(child.name));
+    expect(instanced).toHaveLength(4);
+    for (const mesh of instanced) {
+      const vertices = mesh.geometry.getAttribute('position');
+      for (let i = 0; i < mesh.count; i++) {
+        mesh.getMatrixAt(i, matrix);
+        for (let v = 0; v < vertices.count; v++) {
+          expect(inFall(point.fromBufferAttribute(vertices, v).applyMatrix4(matrix)), `${mesh.name || 'dashes'} ${i}`).toBe(false);
+        }
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThan(1000);
+  });
+});

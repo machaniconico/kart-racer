@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { getTrack, sampleTrack } from '../sim';
-import type { KartState, Pose, RaceState, Track, TrackId } from '../sim';
+import { getTrack, projectToTrack, rollAt, sampleTrack, surfaceHeightAt } from '../sim';
+import type { KartState, Pose, RaceEvent, RaceState, Track, TrackId } from '../sim';
+import { widthAt } from '../sim/corridor';
 import { LOOK_AHEAD_DISTANCE, lookAheadOffset, trackTurn } from './cameraLookAhead';
 import type { RenderSnapshot } from './snapshot';
 import { kartRotationZ } from './kartRoll';
@@ -39,6 +40,62 @@ const mix = (a: number, b: number, t: number) => a + (b - a) * t;
 const angleMix = (a: number, b: number, t: number) =>
   a + Math.atan2(Math.sin(b - a), Math.cos(b - a)) * t;
 
+/** Chase camera lift above the kart. */
+export const CHASE_CAMERA_LIFT = 5.1;
+/** Minimum height of the chase camera over the kart's own road at the camera's XZ. */
+export const CHASE_ROAD_CLEARANCE = 1.5;
+/** Camera and look-target follow rate (1/s). */
+export const CAMERA_FOLLOW_RATE = 7;
+/** Height of the look target above the kart. */
+export const LOOK_TARGET_LIFT = 1.35;
+/** A rendered kart moving farther than this between frames was teleported (respawn), not driven. */
+export const TELEPORT_DISTANCE = 15;
+
+/**
+ * Height of the road under (x, z) near `hintDistance`. The projection is windowed around that
+ * station; beyond the window its global search is level-hinted by the road height there (never an
+ * airborne kart's height), so a crossing road above or below the camera is ignored.
+ */
+export function ownRoadHeightAt(track: Track, x: number, z: number, hintDistance: number): number {
+  const p = projectToTrack(track, x, z, hintDistance, sampleTrack(track, hintDistance).y);
+  if (rollAt(track, p.distance) === 0) return p.height;
+  const half = widthAt(track, p.distance).wallHalfWidth;
+  return surfaceHeightAt(track, p.distance, Math.max(-half, Math.min(half, p.offset)));
+}
+
+/**
+ * Chase camera height at (x, z): the fixed lift above the kart, raised only when the road behind
+ * (a crest or plunge) would come within CHASE_ROAD_CLEARANCE of the camera. Elsewhere it is
+ * exactly kartY + CHASE_CAMERA_LIFT, so ordinary courses render unchanged.
+ */
+export function chaseCameraY(track: Track, x: number, z: number, kartY: number, kartDistance: number): number {
+  return Math.max(kartY + CHASE_CAMERA_LIFT, ownRoadHeightAt(track, x, z, kartDistance) + CHASE_ROAD_CLEARANCE);
+}
+
+/**
+ * The smoothed camera trails the desired point, so the clearance is enforced again at its final
+ * XZ. `hintDistance` is the camera's own station (the kart's, less the trail along the track).
+ * Returns `y` itself whenever it already clears the road, which every legacy course does.
+ */
+export function chaseCameraFloor(track: Track, x: number, y: number, z: number, hintDistance: number): number {
+  return Math.max(y, ownRoadHeightAt(track, x, z, hintDistance) + CHASE_ROAD_CLEARANCE);
+}
+
+/**
+ * Look-target height. On a physics (M11) course an airborne kart's target rides half the jump arc
+ * above the road under it, so a 6 m jump bobs the view by 3 m; the arc is zero at take-off and
+ * landing, so there is no step. Otherwise (grounded, or any legacy course) it is exactly
+ * kartY + LOOK_TARGET_LIFT, as before.
+ */
+export function lookTargetY(track: Track, kartY: number, roadY: number, airborne: boolean): number {
+  return (airborne && track.def.physics !== undefined ? (kartY + roadY) / 2 : kartY) + LOOK_TARGET_LIFT;
+}
+
+/** Karts respawned on this state's tick (callers that ran several ticks pass their own union to update()). */
+export function respawnedKarts(events: readonly RaceEvent[]): Set<number> {
+  return new Set(events.filter((event) => event.type === 'fall').map((event) => event.kartId));
+}
+
 function material(color: number): THREE.MeshLambertMaterial {
   return new THREE.MeshLambertMaterial({ color, flatShading: true });
 }
@@ -68,6 +125,7 @@ export class GameRenderer {
   private readonly desiredTarget = new THREE.Vector3();
   // World-space (x, z) look-at shift, so a kart flipping round mid-blend cannot mirror it outward.
   private readonly lookAhead = { x: 0, z: 0 };
+  private readonly lastPlayerPosition = new THREE.Vector3();
   private readonly sunOffset: THREE.Vector3;
   private readonly transform = new THREE.Object3D();
   private readonly kartVisuals: KartVisual[] = [];
@@ -278,13 +336,16 @@ export class GameRenderer {
     this.ghost = { root, body, wheels };
   }
 
-  /** Same pose formulas as the roster karts in update(); null hides the ghost. */
-  updateGhost(kart: KartState | null, prev: Pose | null, alpha: number, dt: number): void {
+  /**
+   * Same pose formulas as the roster karts in update(); null hides the ghost. `respawned` is the
+   * ghost replay's own fall (any tick of this frame); a jump beyond any frame's travel is a backstop.
+   */
+  updateGhost(kart: KartState | null, prev: Pose | null, alpha: number, dt: number, respawned = false): void {
     if (!this.ghost) return;
     this.ghost.root.visible = kart !== null;
     if (!kart) return;
     const { root, body, wheels } = this.ghost;
-    const from = prev ?? kart;
+    const from = prev && !respawned && Math.hypot(prev.x - kart.x, prev.z - kart.z) <= TELEPORT_DISTANCE ? prev : kart;
     root.position.set(mix(from.x, kart.x, alpha), mix(from.y, kart.y, alpha), mix(from.z, kart.z, alpha));
     root.rotation.y = angleMix(from.heading, kart.heading, alpha);
     root.rotation.z = kartRotationZ(this.track, kart.trackDistance);
@@ -309,7 +370,12 @@ export class GameRenderer {
     return this.ghost ? this.ghost.wheels.reduce((sum, wheel) => sum + wheel.rotation.x, 0) : null;
   }
 
-  update(state: RaceState, previous: RenderSnapshot, alpha: number, dt: number, mode: 'title' | 'lobby' | 'race' | 'results'): void {
+  /**
+   * `respawned`: karts whose pose jumped (a fall respawn) on any tick since the last frame. They
+   * are drawn at the new pose, and the local one cuts the camera. Defaults to this tick's events.
+   */
+  update(state: RaceState, previous: RenderSnapshot, alpha: number, dt: number, mode: 'title' | 'lobby' | 'race' | 'results',
+    respawned: ReadonlySet<number> = respawnedKarts(state.events)): void {
     if (state.trackId !== this.track.def.id) {
       throw new RangeError(`Renderer course ${this.track.def.id} does not match race course ${state.trackId}; recreate GameRenderer`);
     }
@@ -318,7 +384,7 @@ export class GameRenderer {
     if (mode !== this.lastMode) { this.cameraReady = false; this.lastMode = mode; }
     for (const kart of state.karts) {
       const visual = this.kartVisuals[kart.id];
-      const prev = previous.karts[kart.id] ?? kart;
+      const prev = respawned.has(kart.id) ? kart : previous.karts[kart.id] ?? kart;
       visual.root.position.set(mix(prev.x, kart.x, alpha), mix(prev.y, kart.y, alpha), mix(prev.z, kart.z, alpha));
       visual.root.rotation.y = angleMix(prev.heading, kart.heading, alpha);
       visual.root.rotation.z = kartRotationZ(this.track, kart.trackDistance);
@@ -380,6 +446,7 @@ export class GameRenderer {
     }
     const player = state.karts.find((kart) => kart.id === this.localKartId);
     const playerVisual = player ? this.kartVisuals[this.localKartId] : undefined;
+    let chaseStation: number | null = null;
     if (mode === 'title' || mode === 'lobby' || !player || !playerVisual) {
       const p = sampleTrack(this.track, this.track.length - 8);
       const orbit = this.reducedMotion ? 0 : Math.sin(this.elapsed * 0.08) * 0.12;
@@ -388,10 +455,18 @@ export class GameRenderer {
       this.desiredTarget.set(p.x + p.tx * 15 + p.nx * 8, p.y + 1.5, p.z + p.tz * 15 + p.nz * 8);
     } else {
       const playerPosition = playerVisual.root.position;
+      // A respawn cuts the camera too. A rendered jump beyond any frame's travel also cuts (backstop
+      // for a caller that lost the event), instead of sweeping across the gap.
+      if (respawned.has(this.localKartId) || playerPosition.distanceTo(this.lastPlayerPosition) > TELEPORT_DISTANCE) {
+        this.cameraReady = false;
+      }
+      this.lastPlayerPosition.copy(playerPosition);
       const heading = playerVisual.root.rotation.y;
       const swing = this.reducedMotion ? 0 : player.driftDirection * Math.min(player.driftTime, 1) * 1.1;
       const distance = this.reducedMotion ? 10 : 9.5 + Math.max(0, player.speed - 20) * 0.055;
-      this.desiredCamera.set(playerPosition.x - Math.sin(heading) * distance + Math.cos(heading) * swing, playerPosition.y + 5.1, playerPosition.z - Math.cos(heading) * distance - Math.sin(heading) * swing);
+      const cameraX = playerPosition.x - Math.sin(heading) * distance + Math.cos(heading) * swing;
+      const cameraZ = playerPosition.z - Math.cos(heading) * distance - Math.sin(heading) * swing;
+      this.desiredCamera.set(cameraX, chaseCameraY(this.track, cameraX, cameraZ, playerPosition.y, player.trackDistance), cameraZ);
       const here = sampleTrack(this.track, player.trackDistance);
       const ahead = sampleTrack(this.track, player.trackDistance + LOOK_AHEAD_DISTANCE);
       const alignment = Math.sin(heading) * here.tx + Math.cos(heading) * here.tz;
@@ -400,10 +475,23 @@ export class GameRenderer {
       const blend = this.cameraReady ? 1 - Math.exp(-dt * 3) : 1;
       this.lookAhead.x += (lookTarget * here.tz - this.lookAhead.x) * blend;
       this.lookAhead.z += (-lookTarget * here.tx - this.lookAhead.z) * blend;
-      this.desiredTarget.set(playerPosition.x + Math.sin(heading) * 6 + this.lookAhead.x, playerPosition.y + 1.35, playerPosition.z + Math.cos(heading) * 6 + this.lookAhead.z);
+      const roadY = rollAt(this.track, player.trackDistance) === 0 ? here.y
+        : surfaceHeightAt(this.track, player.trackDistance, player.lateralOffset);
+      this.desiredTarget.set(playerPosition.x + Math.sin(heading) * 6 + this.lookAhead.x,
+        lookTargetY(this.track, playerPosition.y, roadY, player.airTime > 0), playerPosition.z + Math.cos(heading) * 6 + this.lookAhead.z);
+      chaseStation = player.trackDistance;
     }
-    const follow = this.cameraReady ? 1 - Math.exp(-dt * 7) : 1;
+    const follow = this.cameraReady ? 1 - Math.exp(-dt * CAMERA_FOLLOW_RATE) : 1;
     this.camera.position.lerp(this.desiredCamera, follow);
+    if (chaseStation !== null && playerVisual) {
+      // The camera trails along the kart's travel; facing against the track, it trails ahead.
+      const kart = playerVisual.root.position, camera = this.camera.position;
+      const heading = playerVisual.root.rotation.y;
+      const along = (kart.x - camera.x) * Math.sin(heading) + (kart.z - camera.z) * Math.cos(heading);
+      const here = sampleTrack(this.track, chaseStation);
+      const alignment = Math.sin(heading) * here.tx + Math.cos(heading) * here.tz;
+      camera.y = chaseCameraFloor(this.track, camera.x, camera.y, camera.z, chaseStation - along * alignment);
+    }
     this.cameraTarget.lerp(this.desiredTarget, follow);
     this.camera.lookAt(this.cameraTarget);
     this.cameraReady = true;
