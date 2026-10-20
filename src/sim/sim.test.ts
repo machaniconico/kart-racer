@@ -1093,8 +1093,13 @@ describe('sim fingerprint', () => {
   };
   const FINGERPRINTS: Record<string, Partial<Record<LegacyTrackId, number>>> = {
     'darwin-arm64': DARWIN_FINGERPRINTS,
-    // The remaining fourteen linux-x64 pins await CI measurement; keep the original two unchanged.
-    'linux-x64': { meadow: 1670404181, neon: 1324528798 },
+    // meadow/neon predate M11; the other fourteen were measured by the M11 deploy run 39363189693 (ubuntu-latest).
+    'linux-x64': {
+      meadow: 1670404181, canyon: 1297074450, snowpeak: 1950370678, neon: 1324528798,
+      harbor: 4255376981, forest: 2979876036, volcano: 1670979859, skyline: 1932104455,
+      dunes: 3119583155, garden: 3053316717, speedway: 1049644157, bayou: 367943984,
+      cavern: 3457247850, temple: 11197763, serpentine: 3716402600, lunar: 1221136564,
+    },
   };
   const platform = `${process.platform}-${process.arch}`;
 
