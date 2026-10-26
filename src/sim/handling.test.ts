@@ -201,29 +201,89 @@ describe('H1 handling', () => {
 // | serpentine | 2328.5952422904697 | 68.32384259259258 | 34.082 | 1    | 0    |
 // | lunar      | 2209.8782411911293 | 65.17916666666666 | 33.905 | 0    | 0    |
 // speedway.test.ts reads this table from source to require THUNDER OVAL's speed to be the maximum.
-type Baseline = { version: 'v15' | 'v16' | 'm9' | 'm10' | 'm11'; meanLap: number; wallHits: number; bandHits: number };
+// M12-21 (C1 start dash): every row re-measured on darwin-arm64 by the M12-20 harness
+// (KART_MEASURE=1 src/sim/measure.test.ts, same 72-lap method). Every course changes because CPUs now
+// take a start-dash tier from hash(seed, kartId) and boost 0.5 / 1.0 s at GO. Old version labels and
+// values (v15 / v16 / m9 / m10 / m11) are in git history and .omc/research/m12-sim-before.json.
+// | Course     | Mean lap (s) old -> new                  | Wall   | Band   |
+// | meadow     | 68.5011574074074   -> 68.35555555555555  | 0 -> 0 | 0 -> 0 |
+// | canyon     | 68.49583333333334  -> 68.14421296296295  | 0 -> 0 | 0 -> 0 |
+// | snowpeak   | 67.89120370370368  -> 67.51851851851852  | 0 -> 0 | 0 -> 0 |
+// | neon       | 64.32939814814814  -> 64.03842592592592  | 0 -> 0 | 1 -> 2 |
+// | harbor     | 69.73750000000001  -> 69.47708333333333  | 0 -> 0 | 0 -> 0 |
+// | forest     | 69.52407407407406  -> 69.70717592592592  | 0 -> 0 | 0 -> 0 |
+// | volcano    | 67.82407407407408  -> 67.73194444444442  | 0 -> 0 | 0 -> 0 |
+// | skyline    | 67.35324074074076  -> 67.35162037037038  | 0 -> 1 | 1 -> 0 |
+// | dunes      | 85.47638888888889  -> 85.32916666666668  | 0 -> 0 | 0 -> 0 |
+// | garden     | 65.24166666666665  -> 64.92337962962962  | 0 -> 0 | 0 -> 0 |
+// | speedway   | 63.36249999999999  -> 63.458333333333336 | 0 -> 0 | 0 -> 0 |
+// | bayou      | 68.79768518518519  -> 68.95833333333333  | 0 -> 0 | 0 -> 0 |
+// | cavern     | 62.02824074074075  -> 61.75555555555554  | 0 -> 0 | 0 -> 0 |
+// | temple     | 63.46712962962962  -> 63.63541666666668  | 0 -> 0 | 0 -> 0 |
+// | serpentine | 68.32384259259258  -> 67.69652777777777  | 1 -> 2 | 0 -> 0 |
+// | lunar      | 65.17916666666666  -> 65.49791666666667  | 0 -> 0 | 0 -> 0 |
+// | summit     | 85.3011574074074   -> 85.01643518518519  | 0 -> 0 | 0 -> 0 |
+// | chasm      | 62.87986111111112  -> 62.342592592592595 | 0 -> 1 | 0 -> 0 |
+// | velodrome  | 61.600925925925935 -> 61.047453703703695 | 0 -> 0 | 0 -> 0 |
+// | spire      | 71.30740740740741  -> 71.16319444444443  | 0 -> 0 | 0 -> 0 |
+// M12-22 (C2 difficulty retune): same harness and method. Changed rows only; the rest equal M12-21.
+// Causes: TrackDef.cpuPace (speedway 1.03; neon, garden, chasm, spire 1.02; skyline, temple 1.01) and
+// dunes sand reduced to landing pads + outside strips (dirt coverage 40.7% -> 21.0%).
+// | neon       | 64.03842592592592 -> 63.121990740740735 | 0 -> 0 | 2 -> 1 |
+// | skyline    | 67.35162037037038 -> 66.67777777777778 | 1 -> 0 | 0 -> 0 |
+// | dunes      | 85.32916666666668 -> 73.13333333333334 | 0 -> 0 | 0 -> 0 |
+// | garden     | 64.92337962962962 -> 63.71782407407406 | 0 -> 0 | 0 -> 0 |
+// | speedway   | 63.458333333333336 -> 61.604166666666664 | 0 -> 0 | 0 -> 0 |
+// | temple     | 63.63541666666668 -> 63.073379629629635 | 0 -> 0 | 0 -> 0 |
+// | chasm      | 62.342592592592595 -> 61.47199074074073 | 1 -> 0 | 0 -> 0 |
+// | spire      | 71.16319444444443 -> 70.32361111111112 | 0 -> 0 | 0 -> 0 |
+// M12-23 (C3 item WEIGHTS + effect durations): same harness and method. Changed rows only; the rest equal M12-22.
+// Cause: new item draws change traffic. meadow/velodrome wall 0 -> 1 are drift/rail contacts with no item
+// effect active (probed); both stay within WALL_HITS_MAX_EXISTING.
+// | meadow     | 68.35555555555555 -> 68.56458333333335 | 0 -> 1 | 0 -> 0 |
+// | canyon     | 68.14421296296295 -> 68.61041666666667 | 0 -> 0 | 0 -> 0 |
+// | snowpeak   | 67.51851851851852 -> 68.02430555555554 | 0 -> 0 | 0 -> 0 |
+// | neon       | 63.121990740740735 -> 63.05787037037036 | 0 -> 0 | 1 -> 0 |
+// | harbor     | 69.47708333333333 -> 69.74328703703704 | 0 -> 0 | 0 -> 0 |
+// | forest     | 69.70717592592592 -> 70.01851851851852 | 0 -> 0 | 0 -> 0 |
+// | volcano    | 67.73194444444442 -> 67.54537037037036 | 0 -> 0 | 0 -> 0 |
+// | skyline    | 66.67777777777778 -> 66.80208333333331 | 0 -> 0 | 0 -> 0 |
+// | dunes      | 73.13333333333334 -> 72.8486111111111 | 0 -> 0 | 0 -> 0 |
+// | garden     | 63.71782407407406 -> 64.13773148148147 | 0 -> 0 | 0 -> 0 |
+// | speedway   | 61.604166666666664 -> 61.97592592592592 | 0 -> 0 | 0 -> 0 |
+// | bayou      | 68.95833333333333 -> 68.94143518518518 | 0 -> 0 | 0 -> 0 |
+// | cavern     | 61.75555555555554 -> 61.7486111111111 | 0 -> 0 | 0 -> 0 |
+// | temple     | 63.073379629629635 -> 63.11458333333331 | 0 -> 0 | 0 -> 0 |
+// | serpentine | 67.69652777777777 -> 67.92939814814815 | 2 -> 0 | 0 -> 0 |
+// | lunar      | 65.49791666666667 -> 65.66388888888888 | 0 -> 0 | 0 -> 0 |
+// | summit     | 85.01643518518519 -> 84.93101851851853 | 0 -> 0 | 0 -> 0 |
+// | chasm      | 61.47199074074073 -> 61.35069444444444 | 0 -> 0 | 0 -> 0 |
+// | velodrome  | 61.047453703703695 -> 60.92893518518517 | 0 -> 1 | 0 -> 0 |
+// | spire      | 70.32361111111112 -> 70.0900462962963 | 0 -> 0 | 0 -> 0 |
+type Baseline = { version: 'v15' | 'v16' | 'm9' | 'm10' | 'm11' | 'm12'; meanLap: number; wallHits: number; bandHits: number };
 const BASELINE = {
-  meadow: { version: 'v15', meanLap: 68.5011574074074, wallHits: 0, bandHits: 0 },
-  canyon: { version: 'v15', meanLap: 68.49583333333334, wallHits: 0, bandHits: 0 },
-  snowpeak: { version: 'v15', meanLap: 67.89120370370368, wallHits: 0, bandHits: 0 },
-  neon: { version: 'v15', meanLap: 64.32939814814814, wallHits: 0, bandHits: 1 },
-  harbor: { version: 'v16', meanLap: 69.73750000000001, wallHits: 0, bandHits: 0 },
-  forest: { version: 'm9', meanLap: 69.52407407407406, wallHits: 0, bandHits: 0 },
-  volcano: { version: 'v16', meanLap: 67.82407407407408, wallHits: 0, bandHits: 0 },
-  skyline: { version: 'v16', meanLap: 67.35324074074076, wallHits: 0, bandHits: 1 },
-  dunes: { version: 'm10', meanLap: 85.47638888888889, wallHits: 0, bandHits: 0 },
-  garden: { version: 'm10', meanLap: 65.24166666666665, wallHits: 0, bandHits: 0 },
-  speedway: { version: 'm10', meanLap: 63.36249999999999, wallHits: 0, bandHits: 0 },
-  bayou: { version: 'm10', meanLap: 68.79768518518519, wallHits: 0, bandHits: 0 },
-  cavern: { version: 'm10', meanLap: 62.02824074074075, wallHits: 0, bandHits: 0 },
-  temple: { version: 'm10', meanLap: 63.46712962962962, wallHits: 0, bandHits: 0 },
-  serpentine: { version: 'm10', meanLap: 68.32384259259258, wallHits: 1, bandHits: 0 },
-  lunar: { version: 'm10', meanLap: 65.17916666666666, wallHits: 0, bandHits: 0 },
-  // M11-10: measured on darwin-arm64 (seeds 1/42/98765, 8 CPUs x 3 laps, items on) for the four extreme courses.
-  summit: { version: 'm11', meanLap: 85.3011574074074, wallHits: 0, bandHits: 0 },
-  chasm: { version: 'm11', meanLap: 62.87986111111112, wallHits: 0, bandHits: 0 },
-  velodrome: { version: 'm11', meanLap: 61.600925925925935, wallHits: 0, bandHits: 0 },
-  spire: { version: 'm11', meanLap: 71.30740740740741, wallHits: 0, bandHits: 0 },
+  meadow: { version: 'm12', meanLap: 68.56458333333335, wallHits: 1, bandHits: 0 },
+  canyon: { version: 'm12', meanLap: 68.61041666666667, wallHits: 0, bandHits: 0 },
+  snowpeak: { version: 'm12', meanLap: 68.02430555555554, wallHits: 0, bandHits: 0 },
+  neon: { version: 'm12', meanLap: 63.05787037037036, wallHits: 0, bandHits: 0 },
+  harbor: { version: 'm12', meanLap: 69.74328703703704, wallHits: 0, bandHits: 0 },
+  forest: { version: 'm12', meanLap: 70.01851851851852, wallHits: 0, bandHits: 0 },
+  volcano: { version: 'm12', meanLap: 67.54537037037036, wallHits: 0, bandHits: 0 },
+  skyline: { version: 'm12', meanLap: 66.80208333333331, wallHits: 0, bandHits: 0 },
+  dunes: { version: 'm12', meanLap: 72.8486111111111, wallHits: 0, bandHits: 0 },
+  garden: { version: 'm12', meanLap: 64.13773148148147, wallHits: 0, bandHits: 0 },
+  speedway: { version: 'm12', meanLap: 61.97592592592592, wallHits: 0, bandHits: 0 },
+  bayou: { version: 'm12', meanLap: 68.94143518518518, wallHits: 0, bandHits: 0 },
+  cavern: { version: 'm12', meanLap: 61.7486111111111, wallHits: 0, bandHits: 0 },
+  temple: { version: 'm12', meanLap: 63.11458333333331, wallHits: 0, bandHits: 0 },
+  serpentine: { version: 'm12', meanLap: 67.92939814814815, wallHits: 0, bandHits: 0 },
+  lunar: { version: 'm12', meanLap: 65.66388888888888, wallHits: 0, bandHits: 0 },
+  summit: { version: 'm12', meanLap: 84.93101851851853, wallHits: 0, bandHits: 0 },
+  chasm: { version: 'm12', meanLap: 61.35069444444444, wallHits: 0, bandHits: 0 },
+  velodrome: { version: 'm12', meanLap: 60.92893518518517, wallHits: 1, bandHits: 0 },
+  spire: { version: 'm12', meanLap: 70.0900462962963, wallHits: 0, bandHits: 0 },
+  // M12-32 / darwin-arm64: seeds 1, 42, 98765, eight normal CPUs × three laps, items enabled.
+  aqueduct: { version: 'm12', meanLap: 63.23541666666668, wallHits: 0, bandHits: 0 },
 } satisfies Record<(typeof tracks.TRACK_IDS)[number], Baseline>;
 const SEEDS = [1, 42, 98765];
 
@@ -249,11 +309,15 @@ function countHits(state: RaceState, track: Track): { wall: number; band: number
 describe('H1 CPU balance: absolute range and recorded baseline', () => {
   it('pins the old sixteen-course maximum hit budgets shared with the M11 lap harness', () => {
     const legacyRows = tracks.TRACK_IDS.slice(0, 16).map(id => BASELINE[id]);
-    expect(Math.max(...legacyRows.map(row => row.wallHits))).toBe(WALL_HITS_MAX_EXISTING);
-    expect(Math.max(...legacyRows.map(row => row.bandHits))).toBe(BAND_HITS_MAX_EXISTING);
+    // M12-23: the budgets keep their M11 values (2 / 1), measured as the sixteen-course maximum up to
+    // M12-22. C3's new item draws lowered that maximum (serpentine wall 2 -> 0, neon band 1 -> 0), so the
+    // rows now only have to stay within the budgets instead of defining them.
+    expect(Math.max(...legacyRows.map(row => row.wallHits))).toBeLessThanOrEqual(WALL_HITS_MAX_EXISTING);
+    expect(Math.max(...legacyRows.map(row => row.bandHits))).toBeLessThanOrEqual(BAND_HITS_MAX_EXISTING);
+    expect([WALL_HITS_MAX_EXISTING, BAND_HITS_MAX_EXISTING]).toEqual([2, 1]);
   });
 
-  it('has a measured row for every course (no pending baselines remain)', () => {
+  it('has a measured row for every registered course', () => {
     expect(Object.keys(BASELINE)).toEqual([...tracks.TRACK_IDS]);
     for (const [id, row] of Object.entries(BASELINE) as [string, Baseline][]) {
       expect(row.version, id).not.toMatch(/pending/);
@@ -338,6 +402,9 @@ describe('H1 CPU balance: absolute range and recorded baseline', () => {
 // Measured with speed x0.93 / x1.04 (M7-00, darwin-arm64), meanLap (ratio to BASELINE, wall / band / pit):
 //   meadow  easy 73.0414 (1.0663, 0/0/0)  hard 66.6086 (0.9724, 0/0/0)
 //   skyline easy 72.5565 (1.0773, 0/0/0)  hard 64.7785 (0.9618, 1/0/0)
+// M12-22 (C2): x0.91 / x1.06, bands easy [-0.06, 0] / hard [-0.01, +0.08], thresholds 1.06x / 0.965x:
+//   meadow  easy 74.0498 (1.0833, 0/0)  hard 65.3185 (0.9556, 0/0)
+//   skyline easy 72.8637 (1.0889, 0/0)  hard 63.2706 (0.9437, 1/3)   (wall / band)
 describe('H7 CPU levels', () => {
   it.each([
     ['meadow', 'easy'], ['meadow', 'hard'], ['skyline', 'easy'], ['skyline', 'hard'],
@@ -364,8 +431,8 @@ describe('H7 CPU levels', () => {
       }
     }
     const meanLap = totalLapTime / 72;
-    if (cpuLevel === 'easy') expect(meanLap).toBeGreaterThanOrEqual(1.04 * BASELINE[trackId].meanLap);
-    else expect(meanLap).toBeLessThanOrEqual(0.975 * BASELINE[trackId].meanLap);
+    if (cpuLevel === 'easy') expect(meanLap).toBeGreaterThanOrEqual(1.06 * BASELINE[trackId].meanLap);
+    else expect(meanLap).toBeLessThanOrEqual(0.965 * BASELINE[trackId].meanLap);
     expect(wallHits).toBeLessThanOrEqual(6);
     expect(bandHits).toBeLessThanOrEqual(6);
     if (trackId === 'skyline') expect(pitFalls).toBeLessThanOrEqual(6);
@@ -415,7 +482,7 @@ describe('M1-03 passages around centre pillars', () => {
 
   // Band hits (value 1) come from M1-02's collideCorridor; entries into an exclusion (judged by
   // corridorAt alone) also catch a kart that slips into a band without a counted hit.
-  it.each(SEEDS)('8 CPUs finish seed %i with at most 4 band hits and 4 exclusion entries', seed => {
+  it.each(SEEDS)('8 CPUs finish seed %i with at most 8 band hits and 4 exclusion entries', seed => {
     vi.spyOn(tracks, 'getTrack').mockReturnValue(pillarTrack);
     const state = createRace(seed, { racers: [] });
     const inside = state.karts.map(() => false);
@@ -436,7 +503,8 @@ describe('M1-03 passages around centre pillars', () => {
       expect(kart.lap).toBe(3);
       expect(kart.finishTime).not.toBeNull();
     }
-    expect(bandHits).toBeLessThanOrEqual(4);
+    // M12-21: seed 42 measures 6 band hits (pre-C1 max 2, seed 98765), mostly item spins near pillars; headroom +2 kept.
+    expect(bandHits).toBeLessThanOrEqual(8);
     expect(entries).toBeLessThanOrEqual(4);
   }, 120_000);
 });

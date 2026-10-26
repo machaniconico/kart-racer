@@ -25,9 +25,14 @@ export const dunes: TrackDef = {
     { kind: 'jump', from: 230, to: 234 },
     { kind: 'jump', from: 830, to: 834 },
     { kind: 'jump', from: 1340, to: 1344 },
-    // The second sand basin links the eastern and northern ridge landings.
-    { kind: 'dirt', from: 234, to: 480 },
-    { kind: 'dirt', from: 834, to: 1500 },
+    // M12-22 (C2): every ridge lands on a full-width sand pad; past the pads the sand keeps only the
+    // outside of the road (positive offsets), so the racing line runs on hard ground.
+    { kind: 'dirt', from: 234, to: 300 },
+    { kind: 'dirt', from: 300, to: 480, offsetMin: 2 },
+    { kind: 'dirt', from: 834, to: 900 },
+    { kind: 'dirt', from: 900, to: 1344, offsetMin: 2 },
+    { kind: 'dirt', from: 1344, to: 1400 },
+    { kind: 'dirt', from: 1400, to: 1500, offsetMin: 2 },
   ],
   widthKeys: [
     { distance: 1670, roadHalfWidth: BASE_ROAD_HALF_WIDTH, wallHalfWidth: BASE_WALL_HALF_WIDTH },

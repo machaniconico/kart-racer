@@ -22,6 +22,8 @@ export const chasm: TrackDef = {
   roadHalfWidth: BASE_ROAD_HALF_WIDTH,
   wallHalfWidth: BASE_WALL_HALF_WIDTH,
   checkpointCount: 24,
+  // M12-22 (C2): CPU pace keeps easy CPU meanLap / human-model lap at most 1.14 (was above it at 1).
+  cpuPace: 1.02,
   boxRows: [0.025, 0.15, 0.225, 0.36, 0.48, 0.62, 0.76, 0.9],
   boxLanes: [-5.33, 0, 5.33],
   racingLine: [{ distance: 0, offset: 0 }],

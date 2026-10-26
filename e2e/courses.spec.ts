@@ -31,6 +31,7 @@ function goldenPresent(testInfo: TestInfo, name: string): boolean {
 // courses.spec: 16.9 min; multiplayer.spec: 5.9 min. The M6-00 estimate was 29.6 min.
 // Below the 35 min parallelism threshold: retain 300 s/test and the 45 min CI job budget.
 // Build ran once; logs, FPS, and visual followups: e2e/__screenshots__/m6-05/.
+// M12-06: item box ring + icosahedron core add 1 draw and 252 triangles per box (24 boxes): +1 / +6_048.
 const courses = [
   // M2.5 re-measured 2026-10-11: Chromium 1280x720, DPR 1, seed 127, 10 stationary frames.
   // M1-04 -> M2.5 (drawCalls / triangles), including shadows:
@@ -41,16 +42,16 @@ const courses = [
   // M4-06: SNOWPEAK layout 3 retains the layout-2 budget for the elevated/banked road.
   // M5-05 / v15: measured after all four course stories and shared followups, same grid setup.
   // Last values: meadow 123 / 41_530, canyon 129 / 54_564, snowpeak 125 / 41_952, neon 125 / 62_748.
-  { id: 'meadow', name: 'MEADOW LOOP', drawCalls: 125, triangles: 107_048 },
+  { id: 'meadow', name: 'MEADOW LOOP', drawCalls: 126, triangles: 113_096 },
   // M6-09: pit clipping/rim paint and tapered island scenery, same measurement setup.
-  { id: 'canyon', name: 'SUNSCAR CANYON', drawCalls: 139, triangles: 124_630 },
-  { id: 'snowpeak', name: 'FROSTBITE PEAK', drawCalls: 129, triangles: 112_768 },
-  { id: 'neon', name: 'NEON NIGHTLINE', drawCalls: 134, triangles: 115_336 },
+  { id: 'canyon', name: 'SUNSCAR CANYON', drawCalls: 140, triangles: 130_678 },
+  { id: 'snowpeak', name: 'FROSTBITE PEAK', drawCalls: 130, triangles: 118_816 },
+  { id: 'neon', name: 'NEON NIGHTLINE', drawCalls: 135, triangles: 121_384 },
   // M6-05 / v16: Chromium on darwin-arm64, 1280×720, DPR 1, seed 127, 10 stationary frames.
-  { id: 'harbor', name: 'TIDEWATER HARBOR', drawCalls: 129, triangles: 110_460 },
-  { id: 'forest', name: 'MOSSWOOD TRAIL', drawCalls: 134, triangles: 133_980 },
-  { id: 'volcano', name: 'EMBER CALDERA', drawCalls: 132, triangles: 100_648 },
-  { id: 'skyline', name: 'STRATOS CITY', drawCalls: 136, triangles: 90_174 },
+  { id: 'harbor', name: 'TIDEWATER HARBOR', drawCalls: 130, triangles: 116_508 },
+  { id: 'forest', name: 'MOSSWOOD TRAIL', drawCalls: 135, triangles: 140_028 },
+  { id: 'volcano', name: 'EMBER CALDERA', drawCalls: 133, triangles: 106_696 },
+  { id: 'skyline', name: 'STRATOS CITY', drawCalls: 137, triangles: 96_222 },
 ] as const satisfies readonly {
   id: string; name: string; drawCalls: number; triangles: number;
 }[];
@@ -134,16 +135,22 @@ for (const { id, name, drawCalls: baselineDrawCalls, triangles: baselineTriangle
           samples.push({ drawCalls, triangles });
         }
         const png = renderer.renderer.domElement.toDataURL('image/png').split(',')[1];
-        // Static, paced frames measure observed browser FPS, including GPU completion.
+        // Every view retains its ten draw samples and golden capture. FPS is diagnostic
+        // only: profile the grid and budgeted approach, avoiding another 30 identical
+        // paced renders for each supplementary feature view.
+        const budget = view.name === 'start-grid' || view.name === approach.name;
         await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
-        const started = performance.now();
-        for (let frame = 0; frame < 30; frame++) {
-          await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
-          renderer.update(state, snapshot, 1, 0, 'race');
-          renderer.renderer.getContext().finish();
+        let fps: number | null = null;
+        if (budget) {
+          const started = performance.now();
+          for (let frame = 0; frame < 30; frame++) {
+            await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+            renderer.update(state, snapshot, 1, 0, 'race');
+            renderer.renderer.getContext().finish();
+          }
+          fps = 30_000 / (performance.now() - started);
         }
-        views.push({ ...view, budget: view.name === 'start-grid' || view.name === approach.name,
-          samples, fps: 30_000 / (performance.now() - started), minimap, png });
+        views.push({ ...view, budget, samples, fps, minimap, png });
       }
       let meshes = 0;
       window.__kartDebug.render.courseGroup!.traverse(object => {
@@ -222,18 +229,18 @@ for (const { id, name, drawCalls: baselineDrawCalls, triangles: baselineTriangle
   });
 }
 
-test('C-010: title shows the twenty-course picker', async ({ page }, testInfo) => {
+test('C-010: title shows the twenty-one-course picker', async ({ page }, testInfo) => {
   await page.goto('./');
   await expect(page.locator('#title-screen')).toBeVisible();
-  await expect(page.locator('#course-select input')).toHaveCount(20);
+  await expect(page.locator('#course-select input')).toHaveCount(21);
   const layout = await page.evaluate(() => ({
     contentBottom: document.querySelector('.title-content')!.getBoundingClientRect().bottom,
     stripTop: document.querySelector('.course-strip')!.getBoundingClientRect().top,
   }));
   expect(layout.stripTop).toBeGreaterThanOrEqual(layout.contentBottom);
-  if (goldenPresent(testInfo, 'title-twenty-courses.png')) {
+  if (goldenPresent(testInfo, 'title-twenty-one-courses.png')) {
     await page.addStyleTag({ content: 'canvas { visibility: hidden !important; }' });
-    await expect(page.locator('#title-screen')).toHaveScreenshot('title-twenty-courses.png', {
+    await expect(page.locator('#title-screen')).toHaveScreenshot('title-twenty-one-courses.png', {
       animations: 'disabled',
       ...GOLDEN_THRESHOLD,
     });
@@ -261,7 +268,7 @@ test.describe('C-011 solo touch selection', () => {
       expect(bounds.titleBottom).toBeLessThanOrEqual(viewport.width < viewport.height ? bounds.onlineTop : bounds.courseTop);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       const options = await page.locator('.course-option').all();
-      expect(options).toHaveLength(20);
+      expect(options).toHaveLength(21);
       for (const option of options) {
         const box = await option.boundingBox();
         expect(box!.width).toBeGreaterThanOrEqual(44);
@@ -604,14 +611,14 @@ for (const missedBoost of [false, true]) {
   });
 }
 
-test('C-010: twenty-course 40 switches keep renderer geometry memory bounded', async ({ page }, testInfo) => {
+test('C-010: twenty-one-course 42 switches keep renderer geometry memory bounded', async ({ page }, testInfo) => {
   await page.goto('./');
   await page.waitForFunction(() => !!window.__kartDebug?.rendererInfo);
-  // Visit all twenty courses twice (40 switches).
-  // Meadow is the initial selection (selecting it again is a no-op), so rotate it to the end: all 40 selections are real switches.
+  // Visit all twenty-one courses twice (42 switches).
+  // Meadow is initially selected, so rotate it to the end: all 42 selections are real switches.
   const lap = [...TRACK_IDS.slice(1), TRACK_IDS[0]];
   const sequence = [...lap, ...lap];
-  expect(sequence).toHaveLength(40);
+  expect(sequence).toHaveLength(42);
   const samples = [];
   let switches = 0;
   let current = await page.evaluate(() => window.__kartDebug.render.trackId);
@@ -619,6 +626,8 @@ test('C-010: twenty-course 40 switches keep renderer geometry memory bounded', a
     if (id !== current) switches++;
     current = id;
     const sample = await page.evaluate(async trackId => {
+      // M12-07: include the rebuild's next animation frame, as the lobby gate does.
+      window.__kartDebug.frameGap.reset();
       window.__kartDebug.selectCourse(trackId);
       await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
       return {
@@ -626,11 +635,18 @@ test('C-010: twenty-course 40 switches keep renderer geometry memory bounded', a
         geometries: window.__kartDebug.rendererInfo!.memory.geometries,
         textures: window.__kartDebug.rendererInfo!.memory.textures,
         programs: window.__kartDebug.render.programCount ?? 0,
+        maxFrameGapMs: window.__kartDebug.frameGap.maxMs,
+        dustCounts: ['surface-dust', 'drift-smoke', 'tire-marks'].map(name =>
+          (window.__kartDebug.render.courseGroup!.parent!.getObjectByName(name) as import('three').InstancedMesh).count),
       };
     }, id);
     expect(sample.trackId).toBe(id);
     expect(sample.geometries).toBeGreaterThan(0);
     expect(sample.programs).toBeGreaterThan(0);
+    // Match the existing lobby host budget; include the rebuild's next animation frame.
+    expect.soft(sample.maxFrameGapMs, `${id}: course switch frame gap`).toBeLessThanOrEqual(id === 'meadow' ? 1_000 : 1_500);
+    // Empty pools add zero calls to every course's stationary RENDER_BASELINE after warm-up.
+    expect(sample.dustCounts).toEqual([0, 0, 0]);
     samples.push(sample);
   }
   await testInfo.attach('geometry-memory', {
@@ -639,7 +655,7 @@ test('C-010: twenty-course 40 switches keep renderer geometry memory bounded', a
   console.info('M6-05 geometry memory', JSON.stringify(samples));
   // M8-01: rebuilds reuse one WebGLRenderer (shared info), so a leak shows up as growth here, not as a
   // non-empty old renderer. Lap 2 must match lap 1 exactly: geometry, texture and program counts.
-  expect(switches).toBe(40);
+  expect(switches).toBe(42);
   const maxGeometries = Math.max(...samples.slice(0, lap.length).map(sample => sample.geometries));
   const maxTextures = Math.max(...samples.slice(0, lap.length).map(sample => sample.textures));
   const maxPrograms = Math.max(...samples.slice(0, lap.length).map(sample => sample.programs));
@@ -656,4 +672,76 @@ test('C-010: twenty-course 40 switches keep renderer geometry memory bounded', a
   const neonLoads = samples.filter(sample => sample.trackId === 'neon');
   expect(neonLoads).toHaveLength(2);
   expect(neonLoads[1].geometries).toBeLessThanOrEqual(neonLoads[0].geometries);
+});
+
+test('C-011: sixty seconds of drifting reuse the programs compiled on course construction', async ({ page }, testInfo) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  // Shader reuse is resolution-independent; keep the software-GL workload bounded in CI.
+  await page.setViewportSize({ width: 640, height: 360 });
+  for (const trackId of ['meadow', 'neon'] as const) {
+    await page.goto('./');
+    await page.waitForFunction(() => !!window.__kartDebug?.rendererInfo);
+    await page.locator(`#course-select input[value="${trackId}"]`).check();
+    await expect.poll(() => page.evaluate(() => window.__kartDebug.render.trackId)).toBe(trackId);
+    const builtPrograms = await page.evaluate(() => window.__kartDebug.render.programCount!);
+    await page.locator('#start-race').click();
+    await page.locator('#pause-race').click();
+    const { png, ...evidence } = await page.evaluate(trackId => {
+      const debug = window.__kartDebug;
+      const { createRace, captureRenderSnapshot, FIXED_DT } = debug.modules;
+      const renderer = debug.renderer!;
+      // Disable pickups so this gate isolates driving effects, not the separate item warm-up story.
+      Object.assign(debug.state, createRace(127, { trackId, itemBoxes: false }));
+      renderer.update(debug.state, captureRenderSnapshot(debug.state), 1, 0, 'race');
+      const initialPrograms = renderer.programCount;
+      const scene = renderer.courseGroup.parent!;
+      const pools = ['surface-dust', 'drift-smoke', 'tire-marks'].map(name =>
+        scene.getObjectByName(name) as import('three').InstancedMesh);
+      const peaks = [0, 0, 0];
+      let driftingTicks = 0;
+      let maximumPrograms = initialPrograms;
+      debug.advance(180, true);
+      const startTime = debug.state.time;
+      for (let tick = 0; tick < 60 * 60; tick++) {
+        const previous = captureRenderSnapshot(debug.state);
+        debug.advance(1, true);
+        if (debug.state.karts.some(kart => kart.airTime === 0 && kart.driftTime > 0)) driftingTicks++;
+        // Drive at 60 Hz and render at 10 Hz, also exercising missed emission ticks.
+        if ((tick + 1) % 6 !== 0) continue;
+        renderer.update(debug.state, previous, 1, 6 * FIXED_DT, 'race');
+        maximumPrograms = Math.max(maximumPrograms, renderer.programCount);
+        pools.forEach((mesh, index) => { peaks[index] = Math.max(peaks[index], mesh.count); });
+      }
+      const finalPrograms = renderer.programCount;
+      const png = renderer.renderer.domElement.toDataURL('image/png').split(',')[1];
+      // Compare the identical scene/camera with and without the three effects: no camera-culling
+      // or other kart animations can masquerade as the pool's additional draw calls.
+      const withDust = renderer.getDrawCalls();
+      pools.forEach(mesh => { mesh.visible = false; });
+      const camera = (renderer as unknown as { camera: import('three').Camera }).camera;
+      renderer.renderer.render(scene, camera);
+      const drawCallDelta = withDust - renderer.getDrawCalls();
+      pools.forEach(mesh => { mesh.visible = true; });
+      return { initialPrograms, finalPrograms, maximumPrograms, peaks, driftingTicks, drawCallDelta,
+        seconds: debug.state.time - startTime, phase: debug.state.phase, png };
+    }, trackId);
+    await testInfo.attach(`c-011-${trackId}-drift`, { body: Buffer.from(png, 'base64'), contentType: 'image/png' });
+    await testInfo.attach(`c-011-${trackId}-programs`, { body: JSON.stringify({ trackId, builtPrograms, ...evidence }), contentType: 'application/json' });
+    console.info('C-011 programs', JSON.stringify({ trackId, builtPrograms, ...evidence }));
+    expect(evidence.seconds).toBe(60);
+    expect(evidence.phase).toBe('racing');
+    expect(evidence.driftingTicks).toBeGreaterThan(600);
+    expect(evidence.initialPrograms).toBe(builtPrograms);
+    expect(evidence.finalPrograms).toBe(builtPrograms);
+    expect(evidence.maximumPrograms).toBe(builtPrograms);
+    for (const [i, capacity] of [128, 64, 240].entries()) {
+      // NEON has no dirt and the seeded AI stays on-road; MEADOW exercises surface dust as well.
+      if (i !== 0 || trackId === 'meadow') expect(evidence.peaks[i]).toBeGreaterThan(0);
+      expect(evidence.peaks[i]).toBeLessThanOrEqual(capacity);
+    }
+    expect(evidence.drawCallDelta).toBeGreaterThan(0);
+    expect(evidence.drawCallDelta).toBeLessThanOrEqual(3);
+  }
+  expect(errors).toEqual([]);
 });

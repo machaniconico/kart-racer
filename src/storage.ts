@@ -16,7 +16,7 @@ const LEGACY_TRACK_ID = 'meadow';
 const KNOWN_TRACK_IDS: ReadonlySet<string> = new Set([
   'meadow', 'canyon', 'snowpeak', 'neon', 'harbor', 'forest', 'volcano', 'skyline',
   'dunes', 'garden', 'speedway', 'bayou', 'cavern', 'temple', 'serpentine', 'lunar',
-  'summit', 'chasm', 'velodrome', 'spire',
+  'summit', 'chasm', 'velodrome', 'spire', 'aqueduct',
 ]);
 
 function validTime(value: unknown): value is number {

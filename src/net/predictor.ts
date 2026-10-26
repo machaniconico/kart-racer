@@ -1,7 +1,7 @@
 import { getAIInput } from '../sim/ai';
 import { FIXED_DT, stepRace } from '../sim/race';
 import type { InputFrame, KartState, Pose, RaceState } from '../sim/types';
-import { NEUTRAL_INPUT, quantizeInput } from './inputBuffer';
+import { INPUT_HOLD_TICKS, NEUTRAL_INPUT, quantizeInput } from './inputBuffer';
 import type { RosterPlayer } from './session';
 import type { Snapshot } from './snapshotCodec';
 
@@ -21,6 +21,8 @@ export class Predictor {
   private newestInputTick = 0;
   private lastInputs: InputFrame[];
   private localInput: InputFrame;
+  /** Every input sent for the last MAX_REPLAY_TICKS + INPUT_HOLD_TICKS ticks, kept across reconciles. */
+  private readonly sent = new Map<number, InputFrame>();
   private authoritativeTick: number;
   private readonly raceId: number;
   private cpuSlots: Set<number> | null = null;
@@ -100,8 +102,11 @@ export class Predictor {
   }
 
   recordInput(tick: number, input: InputFrame): void {
+    const quantized = quantizeInput(input);
+    this.sent.set(tick, quantized);
+    for (const saved of this.sent.keys()) if (saved < tick - MAX_REPLAY_TICKS - INPUT_HOLD_TICKS) this.sent.delete(saved);
     if (tick <= this.authoritativeTick) return;
-    this.pending.set(tick, quantizeInput(input));
+    this.pending.set(tick, quantized);
     this.newestInputTick = Math.max(this.newestInputTick, tick);
     // Prediction can freeze during a host pause; input delivery continues.
     for (const saved of this.pending.keys()) if (saved <= this.newestInputTick - MAX_REPLAY_TICKS) this.pending.delete(saved);
@@ -111,7 +116,13 @@ export class Predictor {
     const target = Math.min(tick, this.authoritativeTick + MAX_REPLAY_TICKS);
     while (this.predicted.tick < target && this.predicted.phase !== 'finished') {
       this.previousPose = this.pose(this.localKart);
-      this.localInput = this.pending.get(this.predicted.tick + 1) ?? this.localInput;
+      const next = this.predicted.tick + 1;
+      const input = this.pending.get(next);
+      if (input) this.localInput = input;
+      // A tick before our newest send that was never sent (a re-anchor skipped it) never will be: the host
+      // InputBuffer repeats our newest earlier input for INPUT_HOLD_TICKS, then applies neutral. A tick not
+      // sent yet keeps the held input.
+      else if (next < this.newestInputTick) this.localInput = this.repeatedInput(next);
       // HostSession changes human before sampling. Apply the roster to all
       // karts first, including a disconnected human that has become a CPU.
       if (this.cpuSlots) for (const kart of this.predicted.karts) {
@@ -151,6 +162,9 @@ export class Predictor {
     for (const saved of this.timerHistory.get(this.authoritativeTick) ?? []) {
       const kart = this.predicted.karts.find(kart => kart.id === saved.id)!;
       for (const field of Object.keys(TIMER_SCALES) as (keyof typeof TIMER_SCALES)[]) {
+        // v20 countdown snapshots carry exact held ticks. Local input history cannot
+        // overrule them: sending an input does not prove that the host received it.
+        if (field === 'boostTime' && this.predicted.phase === 'countdown') continue;
         const scale = TIMER_SCALES[field];
         if (field === 'rouletteTime') {
           if (Math.round(saved[field] * scale) / scale === kart.effects[field]) kart.effects[field] = saved[field];
@@ -192,6 +206,15 @@ export class Predictor {
     this.offset.x *= scale;
     this.offset.y *= scale;
     this.offset.z *= scale;
+  }
+
+  /** What the host applied for a tick we never sent: our newest input at most INPUT_HOLD_TICKS older. */
+  private repeatedInput(tick: number): InputFrame {
+    for (let sent = tick - 1; sent >= tick - INPUT_HOLD_TICKS; sent--) {
+      const input = this.sent.get(sent);
+      if (input) return input;
+    }
+    return { ...NEUTRAL_INPUT };
   }
 
   private restoreRapidTimers(): void {

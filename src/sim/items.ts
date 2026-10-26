@@ -148,14 +148,14 @@ export function useItem(state: RaceState, kart: KartState, input: InputFrame): v
     kart.effects.rapidUnused = 0;
     giveBoost(state, kart, 0.45);
   } else if (item === 'aura') {
-    kart.effects.auraTime = 7;
+    kart.effects.auraTime = 6; // M12-23: 7 -> 6 s
     state.events.push({ type: 'aura_start', kartId: kart.id });
   } else if (item === 'storm') {
     let affected = 0;
     for (const target of state.karts) {
       if (target.id === kart.id || target.finishTime !== null ||
         target.effects.auraTime > 0 || target.effects.autoTime > 0) continue;
-      target.effects.shrinkTime = 5;
+      target.effects.shrinkTime = 4; // M12-23: 5 -> 4 s
       target.item = null;
       target.effects.rouletteTime = 0;
       target.effects.charges = 0;
@@ -173,7 +173,7 @@ export function useItem(state: RaceState, kart: KartState, input: InputFrame): v
     let affected = 0;
     for (const target of state.karts) {
       if (target.finishTime === null && getRank(state, target.id) < rank) {
-        target.effects.inkTime = 4;
+        target.effects.inkTime = 2.4; // M12-23: 4 -> 2.4 s
         affected |= 1 << target.id;
       }
     }

@@ -84,3 +84,33 @@ test('R3: a press after 0.3 s stops the roulette early and the held press does n
   expect(log[6].item).toBe('dash');
   expect(log[8].item).toBeNull();
 });
+
+// M12-06: item/projectile materials are drawn once at construction, so the first frame that
+// shows each effect must not stall on a shader compile (the M11 velodrome stall was 2.3 s).
+const EFFECT_ITEMS = ['trap', 'bolt', 'seeker', 'skycomet', 'bomb', 'decoy', 'aura', 'dash'] as const;
+
+for (const item of EFFECT_ITEMS) {
+  test(`M12-06: first appearance of ${item} stays within 3x the previous 60-frame mean frame time`, async ({ page }) => {
+    await startSolo(page);
+    const result = await page.evaluate(async (kind) => {
+      const frame = () => new Promise<number>((resolve) => requestAnimationFrame((t) => resolve(t)));
+      const key = (type: 'keydown' | 'keyup') =>
+        document.body.dispatchEvent(new KeyboardEvent(type, { code: 'KeyE', bubbles: true, cancelable: true }));
+      let last = await frame();
+      const before: number[] = [];
+      for (let i = 0; i < 60; i++) { const t = await frame(); before.push(t - last); last = t; }
+      const me = window.__kartDebug.state.karts[0];
+      me.spinTime = 0; me.item = kind; me.effects.rouletteTime = 0;
+      const after: number[] = [];
+      key('keydown');
+      for (let i = 0; i < 12; i++) {
+        if (i === 3) key('keyup');
+        const t = await frame(); after.push(t - last); last = t;
+      }
+      key('keyup');
+      const mean = before.reduce((sum, v) => sum + v, 0) / before.length;
+      return { mean, worst: Math.max(...after), programs: window.__kartDebug.render.programCount };
+    }, item);
+    expect(result.worst).toBeLessThanOrEqual(result.mean * 3);
+  });
+}

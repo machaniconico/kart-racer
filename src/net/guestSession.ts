@@ -1,6 +1,6 @@
 import { captureRenderSnapshot } from '../render/snapshot';
 import type { RenderSnapshot } from '../render/snapshot';
-import { createRace } from '../sim/race';
+import { createRace, FIXED_DT } from '../sim/race';
 import { DEFAULT_LAPS } from '../sim/laps';
 import { COURSE_FINGERPRINT } from '../sim/tracks';
 import type { InputFrame, RaceEvent, RaceState, TrackId } from '../sim/types';
@@ -12,11 +12,15 @@ import { JitterEstimator, RenderClock } from './renderClock';
 import { encodeControlMessage, isProfile, PacketKind, parseControlMessage, PROTOCOL_VERSION } from './protocol';
 import type { ControlMessage, RaceStart, RejectReason } from './protocol';
 import { normalize } from './roomCode';
-import type { NetPhase, RosterPlayer, RosterView } from './session';
+import { DEFAULT_RACE_SETTINGS, raceKartSlots } from './session';
+import type { NetPhase, RaceSettings, RosterPlayer, RosterView } from './session';
 import { decodeSnapshot } from './snapshotCodec';
 import type { Snapshot } from './snapshotCodec';
 import { TransportError } from './transport';
 import type { ChannelKind, PeerLink, Transport, TransportErrorCode, WireData } from './transport';
+
+/** The sim's GO tick (race.ts: the countdown runs ticks 0..180). */
+const GO_TICK = 180;
 
 /** Lobby/results host silence that ends the session. */
 export const LOBBY_TIMEOUT_MS = 5000;
@@ -63,10 +67,13 @@ export class GuestSession {
   private currentPhase: NetPhase = 'idle';
   private selectedTrackId: TrackId = 'meadow';
   private selectedLaps = DEFAULT_LAPS;
+  private selectedSettings: RaceSettings = { ...DEFAULT_RACE_SETTINGS };
   private closeReason: GuestCloseReason | null = null;
   private isStalled = false;
   private code = '';
   private slot = -1;
+  /** Roster slot per kart ID of the current race (see raceKartSlots). */
+  private kartSlots: number[] = [];
   private players: RosterPlayer[] = [];
   private name: string;
   private color: number;
@@ -91,6 +98,10 @@ export class GuestSession {
   private lastSentInputTick = -1;
   private pendingUseItem = false;
   private inputHistory: InputFrame[] = [];
+  /** Newest countdown tick already announced by frame() (countdown/go events on the input timeline). */
+  private countdownTick = 0;
+  /** A frame of this race showed the countdown (even only "3" at tick 0), so GO is still owed. */
+  private countdownShown = false;
 
   constructor(private readonly transport: Transport, options: GuestSessionOptions = {}) {
     this.now = options.now ?? (() => performance.now());
@@ -104,9 +115,24 @@ export class GuestSession {
   get phase(): NetPhase { return this.currentPhase; }
   get course(): TrackId { return this.selectedTrackId; }
   get laps(): number { return this.selectedLaps; }
+  /** The host's online race options (read-only on the guest). */
+  get settings(): RaceSettings { return { ...this.selectedSettings }; }
   get reason(): GuestCloseReason | null { return this.closeReason; }
   get stalled(): boolean { return this.isStalled; }
   get localSlot(): number { return this.slot; }
+  /** The local kart's ID: in a race, its compacted ID (see raceKartSlots); in the lobby, the ID the next
+   * race_start will give it from the current roster and CPU fill, so the caller can bind views before the countdown. */
+  get localKartId(): number {
+    const slots = this.activeRace || this.phase === 'results' ? this.kartSlots
+      : raceKartSlots(this.players, this.selectedSettings.cpuFill);
+    const id = slots.indexOf(this.slot);
+    return id < 0 ? this.slot : id;
+  }
+  /** Roster entries of the racing karts in kart-ID order, with `slot` replaced by the kart ID. */
+  get raceRoster(): RosterPlayer[] {
+    return this.kartSlots.flatMap((slot, kartId) => this.players.filter(player => player.slot === slot)
+      .map(player => ({ ...player, slot: kartId })));
+  }
   get rtt(): number { return this.clock.rtt; }
   get offset(): number { return this.clock.ready ? this.clock.offset : this.fallbackOffset; }
   get lead(): number {
@@ -229,6 +255,8 @@ export class GuestSession {
     this.lastSentInputTick = -1;
     this.pendingUseItem = false;
     this.inputHistory = [];
+    this.countdownTick = 0;
+    this.countdownShown = false;
     this.isStalled = false;
     this.graceUntil = 0;
     this.renderClock.reset(this.offset);
@@ -242,9 +270,12 @@ export class GuestSession {
     this.clearRace();
     this.raceId = message.raceId;
     this.players = message.roster;
-    this.template = createRace(message.seed, { trackId: message.trackId, laps: message.laps });
+    // Same options as the host's createRace, so both sides build the same karts and boxes.
+    this.kartSlots = raceKartSlots(message.roster, message.cpuFill);
+    this.template = createRace(message.seed, { trackId: message.trackId, laps: message.laps, cpuLevel: message.cpuLevel,
+      karts: this.kartSlots.length, itemBoxes: message.items });
     for (const kart of this.template.karts) {
-      const player = this.players.find(entry => entry.slot === kart.id);
+      const player = this.players.find(entry => entry.slot === this.kartSlots[kart.id]);
       kart.human = !!player && player.kind !== 'cpu';
       if (player) { kart.name = player.name; kart.color = player.color; }
     }
@@ -253,9 +284,9 @@ export class GuestSession {
       state: this.template, lastAppliedInput: this.template.karts.map(() => ({ ...NEUTRAL_INPUT })) };
     this.snapshots.push(initial);
     if (this.prediction) {
-      this.predictor = new Predictor(initial, this.slot);
+      this.predictor = new Predictor(initial, this.localKartId);
       this.consumedFalls = 0;
-      this.predictor.setRoster(this.players);
+      this.predictor.setRoster(this.raceRoster);
       this.predictionAt = this.visualAt = now;
     }
     // A scheduled start is not a snapshot outage while everybody waits on the grid.
@@ -322,6 +353,7 @@ export class GuestSession {
         this.players = message.roster;
         this.selectedTrackId = message.trackId;
         this.selectedLaps = message.laps;
+        this.selectedSettings = { cpuLevel: message.cpuLevel, cpuFill: message.cpuFill, items: message.items };
         this.fallbackOffset = message.hostTime - now;
         this.lastHostSeenAt = now;
         this.setPhase('lobby');
@@ -333,34 +365,36 @@ export class GuestSession {
         if (this.phase !== 'lobby') return;
         this.selectedTrackId = message.trackId;
         this.selectedLaps = message.laps;
+        this.selectedSettings = { cpuLevel: message.cpuLevel, cpuFill: message.cpuFill, items: message.items };
         this.graceUntil = now + COURSE_GRACE_MS;
         this.notify();
         break;
       case 'roster':
         if (this.slot < 0) return;
         this.players = message.players;
-        this.predictor?.setRoster(this.players);
+        this.predictor?.setRoster(this.raceRoster);
         this.notify();
         break;
-      case 'race_start':
-        if (this.phase === 'lobby' && message.trackId !== this.selectedTrackId) {
-          // The guest stays in the lobby; make the otherwise silent mismatch visible.
-          console.warn(`Ignored race_start for course ${message.trackId}; the lobby course is ${this.selectedTrackId}.`);
+      case 'race_start': {
+        const lobby: Record<string, unknown> = { trackId: this.selectedTrackId, laps: this.selectedLaps, ...this.selectedSettings };
+        const mismatched = Object.keys(lobby).filter(key => message[key as keyof RaceStart] !== lobby[key]);
+        // The guest stays in the lobby; make the otherwise silent mismatch visible.
+        for (const key of this.phase === 'lobby' ? mismatched : []) {
+          const label = key === 'trackId' ? 'course' : key;
+          console.warn(`Ignored race_start for ${label} ${String(message[key as keyof RaceStart])}; the lobby ${label} is ${String(lobby[key])}.`);
         }
-        if (this.phase === 'lobby' && message.laps !== this.selectedLaps) {
-          console.warn(`Ignored race_start for laps ${message.laps}; the lobby laps is ${this.selectedLaps}.`);
-        }
-        if (this.phase === 'lobby' && message.trackId === this.selectedTrackId && message.laps === this.selectedLaps &&
+        if (this.phase === 'lobby' && mismatched.length === 0 &&
           (this.raceId === null || message.raceId > this.raceId) &&
           message.roster.some(player => player.slot === this.slot)) this.start(message, now);
         break;
+      }
       case 'events':
         if (!this.activeRace || message.raceId !== this.raceId || message.tick < this.eventTick) return;
         for (const event of message.events) {
           if (event.type !== 'fall') continue;
           this.snapshots.markFall(event.kartId, message.tick);
           // The batch covers the host ticks since the previous one.
-          if (event.kartId === this.slot) this.predictor?.markFall(this.eventTick, message.tick);
+          if (event.kartId === this.localKartId) this.predictor?.markFall(this.eventTick, message.tick);
         }
         this.eventTick = message.tick;
         this.pendingEvents.push(...message.events);
@@ -477,6 +511,40 @@ export class GuestSession {
     this.visualAt = time;
   }
 
+  /**
+   * The start dash counts the throttle of input ticks 120..179, and our input runs lead ticks ahead of
+   * the host while snapshots show the host about a render delay behind it. So the countdown the player
+   * times a press by (3/2/1/GO and their sounds) follows the input tick, not the interpolated snapshot:
+   * the host's countdown/go events are replaced by the same events at the same input ticks.
+   */
+  private countDownOnInputTimeline(state: RaceState): void {
+    const clock = Math.max(this.inputTick ?? -1, state.tick);
+    state.events = state.events.filter(event => event.type !== 'countdown' && event.type !== 'go');
+    if (state.phase !== 'countdown') {
+      // Snapshots past GO. If this guest counted down but stalled across GO, the host's go event was
+      // dropped above and no input tick announced it: sound GO now, once. A view that never showed the
+      // countdown (a late join) has nothing to finish.
+      if (this.countdownShown && this.countdownTick < GO_TICK) state.events.push({ type: 'go', kartId: 0 });
+      this.countdownTick = GO_TICK;
+      return;
+    }
+    // As race.ts stepRace: a countdown event when ceil(countdown) changes while > 0, go at GO_TICK.
+    // A jump across several (a re-anchor) sounds only the newest.
+    let sound: RaceEvent | null = null;
+    for (let tick = this.countdownTick + 1; tick <= Math.min(clock, GO_TICK); tick++) {
+      const count = Math.max(0, (GO_TICK - tick) * FIXED_DT);
+      const previous = tick === 1 ? 3 : Math.max(0, (GO_TICK - tick + 1) * FIXED_DT);
+      if (Math.ceil(count) !== Math.ceil(previous) && count > 0) sound = { type: 'countdown', kartId: 0, value: Math.ceil(count) };
+      if (tick === GO_TICK) sound = { type: 'go', kartId: 0 };
+    }
+    if (sound) state.events.push(sound);
+    this.countdownTick = Math.max(this.countdownTick, Math.min(clock, GO_TICK));
+    this.countdownShown = true;
+    // Only the countdown fields: tick and time stay the snapshot's (interpolation, lap timing).
+    state.countdown = Math.max(0, (GO_TICK - clock) * FIXED_DT);
+    if (clock >= GO_TICK) state.phase = 'racing';
+  }
+
   frame(now: number = this.now()): GuestFrame | null {
     this.reconcilePrediction(this.poll());
     if (this.phase === 'results' && this.result) {
@@ -508,12 +576,12 @@ export class GuestSession {
     const falls = this.predictor?.localFallCount ?? 0;
     const localCut = falls !== this.consumedFalls;
     this.consumedFalls = falls;
-    if (this.predictor && this.inputTick !== null) respawned.delete(this.slot);
-    if (localCut) respawned.add(this.slot);
+    if (this.predictor && this.inputTick !== null) respawned.delete(this.localKartId);
+    if (localCut) respawned.add(this.localKartId);
     if (this.predictor && this.inputTick !== null) {
       this.decayPrediction(now);
       const local = this.predictor.kart;
-      const index = state.karts.findIndex(kart => kart.id === this.slot);
+      const index = state.karts.findIndex(kart => kart.id === this.localKartId);
       const offset = this.predictor.visualOffset;
       local.lapTimes = [...state.karts[index].lapTimes];
       local.x += offset.x;
@@ -527,6 +595,7 @@ export class GuestSession {
     // Prediction events are discarded inside Predictor; only reliable host
     // events feed audio/HUD, exactly once even when several frames are rendered.
     state.events = this.pendingEvents.splice(0);
+    if (this.predictor) this.countDownOnInputTimeline(state);
     return { state, previous, alpha, respawned: [...respawned] };
   }
 }

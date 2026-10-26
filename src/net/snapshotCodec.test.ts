@@ -74,6 +74,34 @@ function expectPose(actual: Pose, original: Pose) {
 }
 
 describe('snapshot codec', () => {
+  it.each(['countdown', 'racing', 'finished'] as const)('uses the correct boost units for %s', phase => {
+    const state = createRace(42);
+    state.phase = phase;
+    state.karts[0].boostTime = 0.5;
+    const packet = encodeSnapshot(state, 0, 0);
+    expect(new DataView(packet).getUint8(SNAPSHOT_HEADER_BYTES + 40)).toBe(phase === 'countdown' ? 30 : 25);
+    expect(roundTrip(state).state.karts[0].boostTime).toBe(0.5);
+  });
+
+  it('round-trips every countdown hold as exact ticks in the existing boost byte', () => {
+    const state = createRace(42);
+    state.tick = 179;
+    state.countdown = FIXED_DT;
+    let heldTime = 0;
+    for (let ticks = 0; ticks <= 60; ticks++) {
+      state.karts.forEach(kart => { kart.boostTime = heldTime; });
+      const packet = encodeSnapshot(state, 23, 123456.789, inputs);
+      expect(packet.byteLength).toBe(525);
+      const decoded = roundTrip(state).state;
+      for (const kart of decoded.karts) {
+        expect(new DataView(packet).getUint8(SNAPSHOT_HEADER_BYTES + kart.id * SNAPSHOT_KART_BYTES + 40)).toBe(ticks);
+        expect(kart.boostTime).toBe(ticks * FIXED_DT);
+        expect(Math.round(kart.boostTime / FIXED_DT)).toBe(ticks);
+      }
+      heldTime += FIXED_DT;
+    }
+  });
+
   it('fits eight karts, 24 boxes and 27 entities at 1,200 bytes; two bolts below 600', () => {
     const state = fixture();
     expect(state.karts).toHaveLength(8);
@@ -543,6 +571,70 @@ describe('snapshot codec', () => {
     expect(() => encodeSnapshot(invalid, 0, 0)).toThrow(RangeError);
     expect(decodeSnapshot(buffer, invalid)).toBeNull();
   });
+
+  // M12-31: online rooms without CPU fill / items keep the fixed 8-row, 24-box wire layout.
+  it.each([1, 3, 8].flatMap(karts => [true, false].map(items => ({ karts, items }))))
+  ('round-trips $karts karts with items=$items in the fixed layout, padding unused rows/boxes with zeros', ({ karts, items }) => {
+    const state = createRace(9, { trackId: 'canyon', karts, itemBoxes: items, cpuLevel: 'hard' });
+    for (let tick = 0; tick < 240; tick++) stepRace(state, state.karts.map(kart => getAIInput(state, kart.id)));
+    const template = createRace(9, { trackId: 'canyon', karts, itemBoxes: items, cpuLevel: 'hard' });
+    const inputs = state.karts.map(() => ({ ...NEUTRAL_INPUT, throttle: 1 }));
+    const buffer = encodeSnapshot(state, 3, 100, inputs);
+    expect(buffer.byteLength).toBe(SNAPSHOT_HEADER_BYTES + 8 * SNAPSHOT_KART_BYTES + SNAPSHOT_BOX_COUNT +
+      Math.min(MAX_SNAPSHOT_ENTITIES, state.projectiles.length + state.traps.length) * SNAPSHOT_ENTITY_BYTES);
+    const bytes = new Uint8Array(buffer);
+    const padStart = SNAPSHOT_HEADER_BYTES + karts * SNAPSHOT_KART_BYTES;
+    expect(bytes.slice(padStart, SNAPSHOT_HEADER_BYTES + 8 * SNAPSHOT_KART_BYTES).every(byte => byte === 0)).toBe(true);
+    const boxStart = SNAPSHOT_HEADER_BYTES + 8 * SNAPSHOT_KART_BYTES;
+    if (!items) expect(bytes.slice(boxStart, boxStart + SNAPSHOT_BOX_COUNT).every(byte => byte === 0)).toBe(true);
+    // Encoding is deterministic, and an 8-entry input array (the host's) encodes identically.
+    const padded = [...inputs, ...Array.from({ length: 8 - karts }, () => ({ ...NEUTRAL_INPUT }))];
+    expect(new Uint8Array(encodeSnapshot(state, 3, 100, padded))).toEqual(bytes);
+    const decoded = decodeSnapshot(buffer, template)!;
+    expect(decoded).not.toBeNull();
+    expect(decoded.state.karts.map(kart => kart.id)).toEqual(state.karts.map(kart => kart.id));
+    expect(decoded.state.boxes).toHaveLength(items ? SNAPSHOT_BOX_COUNT : 0);
+    expect(decoded.state.cpuLevel).toBe('hard');
+    expect(decoded.lastAppliedInput).toHaveLength(karts);
+    for (const [index, kart] of decoded.state.karts.entries()) {
+      expect(kart.x).toBe(Math.fround(state.karts[index].x));
+      expect(kart.trackDistance).toBe(Math.fround(state.karts[index].trackDistance));
+    }
+    // Re-encoding the decoded state reproduces the packet.
+    expect(new Uint8Array(encodeSnapshot(decoded.state, 3, 100, decoded.lastAppliedInput))).toEqual(bytes);
+  });
+
+  it('M12-31 still rejects short/extended packets and non-contiguous, empty or partial-box races', () => {
+    const state = createRace(4, { karts: 3, itemBoxes: false });
+    const buffer = encodeSnapshot(state, 0, 0);
+    for (const length of [0, 1, SNAPSHOT_HEADER_BYTES, buffer.byteLength - 1]) expect(decodeSnapshot(buffer.slice(0, length), state)).toBeNull();
+    const extended = new Uint8Array(buffer.byteLength + 1);
+    extended.set(new Uint8Array(buffer));
+    expect(decodeSnapshot(extended.buffer, state)).toBeNull();
+    const corrupt = buffer.slice(0);
+    new DataView(corrupt).setUint8(SNAPSHOT_HEADER_BYTES + 2 * SNAPSHOT_KART_BYTES + 45, 64); // kart 2 flags
+    expect(decodeSnapshot(corrupt, state)).toBeNull();
+    expect(() => encodeSnapshot(state, 0, 0, [NEUTRAL_INPUT, NEUTRAL_INPUT])).toThrow(RangeError);
+    const gap = createRace(4, { karts: 3, itemBoxes: false });
+    gap.karts.splice(1, 1);
+    expect(() => encodeSnapshot(gap, 0, 0)).toThrow(RangeError);
+    expect(decodeSnapshot(buffer, gap)).toBeNull();
+    const empty = { ...createRace(4, { karts: 1, itemBoxes: false }), karts: [] };
+    expect(() => encodeSnapshot(empty, 0, 0)).toThrow(RangeError);
+    const partial = createRace(4, { karts: 3 });
+    partial.boxes.length = 5;
+    expect(() => encodeSnapshot(partial, 0, 0)).toThrow(RangeError);
+  });
+
+  it('M12-31 decodes into a template with the matching kart count only', () => {
+    const three = createRace(4, { karts: 3, itemBoxes: false });
+    const buffer = encodeSnapshot(three, 0, 0);
+    const decoded = decodeSnapshot(buffer, createRace(4, { karts: 3, itemBoxes: false }))!;
+    expect(decoded.state.karts.map(kart => [kart.id, kart.x])).toEqual(three.karts.map(kart => [kart.id, Math.fround(kart.x)]));
+    // The kart count follows the template, never the packet: both sides derive it from race_start, so a
+    // guest never decodes with another count (an 8-kart template would read the zero padding as karts 3..7).
+    expect(decodeSnapshot(buffer, createRace(4, { itemBoxes: false }))!.state.karts).toHaveLength(8);
+  });
 });
 
 describe('protocol layout fingerprint', () => {
@@ -567,6 +659,7 @@ describe('protocol layout fingerprint', () => {
       17: 'aa03c454',
       18: 'aa03c454',
       19: 'aa03c454',
+      20: 'aa03c454',
     };
     expect(SNAPSHOT_LAYOUT.slice(0, 2)).toEqual([KART_EFFECT_LAYOUT, ENTITY_KINDS]);
     expect(fingerprint(SNAPSHOT_LAYOUT)).toBe(LAYOUT_FINGERPRINT);
@@ -605,11 +698,20 @@ describe('protocol layout fingerprint', () => {
     // the hello handshake rejects COURSE_FINGERPRINT mismatches ('version'), so older builds cannot mix.
     pinned[17] = 1316474231;
     pinned[18] = 2618543986; // M10-10: measured after all sixteen courses (M10-01–08)
-    pinned[19] = 3592109651; // M11-10: measured after all twenty courses (M11-04–07)
+    // M11-10: 3592109651, measured after all twenty courses (M11-04–07).
+    // M12-22: dunes sand change and TrackDef.cpuPace on seven courses re-pinned within v19 (M9-02 precedent);
+    // the v20 bump lands in M12-30 before any release, so v19 clients never see this course data.
+    pinned[19] = 1025770887;
+    pinned[20] = 1018693773; // M12-32: measured with the completed AQUEDUCT definition.
     expect(COURSE_FINGERPRINT).toBe(Number.parseInt(fingerprint(definitions), 16));
-    expect(PROTOCOL_VERSION).toBe(19);
-    expect(scaffoldIds()).toEqual([]);
-    expect(COURSE_FINGERPRINT).toBe(pinned[PROTOCOL_VERSION]);
+    expect(PROTOCOL_VERSION).toBe(20);
+    // The existing twenty definitions must still hash to their M12-22 pin.
+    expect(Number.parseInt(fingerprint(definitions.slice(0, 20)), 16)).toBe(pinned[19]);
+    if (pinned[PROTOCOL_VERSION] === undefined) expect(scaffoldIds()).toEqual(['aqueduct']);
+    else {
+      expect(scaffoldIds()).toEqual([]);
+      expect(COURSE_FINGERPRINT).toBe(pinned[PROTOCOL_VERSION]);
+    }
     expect(fingerprint(definitions.map((def, index) => index === 0 ? { ...def, roadHalfWidth: 8 } : def)))
       .not.toBe(fingerprint(definitions));
   });

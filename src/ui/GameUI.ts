@@ -3,11 +3,13 @@ import { getFinishTimeRemaining, isRaceTimedOut } from '../sim/race';
 import { getTrack, TRACK_IDS } from '../sim/tracks';
 import { sampleTrack } from '../sim/track';
 import { CPU_LEVELS } from '../sim/types';
-import type { CpuLevel, ItemType, KartState, RaceState, Track, TrackId } from '../sim/types';
+import type { CpuLevel, ItemType, KartState, RaceEvent, RaceState, Track, TrackId } from '../sim/types';
 import { CUPS } from '../gp/grandPrix';
 import { ROULETTE_TIME } from '../sim/items';
-import { emptyItemIcon as emptyItem, icon, itemIcon, itemName, itemShortName, createRouletteView, stepRoulette } from './itemIcons';
+import { emptyItemIcon as emptyItem, icon, itemColors, itemIcon, itemName, itemShortName, createRouletteView, rouletteStripHtml, stepRoulette, ROULETTE_SETTLE } from './itemIcons';
 import { createInkOverlay, update as updateInkOverlay } from './inkOverlay';
+import { startConfetti } from './confetti';
+import './finish.css';
 
 type Screen = 'title' | 'lobby' | 'race' | 'results' | 'standings';
 export type PlayMode = 'race' | 'gp' | 'timeattack';
@@ -17,6 +19,17 @@ const arrow = icon('<path d="M4 12h15M13 5l7 7-7 7"/>');
 const volume = icon('<path d="M11 5 6 9H3v6h3l5 4V5Z"/><path class="sound-wave" d="M15 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/><path class="sound-cross" d="m16 9 6 6m0-6-6 6"/>');
 const pauseIcon = icon('<path d="M8 5v14M16 5v14"/>');
 const driftIcon = icon('<path d="m7 3 8 5-4 5 6 4M7 21h10M4 8l4 2m-4 4 3 1"/>');
+
+/** B5 presentation timings (ms). */
+export const COUNTDOWN_POP_MS = 280;
+export const GO_FLASH_MS = 160;
+export const FINISH_SLIDE_MS = 320;
+export const RESULT_ROW_STAGGER_MS = 70;
+
+export function ordinal(rank: number): string {
+  const suffix = rank % 100 >= 11 && rank % 100 <= 13 ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' } as Record<number, string>)[rank % 10] ?? 'th';
+  return `${rank}${suffix}`;
+}
 
 export function formatTime(seconds: number): string {
   const hundredths = Math.max(0, Math.floor(seconds * 100));
@@ -73,11 +86,15 @@ export class GameUI {
   private readonly refs: Record<string, HTMLElement> = {};
   private screen: Screen = 'title';
   private playMode: PlayMode = 'race';
+  /** Online rooms may race without item boxes; the item HUD then stays hidden. */
+  private itemsEnabled = true;
   private courseId: TrackId = TRACK_IDS[0];
   private paused = false;
   private previousFocus: HTMLElement | null = null;
   private lastItem: ItemType | null | undefined;
   private lastMapTick = -1;
+  /** Set by the GO-tick start-dash event (boost, value 2) for the local kart; see noteEvents. */
+  private rocketStart = false;
   private mapScale = 1;
   private mapOffsetX = 0;
   private mapOffsetZ = 0;
@@ -85,6 +102,11 @@ export class GameUI {
   private inkMounted = false;
   /** Local kart's roulette presentation; decorative only, never fed back into the sim. */
   private readonly roulette = createRouletteView();
+  /** Running 120 ms confirm animations; cancelled if reduced motion turns on mid-settle. */
+  private settleAnims: Animation[] = [];
+  private cancelConfetti: (() => void) | null = null;
+  /** Running countdown / finish / row animations; cancelled if reduced motion turns on mid-run. */
+  private motionAnims: Animation[] = [];
   private readonly reducedMotion = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
   /** Fired for the local kart only: one 'tick' per icon switch and one 'stop' when the item is revealed. */
   onRoulette: ((kind: 'tick' | 'stop') => void) | null = null;
@@ -173,11 +195,27 @@ export class GameUI {
         this.canvas.focus({ preventScroll: true });
       }
     });
+    this.reducedMotion?.addEventListener?.('change', () => { if (this.reducedMotion?.matches) this.stopMotion(); });
     this.show('title');
+  }
+
+  /** Reduced motion switched on mid-run: stop every running decorative animation and the confetti. */
+  private stopMotion(): void {
+    for (const anim of [...(this.motionAnims ?? []), ...this.settleAnims]) anim.cancel();
+    this.motionAnims = [];
+    this.settleAnims = [];
+    this.cancelConfetti?.();
+    this.cancelConfetti = null;
+  }
+
+  private play(element: HTMLElement | undefined, keyframes: Keyframe[], options: KeyframeAnimationOptions): void {
+    const anim = element?.animate?.(keyframes, options);
+    if (anim) this.motionAnims.push(anim);
   }
 
   show(screen: Screen): void {
     if (screen !== 'race') updateInkOverlay(0);
+    if (screen !== 'results') { this.cancelConfetti?.(); this.cancelConfetti = null; }
     this.screen = screen;
     this.root.dataset.screen = screen;
     this.setBackgroundResolution(screen);
@@ -190,6 +228,7 @@ export class GameUI {
       this.lastItem = undefined;
       this.lastMapTick = -1;
       this.resetRoulette();
+      this.get('countdown-display').dataset.count = '';
       this.canvas.focus({ preventScroll: true });
     } else if (screen !== 'lobby' && screen !== 'standings') {
       requestAnimationFrame(() => {
@@ -217,6 +256,15 @@ export class GameUI {
   }
 
   /** Online play relabels pause as a leave confirmation and result actions as lobby/room actions. */
+  /**
+   * Feed every stepped (host/offline) or received (guest) event batch, like AudioEngine.playEvents.
+   * The start dash is latched from its GO event, not inferred from boostTime: guest views mix predicted
+   * timers with host time and quantized snapshots.
+   */
+  noteEvents(events: readonly RaceEvent[]): void {
+    if (events.some(event => event.type === 'boost' && event.value === 2 && event.kartId === this.localKartId)) this.rocketStart = true;
+  }
+
   setMode(mode: Mode, localKartId = 0): void {
     this.localKartId = localKartId;
     this.lastItem = undefined;
@@ -250,10 +298,16 @@ export class GameUI {
     this.get('course-select').hidden = mode === 'gp';
     this.get('cpu-select').hidden = mode === 'timeattack';
     this.get('position-group').hidden = mode === 'timeattack';
-    this.get('item-display').hidden = mode === 'timeattack';
+    this.get('item-display').hidden = mode === 'timeattack' || !this.itemsEnabled;
     if (this.root.dataset.mode !== 'host') this.text('retry-label', this.retryLabel());
     if (mode === 'gp') this.showCupStrip(this.get('cup-select').querySelector<HTMLInputElement>('input:checked')?.value);
     else this.showCourseStrip(this.courseId);
+  }
+
+  /** false hides the item HUD (no boxes, so no roulette); solo always restores true. */
+  setItems(enabled: boolean): void {
+    this.itemsEnabled = enabled;
+    this.get('item-display').hidden = this.playMode === 'timeattack' || !enabled;
   }
 
   setCpuLevel(level: CpuLevel): void {
@@ -338,14 +392,20 @@ export class GameUI {
     const countText = counting ? String(Math.min(3, Math.max(1, Math.ceil(state.countdown)))) : 'GO!';
     this.text('countdown-display', countText);
     countdown.classList.toggle('is-go', !counting);
+    this.stepCountdown(countdown, counting ? countText : 'go');
     const remaining = getFinishTimeRemaining(state);
     this.get('finish-countdown').hidden = remaining === null || state.phase !== 'racing';
     this.text('finish-countdown', remaining === null ? '' : `レース終了まで ${Math.ceil(remaining)}秒`);
     this.get('wrong-way').hidden = !player.wrongWay && player.lapValid;
     this.text('wrong-way', player.wrongWay ? '↶ 逆走しています' : 'コースアウト · この周回は無効です');
     const status = this.get('race-status');
-    status.hidden = player.spinTime <= 0 && player.boostTime <= 0;
-    this.text('race-status', player.spinTime > 0 ? 'SPIN!' : 'DASH!');
+    // Countdown boostTime is the start-dash hold accumulator, not a boost.
+    const boosting = state.phase === 'racing' && player.boostTime > 0;
+    status.hidden = player.spinTime <= 0 && !boosting;
+    // A start dash lasts at most 1.0 s from GO (race time 0), so any boost after that is an item/drift DASH.
+    if (state.phase === 'racing' && state.time > 1) this.rocketStart = false;
+    else if (state.phase === 'countdown' && state.tick < 120) this.rocketStart = false;
+    this.text('race-status', player.spinTime > 0 ? 'SPIN!' : this.rocketStart ? 'ROCKET START!' : 'DASH!');
     status.dataset.type = player.spinTime > 0 ? 'spin' : 'boost';
 
     const stage = player.driftTime >= 1.5 ? 2 : player.driftTime >= 0.65 ? 1 : 0;
@@ -361,11 +421,25 @@ export class GameUI {
     }
   }
 
+  /** Tags the countdown with 3/2/1/go and plays the 280 ms pop (digits) or 160 ms flash (GO) once per change. */
+  private stepCountdown(countdown: HTMLElement, count: string): void {
+    if (countdown.dataset.count === count) return;
+    countdown.dataset.count = count;
+    if (countdown.hidden || (this.reducedMotion?.matches ?? false)) return;
+    const go = count === 'go';
+    this.play(countdown, go
+      ? [{ transform: 'translate(-50%, -50%) scale(1.25)', filter: 'brightness(2.4)' }, { transform: 'translate(-50%, -50%) scale(1)', filter: 'brightness(1)' }]
+      : [{ transform: 'translate(-50%, -50%) scale(1.8)', opacity: 0 }, { transform: 'translate(-50%, -50%) scale(1)', opacity: 1 }],
+    { duration: go ? GO_FLASH_MS : COUNTDOWN_POP_MS, easing: 'ease-out' });
+  }
+
   /** HUD item slot and touch ITEM button, including the local kart's item roulette. */
   private updateItem(player: KartState): void {
     const remaining = player.item ? player.effects.rouletteTime : 0;
-    const step = stepRoulette(this.roulette, remaining, this.reducedMotion?.matches ?? false, ROULETTE_TIME);
-    const art = this.roulette.item ? itemIcon(this.roulette.item) : emptyItem;
+    const reduced = this.reducedMotion?.matches ?? false;
+    if (reduced && (this.settleAnims.length || this.motionAnims?.length || this.cancelConfetti)) this.stopMotion();
+    const step = stepRoulette(this.roulette, remaining, reduced, ROULETTE_TIME);
+    const art = rouletteStripHtml(this.roulette, player.item);
     if (step === 'start') {
       this.lastItem = undefined;
       this.text('item-announce', '');
@@ -379,6 +453,8 @@ export class GameUI {
     } else if (step === 'switch' || step === 'restyle') {
       this.setItemArt(art, true);
       if (step === 'switch') this.onRoulette?.('tick');
+    } else if (this.roulette.active && this.roulette.strip) {
+      this.setItemArt(art, true);
     }
     if (remaining > 0) return;
     const revealed = step === 'stop' && player.item !== null;
@@ -392,9 +468,8 @@ export class GameUI {
       if (this.playMode !== 'timeattack') this.text('item-name', player.item ? itemName(player.item) : 'ボックスを取ろう');
       this.text('item-button-name', player.item ? itemShortName(player.item) : 'ITEM');
       this.setItemArt(player.item ? itemIcon(player.item) : emptyItem, player.item !== null);
-      // Fresh SVG nodes start the pop (or the reduced-motion fade) only on a roulette stop.
-      this.get('item-hud-icon').classList.toggle('is-revealed', revealed);
-      this.get('item-button-icon').classList.toggle('is-revealed', revealed);
+      // The 1.25 -> 1.0 settle plays only on a roulette stop; reduced motion shows the final icon at once.
+      if (revealed && !reduced) this.settleItemArt();
       const button = this.get<HTMLButtonElement>('use-item');
       button.disabled = player.item === null;
       if (button.disabled) {
@@ -415,6 +490,19 @@ export class GameUI {
     hud.innerHTML = art;
     button.innerHTML = art;
     hud.classList.toggle('has-item', hasItem);
+    // HUD frame in the held item's colour; the rolling slot keeps the stylesheet's gold frame.
+    const held = hasItem && this.lastItem ? itemColors[this.lastItem] : '';
+    hud.style.boxShadow = held && !this.roulette.active ? `inset 0 0 0 2px ${held}` : '';
+  }
+
+  /** Confirmed icon: 1.25x settling to 1.0x over ROULETTE_SETTLE seconds. */
+  private settleItemArt(): void {
+    this.settleAnims = [];
+    for (const id of ['item-hud-icon', 'item-button-icon']) {
+      const svg = this.get(id).firstElementChild;
+      const anim = svg?.animate?.([{ transform: 'scale(1.25)' }, { transform: 'scale(1)' }], { duration: ROULETTE_SETTLE * 1000, easing: 'ease-out' });
+      if (anim) this.settleAnims.push(anim);
+    }
   }
 
   private setRolling(rolling: boolean): void {
@@ -434,6 +522,7 @@ export class GameUI {
     const player = state.karts.find((kart) => kart.id === this.localKartId);
     if (!player) return;
     const rank = getRank(state, this.localKartId);
+    const reduced = this.reducedMotion?.matches ?? false;
     const didFinish = player.finishTime !== null;
     this.text('results-course', `${getTrack(state.trackId).def.name} · ${state.laps} LAPS`);
     const timeAttack = this.playMode === 'timeattack';
@@ -441,11 +530,15 @@ export class GameUI {
     this.get('result-position').hidden = timeAttack;
     this.get('leaderboard').hidden = timeAttack;
     this.get('best-lap-record').hidden = !(extra?.isLapRecord && didFinish);
-    this.get('result-position').innerHTML = `${rank}<span>位</span>`;
+    const positionEl = this.get('result-position');
+    positionEl.innerHTML = `${rank}<span>位</span>`;
+    positionEl.dataset.rank = String(rank);
+    positionEl.dataset.ordinal = ordinal(rank);
     this.text('finish-time', didFinish ? formatTime(player.finishTime!) : 'DNF');
     this.text('finish-best', best === null ? '—' : timeAttack ? formatPreciseTime(best) : formatTime(best));
     this.get('new-record').hidden = !isRecord || !didFinish;
     const list = this.get('leaderboard');
+    this.motionAnims = [];
     list.replaceChildren();
     const order = [...state.karts].sort((a, b) => getRank(state, a.id) - getRank(state, b.id));
     for (const [index, kart] of order.entries()) {
@@ -470,12 +563,19 @@ export class GameUI {
       time.textContent = formatResultTime(state, kart);
       row.append(position, swatch, name, time);
       list.append(row);
+      if (!reduced) this.play(row, [{ opacity: 0, transform: 'translateY(10px)' }, { opacity: 1, transform: 'none' }],
+        { duration: 200, delay: index * RESULT_ROW_STAGGER_MS, easing: 'ease-out', fill: 'backwards' });
     }
     const lapResults = player.lapTimes.map((time, index) => `LAP ${index + 1}  ${formatTime(time)}`);
     if (!didFinish) lapResults.push(`未完走 · ${player.lap} / ${state.laps} 周完了`);
     this.text('result-laps', lapResults.join('   /   '));
     if (!timeAttack) this.setBest(best);
     this.show('results');
+    if (!reduced) {
+      this.play(positionEl, [{ transform: 'translateY(48px)', opacity: 0 }, { transform: 'translateY(0)', opacity: 1 }],
+        { duration: FINISH_SLIDE_MS, easing: 'ease-out' });
+      if (didFinish && !timeAttack && rank <= 3) this.cancelConfetti = startConfetti(this.results);
+    }
   }
 
   setLaps(laps: number, best: number | null): void {

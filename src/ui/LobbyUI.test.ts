@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { COLORS, courseView, lapsView, isPlayerName, LobbyUI, normalizeCode, pastedCode, ROOM_CODE } from './LobbyUI';
+import { COLORS, courseView, lapsView, isPlayerName, LobbyUI, normalizeCode, pastedCode, ROOM_CODE, settingsLabel } from './LobbyUI';
 import { getTrack, TRACK_IDS } from '../sim/tracks';
 import type { RosterView } from '../net/session';
 import { createRace } from '../sim/race';
@@ -158,6 +158,52 @@ describe('LobbyUI laps selection', () => {
   });
 });
 
+describe('LobbyUI online race settings (M12-31)', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('labels the host settings for guests', () => {
+    expect(settingsLabel({ cpuLevel: 'normal', cpuFill: true, items: true })).toBe('CPU ふつう · CPU で 8 台 · アイテムあり（ホストが選択）');
+    expect(settingsLabel({ cpuLevel: 'hard', cpuFill: false, items: false })).toBe('CPU つよい · プレイヤーのみ · アイテムなし（ホストが選択）');
+    expect(settingsLabel({ cpuLevel: 'easy', cpuFill: true, items: false })).toContain('CPU やさしい');
+  });
+
+  it('gives the host editable controls and the guest a read-only line', () => {
+    const { ui, get } = harness();
+    const levels = ['easy', 'normal', 'hard'].map(value => ({ value, checked: false }));
+    Object.assign(get('lobby-cpu-level-select'), { querySelectorAll: () => levels });
+    const settings = { cpuLevel: 'hard', cpuFill: false, items: false } as const;
+    ui.render(roster, 'lobby');
+    ui.setSettings(settings, 'host');
+    for (const id of ['lobby-cpu-level-select', 'lobby-rules-select']) {
+      expect(get(id).hidden).toBe(false);
+      expect(get(id).disabled).toBe(false);
+    }
+    expect(levels.map(level => level.checked)).toEqual([false, false, true]);
+    expect([get('lobby-cpu-fill'), get('lobby-items')].map(input => (input as unknown as { checked: boolean }).checked)).toEqual([false, false]);
+    expect(get('lobby-settings-name').hidden).toBe(true);
+    ui.setSettings({ ...settings, cpuFill: true }, 'guest');
+    for (const id of ['lobby-cpu-level-select', 'lobby-rules-select']) {
+      expect(get(id).hidden).toBe(true);
+      expect(get(id).disabled).toBe(true);
+    }
+    expect(get('lobby-settings-name').hidden).toBe(false);
+    expect(get('lobby-settings-name').textContent).toBe('CPU つよい · CPU で 8 台 · アイテムなし（ホストが選択）');
+    // Outside the lobby even the host's controls are disabled.
+    ui.render(roster, 'countdown');
+    ui.setSettings(settings, 'host');
+    expect(get('lobby-rules-select').disabled).toBe(true);
+  });
+
+  it.each(['host', 'guest'] as const)('accepts setting changes only from the host in the lobby (%s)', role => {
+    const { ui } = harness();
+    const view: RosterView = { ...roster, players: [{ ...roster.players[0], kind: role }] };
+    for (const phase of ['idle', 'connecting', 'lobby', 'countdown', 'racing', 'results', 'closed'] as const) {
+      ui.render(view, phase);
+      expect((ui as unknown as { hostInLobby(): boolean }).hostInLobby()).toBe(role === 'host' && phase === 'lobby');
+    }
+  });
+});
+
 describe('LobbyUI render state', () => {
   afterEach(() => vi.unstubAllGlobals());
 
@@ -307,11 +353,11 @@ describe('LobbyUI course view model', () => {
     expect(courseView(courses, id, 'guest')).toMatchObject({ index, label: `${String(index + 1).padStart(2, '0')} ${getTrack(id).def.name}` });
   });
 
-  it('lists all 20 courses for the host select and shows the 20th by number and name to the guest', () => {
-    expect(courses).toHaveLength(20);
-    const last = courses[19];
-    expect(courseView(courses, last.id, 'guest')).toEqual({ editable: false, index: 19, label: `20 ${last.name}` });
-    expect(courseView(courses, last.id, 'host').label).toBe('20 SKY SPIRE');
+  it('lists all 21 courses for the host select and shows the 21st by number and name to the guest', () => {
+    expect(courses).toHaveLength(21);
+    const last = courses[20];
+    expect(courseView(courses, last.id, 'guest')).toEqual({ editable: false, index: 20, label: `21 ${last.name}` });
+    expect(courseView(courses, last.id, 'host').label).toBe('21 AQUEDUCT');
   });
 
   it.each(['', 'unknown', 'MEADOW', '__proto__'])('marks an unknown course %j without guessing one', id => {

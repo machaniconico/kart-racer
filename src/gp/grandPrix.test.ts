@@ -27,16 +27,16 @@ function freezeDeep(value: object): void {
 }
 
 describe('Grand Prix', () => {
-  it('defines five four-race cups in TRACK_IDS order and the eight-place points table', () => {
+  it('defines five cups in TRACK_IDS order and the eight-place points table', () => {
     expect(CUPS).toEqual([
       { id: 'sunrise', name: 'SUNRISE CUP', tracks: ['meadow', 'canyon', 'snowpeak', 'neon'] },
       { id: 'horizon', name: 'HORIZON CUP', tracks: ['harbor', 'forest', 'volcano', 'skyline'] },
       { id: 'zenith', name: 'ZENITH CUP', tracks: ['dunes', 'garden', 'speedway', 'bayou'] },
       { id: 'eclipse', name: 'ECLIPSE CUP', tracks: ['cavern', 'temple', 'serpentine', 'lunar'] },
-      { id: 'extreme', name: 'EXTREME CUP', tracks: ['summit', 'chasm', 'velodrome', 'spire'] },
+      { id: 'extreme', name: 'EXTREME CUP', tracks: ['summit', 'chasm', 'velodrome', 'spire', 'aqueduct'] },
     ]);
     for (const cup of CUPS) {
-      expect(cup.tracks).toHaveLength(4);
+      expect(cup.tracks).toHaveLength(cup.id === 'extreme' ? 5 : 4);
       expect(TRACK_IDS.filter(trackId => cup.tracks.includes(trackId))).toEqual(cup.tracks);
     }
     expect(CUPS.flatMap(cup => cup.tracks)).toEqual(TRACK_IDS);
@@ -60,7 +60,7 @@ describe('Grand Prix', () => {
     }
   });
 
-  it.each(CUPS)('$id advances through four races, conserves points, and rejects a fifth result', cup => {
+  it.each(CUPS)('$id advances through every race, conserves points, and rejects an extra result', cup => {
     let gp = createGrandPrix(cup.id, 1, 'normal');
     const raceTotal = GP_POINTS.reduce((sum, points) => sum + points, 0);
     for (const [index, trackId] of cup.tracks.entries()) {
@@ -80,7 +80,7 @@ describe('Grand Prix', () => {
         expect(row.gained).toBe(GP_POINTS[row.lastPosition - 1]);
       }
     }
-    expect(standings(gp).reduce((sum, row) => sum + row.points, 0)).toBe(raceTotal * 4);
+    expect(standings(gp).reduce((sum, row) => sum + row.points, 0)).toBe(raceTotal * cup.tracks.length);
     expect(isComplete(gp)).toBe(true);
     expect(nextTrack(gp)).toBeNull();
     const snapshot = structuredClone(gp);

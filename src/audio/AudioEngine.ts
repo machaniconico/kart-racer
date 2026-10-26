@@ -96,6 +96,8 @@ export class AudioEngine {
         case 'boost':
           this.tone(190, now, 0.27, 0.12, 'triangle', 780);
           this.noise(now, 0.22, 0.12, 1800);
+          // Start dash (value 2, pushed only on the GO tick): a rising whoop over the GO chord.
+          if (event.value === 2) this.tone(520, now + 0.05, 0.3, 0.14, 'sawtooth', 1560);
           break;
         case 'use':
           this.tone(620, now, 0.14, 0.13, 'triangle', 260);

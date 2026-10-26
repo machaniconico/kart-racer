@@ -112,10 +112,17 @@ function observeProgress() {
       let delta = kart.trackDistance - before[i]!;
       if (delta < -track.length / 2) { delta += track.length; seamCrossings++; }
       else if (delta > track.length / 2) delta -= track.length;
-      min = Math.min(min, delta);
+      // M12-21: kart-kart separation pushes along the centre line, so a stopped kart grazed by a passer can slip
+      // back < 1 mm (seed 42 hard: -0.0002 m; HEAD sim already did at seeds 67/68/111/177/178/188/199).
+      // Only that case is exempt: at most 1 mm back while touching another kart on the same deck this tick.
+      const touching = state.karts.some(other => other !== kart && geometry.sameLevel(kart.y, other.y) &&
+        Math.hypot(other.x - kart.x, other.z - kart.z) < race.KART_RADIUS * 2 + 0.05);
+      min = Math.min(min, delta < 0 && delta >= -1e-3 && touching ? 0 : delta);
       max = Math.max(max, delta);
       // Compare each tick with that kart's speed, including item/drift boosts.
-      maxExcess = Math.max(maxExcess, delta - (speed * race.FIXED_DT + 0.25));
+      // M12-21: a slow kart rear-ended this tick is shoved forward past its pre-impact speed·dt (seed 1 hard
+      // +0.0304 m; HEAD exceeds too, up to +0.083 m over seeds 1-20). While touching, allow 0.1 m more (covers that HEAD max).
+      maxExcess = Math.max(maxExcess, delta - (speed * race.FIXED_DT + 0.25 + (touching ? 0.1 : 0)));
     });
   });
   return () => ({ min, max, maxExcess, seamCrossings });

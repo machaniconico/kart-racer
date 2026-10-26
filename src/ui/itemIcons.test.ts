@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { itemIcon, itemIcons, itemName, itemNames, itemShortName, itemShortNames, emptyItemIcon } from './itemIcons';
+import { itemIcon, itemIcons, itemName, itemNames, itemShortName, itemShortNames, emptyItemIcon, itemColors } from './itemIcons';
 import { createInkOverlay, disposeInkOverlay, update } from './inkOverlay';
 import { playItemEvent } from '../audio/itemSounds';
 import type { ItemType, RaceEvent } from '../sim/types';
@@ -13,10 +13,13 @@ describe('item artwork shared by the HUD and touch button', () => {
     expect(Object.keys(itemNames)).toHaveLength(14);
     expect(Object.keys(itemShortNames)).toHaveLength(14);
     expect(new Set(items.map(itemIcon)).size).toBe(14);
+    expect(Object.keys(itemColors)).toHaveLength(14);
     for (const item of items) {
       const svg = itemIcon(item);
       expect(svg).toContain('viewBox="0 0 24 24"');
       expect(svg).toContain('stroke="currentColor"');
+      expect(svg).toContain(`fill="${itemColors[item]}"`);
+      expect(itemColors[item]).toMatch(/^#[0-9a-f]{6}$/);
       expect(svg).toContain('aria-hidden="true"');
       expect(svg).toMatch(/^<svg .*<\/svg>$/);
       expect(svg).not.toBe(emptyItemIcon);

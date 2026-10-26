@@ -3,7 +3,7 @@ import type { Track } from '../sim/types';
 
 const tracks = vi.hoisted(() => ({
   current: { def: { name: 'Init' } } as unknown,
-  // While GameUI is imported, getTrack answers per course so the title's course options see 20 distinct names.
+  // While GameUI is imported, getTrack answers per course so the title's course options see 21 distinct names.
   names: null as Record<string, string> | null,
 }));
 vi.mock('../sim/tracks', async importOriginal => {
@@ -15,7 +15,10 @@ vi.mock('../sim/tracks', async importOriginal => {
   };
 });
 
-import { courseNumber, courseOptions, cpuOptions, cupOptions, formatPreciseTime, GameUI, modeOptions } from './GameUI';
+const confetti = vi.hoisted(() => ({ start: vi.fn(() => vi.fn()) }));
+vi.mock('./confetti', () => ({ startConfetti: confetti.start }));
+
+import { COUNTDOWN_POP_MS, FINISH_SLIDE_MS, GO_FLASH_MS, RESULT_ROW_STAGGER_MS, courseNumber, courseOptions, cpuOptions, cupOptions, formatPreciseTime, GameUI, modeOptions } from './GameUI';
 import { CUPS } from '../gp/grandPrix';
 import { sampleTrack } from '../sim/track';
 import { createRouletteView } from './itemIcons';
@@ -89,17 +92,18 @@ function upperPaths(decks: Track['def']['decks']): string[] {
 }
 
 describe('GameUI title course options', () => {
-  it('renders all 20 courses labelled 01 to 20 with their definition names', () => {
+  it('renders all 21 courses labelled 01 to 21 with their definition names', () => {
     const ids = Object.keys(courseNames);
-    expect(ids).toHaveLength(20);
+    expect(ids).toHaveLength(21);
     const labels = [...courseOptions.matchAll(/aria-label="([^"]*)"/g)].map(match => match[1]);
     expect(labels).toEqual(ids.map((id, index) => `${String(index + 1).padStart(2, '0')} ${courseNames[id]}`));
     expect(labels[7]).toBe('08 STRATOS CITY');
     expect(labels[15]).toBe('16 LUNAR BASIN');
     expect(labels[19]).toBe('20 SKY SPIRE');
+    expect(labels[20]).toBe('21 AQUEDUCT');
     expect(ids.map(courseNumber)).toEqual([
       '01', '02', '03', '04', '05', '06', '07', '08',
-      '09', '10', '11', '12', '13', '14', '15', '16', '17', '18', '19', '20',
+      '09', '10', '11', '12', '13', '14', '15', '16', '17', '18', '19', '20', '21',
     ]);
   });
 });
@@ -254,7 +258,7 @@ describe('GameUI title mode / cup / cpu options', () => {
     expect(labelsOf(modeOptions)).toEqual(['レース', 'グランプリ', 'タイムアタック']);
     expect(valuesOf(cupOptions)).toEqual(CUPS.map(cup => cup.id));
     expect(labelsOf(cupOptions)).toEqual([
-      'SUNRISE CUP 01–04', 'HORIZON CUP 05–08', 'ZENITH CUP 09–12', 'ECLIPSE CUP 13–16', 'EXTREME CUP 17–20',
+      'SUNRISE CUP 01–04', 'HORIZON CUP 05–08', 'ZENITH CUP 09–12', 'ECLIPSE CUP 13–16', 'EXTREME CUP 17–21',
     ]);
     expect(valuesOf(cpuOptions)).toEqual(['easy', 'normal', 'hard']);
     expect(labelsOf(cpuOptions)).toEqual(['やさしい', 'ふつう', 'つよい']);
@@ -287,7 +291,7 @@ function fakeUi() {
   const ui = Object.create(GameUI.prototype) as Record<string, unknown> & {
     setPlayMode(m: string): void; setCpuLevel(l: string): void; setCup(c: string): void; setTimeAttackBest(t: number | null, b: number | null): void;
     setCourse(id: string, best: number | null): void; showResults(...args: unknown[]): void; show(s: string): void };
-  Object.assign(ui, { refs, root, playMode: 'race', courseId: 'meadow', localKartId: 0, screen: 'title', paused: false,
+  Object.assign(ui, { refs, root, playMode: 'race', courseId: 'meadow', localKartId: 0, screen: 'title', paused: false, itemsEnabled: true,
     setBackgroundResolution: () => undefined, setPaused: () => undefined, setCourseLabels: () => undefined, canvas: {} });
   return { ui, refs, root };
 }
@@ -313,7 +317,7 @@ describe('GameUI play modes', () => {
     expect(refs['course-name'].textContent).toBe('ECLIPSE CUP · 4 RACES');
     ui.setCup('extreme');
     expect(refs['cup-select'].inputs.map(input => input.checked)).toEqual([false, false, false, false, true]);
-    expect(refs['course-name'].textContent).toBe('EXTREME CUP · 4 RACES');
+    expect(refs['course-name'].textContent).toBe('EXTREME CUP · 5 RACES');
     ui.setPlayMode('timeattack');
     expect([refs['cup-select'].hidden, refs['course-select'].hidden, refs['cpu-select'].hidden, refs['position-group'].hidden])
       .toEqual([true, false, true, true]);
@@ -348,6 +352,84 @@ describe('GameUI play modes', () => {
     expect(button.disabled).toBe(true);
     expect(button.attrs['aria-label']).toBe('アイテムを持っていません');
     expect(refs['item-name'].textContent).not.toBe('ボックスを取ろう');
+  });
+
+  const rocketUi = () => {
+    const { ui, refs } = fakeUi();
+    const make = () => ({ ...fakeEl(), disabled: false, attrs: {} as Record<string, string>,
+      classList: { toggle: () => undefined, remove: () => undefined },
+      setAttribute(name: string, value: string) { this.attrs[name] = value; }, dispatchEvent: () => true });
+    const any = new Proxy(refs as Record<string, unknown>, { get: (target, key: string) => (target[key] ??= make()) });
+    Object.assign(ui, { refs: any, roulette: createRouletteView(), lastItem: undefined, reducedMotion: null, onRoulette: null,
+      inkMounted: true, lastMapTick: 0, drawMap: () => undefined });
+    const state = createRace(1, { karts: 2, itemBoxes: false });
+    const update = () => (ui as unknown as { update(s: unknown): void }).update(state);
+    return { ui: ui as unknown as GameUI, refs, state, kart: state.karts[0]!, update };
+  };
+  const rocketEvent = (kartId: number) => [{ type: 'go' as const, kartId: 0 }, { type: 'boost' as const, kartId, value: 2 }];
+
+  it('hides the countdown start-dash hold and shows ROCKET START from the local GO boost event', () => {
+    const { ui, refs, state, kart, update } = rocketUi();
+    // Countdown: boostTime is the hold accumulator (0.3 s held so far), not a boost.
+    Object.assign(state, { tick: 160 });
+    kart.boostTime = 0.3;
+    update();
+    expect(refs['race-status'].hidden).toBe(true);
+    ui.noteEvents(rocketEvent(0));
+    Object.assign(state, { phase: 'racing', tick: 183, racingTicks: 3, time: 3 / 60 });
+    kart.boostTime = 1 - 3 / 60;
+    update();
+    expect(refs['race-status'].hidden).toBe(false);
+    expect(refs['race-status'].textContent).toBe('ROCKET START!');
+    // An item dash after the start-dash second keeps its own label.
+    Object.assign(state, { racingTicks: 120, time: 2 });
+    kart.boostTime = 0.5;
+    update();
+    expect(refs['race-status'].textContent).toBe('DASH!');
+  });
+
+  it('guest view: shows ROCKET START although predicted boost + host time do not sum to the grant', () => {
+    const { ui, refs, state, kart, update } = rocketUi();
+    // Predicted local kart at 120 ms RTT: timers from prediction, time from a quantized host snapshot.
+    Object.assign(state, { phase: 'racing', tick: 191, racingTicks: 11, time: 0.18 });
+    kart.boostTime = 0.94;
+    ui.noteEvents(rocketEvent(0));
+    update();
+    expect(refs['race-status'].textContent).toBe('ROCKET START!');
+  });
+
+  it('an early item/drift boost without the local GO event, or another kart\'s start dash, stays DASH!', () => {
+    const { ui, refs, state, kart, update } = rocketUi();
+    Object.assign(state, { phase: 'racing', tick: 210, racingTicks: 30, time: 0.5 });
+    kart.boostTime = 0.5;
+    ui.noteEvents(rocketEvent(1));
+    update();
+    expect(refs['race-status'].textContent).toBe('DASH!');
+  });
+
+  it('cancels the running 120 ms settle animation when reduced motion turns on mid-settle', () => {
+    const { ui } = fakeUi();
+    const cancel = vi.fn();
+    const make = () => ({ ...fakeEl(), disabled: false, attrs: {} as Record<string, string>, firstElementChild: { animate: () => ({ cancel }) },
+      classList: { toggle: () => undefined, remove: () => undefined },
+      setAttribute(name: string, value: string) { this.attrs[name] = value; }, dispatchEvent: () => true });
+    const any = new Proxy({} as Record<string, unknown>, { get: (target, key: string) => (target[key] ??= make()) });
+    const media = { matches: false };
+    Object.assign(ui, { refs: any, roulette: createRouletteView(), lastItem: undefined, reducedMotion: media, onRoulette: null,
+      inkMounted: true, lastMapTick: 0, drawMap: () => undefined });
+    const state = createRace(1, { karts: 2, itemBoxes: false });
+    const update = () => (ui as unknown as { update(s: unknown): void }).update(state);
+    state.karts[0]!.item = 'dash';
+    state.karts[0]!.effects.rouletteTime = 0.5;
+    update();
+    state.karts[0]!.effects.rouletteTime = 0;
+    update(); // stop: starts the settle animations
+    expect(cancel).not.toHaveBeenCalled();
+    media.matches = true;
+    update();
+    expect(cancel).toHaveBeenCalledTimes(2);
+    update();
+    expect(cancel).toHaveBeenCalledTimes(2);
   });
 
   it('checks the cpu level radio and formats the time attack best', () => {
@@ -386,5 +468,100 @@ describe('GameUI play modes', () => {
     expect(refs['results-heading'].textContent).toBe('TIME ATTACK');
     expect([refs['result-position'].hidden, refs['leaderboard'].hidden, refs['best-lap-record'].hidden]).toEqual([true, true, false]);
     expect(refs['finish-best'].textContent).toBe('1:10.000');
+  });
+});
+
+describe('GameUI B5 presentation', () => {
+  const animated = () => { const animate = vi.fn(); return { ...fakeEl(), animate, classList: { toggle: () => undefined, remove: () => undefined }, setAttribute: () => undefined, disabled: false, dispatchEvent: () => true }; };
+
+  function raceUi(reduced: boolean) {
+    tracks.current = loopTrack();
+    const { ui, refs } = fakeUi();
+    const make = () => animated();
+    const any = new Proxy(refs as Record<string, unknown>, { get: (target, key: string) => (target[key] ??= make()) });
+    Object.assign(ui, { refs: any, roulette: createRouletteView(), lastItem: undefined, reducedMotion: { matches: reduced }, onRoulette: null, settleAnims: [],
+      inkMounted: true, lastMapTick: 0, drawMap: () => undefined });
+    const update = (s: unknown) => (ui as unknown as { update(s: unknown): void }).update(s);
+    return { ui, refs, any: any as Record<string, ReturnType<typeof animated>>, update };
+  }
+
+  it('tags the countdown 3/2/1/go and animates 280 ms pops and a 160 ms GO flash once per change', () => {
+    const { any, update } = raceUi(false);
+    const state = createRace(1, { karts: 2, itemBoxes: false });
+    const seen: string[] = [];
+    for (const countdown of [2.5, 2.2, 1.5, 0.5]) {
+      state.phase = 'countdown'; state.countdown = countdown;
+      update(state); update(state);
+      seen.push(any['countdown-display'].dataset.count!);
+    }
+    state.phase = 'racing'; state.time = 0.1;
+    update(state);
+    seen.push(any['countdown-display'].dataset.count!);
+    expect(seen).toEqual(['3', '3', '2', '1', 'go']);
+    const calls = any['countdown-display'].animate.mock.calls as unknown as [unknown, { duration: number }][];
+    expect(calls.map(call => call[1].duration)).toEqual([COUNTDOWN_POP_MS, COUNTDOWN_POP_MS, COUNTDOWN_POP_MS, GO_FLASH_MS]);
+    expect([COUNTDOWN_POP_MS, GO_FLASH_MS]).toEqual([280, 160]);
+    expect(JSON.stringify(calls[0]![0])).toContain('scale(1.8)');
+  });
+
+  it('does not animate the countdown under reduced motion but still tags it', () => {
+    const { any, update } = raceUi(true);
+    const state = createRace(1, { karts: 2, itemBoxes: false });
+    state.phase = 'countdown'; state.countdown = 2.5;
+    update(state);
+    expect(any['countdown-display'].dataset.count).toBe('3');
+    expect(any['countdown-display'].animate).not.toHaveBeenCalled();
+  });
+
+  function finish(reduced: boolean, rank: number) {
+    confetti.start.mockClear();
+    const { ui, refs } = fakeUi();
+    const rows: ReturnType<typeof animated>[] = [];
+    Object.assign(ui, { results: fakeEl(), title: fakeEl(), lobby: fakeEl(), race: fakeEl(), reducedMotion: { matches: reduced } });
+    refs['result-position'] = animated() as unknown as FakeEl;
+    vi.stubGlobal('requestAnimationFrame', vi.fn());
+    vi.stubGlobal('document', { createElement: () => { const row = animated(); rows.push(row); return row; } });
+    tracks.current = loopTrack();
+    (ui as unknown as { show(s: string): void }).show = () => undefined;
+    const state = createRace(1, { karts: 4, itemBoxes: false });
+    state.karts.forEach(kart => { kart.lapTimes = [20]; });
+    const order = state.karts.filter(kart => kart.id !== 0);
+    order.splice(rank - 1, 0, state.karts[0]!);
+    order.forEach((kart, index) => { kart.finishTime = 60 + index; });
+    ui.showResults(state, 60, false);
+    return { refs, rows, position: refs['result-position'] as unknown as ReturnType<typeof animated> };
+  }
+
+  it('shows the local rank, slides it in over 320 ms and staggers rows by 70 ms', () => {
+    const { refs, rows, position } = finish(false, 2);
+    expect(refs['result-position'].dataset.rank).toBe('2');
+    expect(refs['result-position'].dataset.ordinal).toBe('2nd');
+    expect(refs['result-position'].innerHTML).toBe('2<span>位</span>');
+    expect((position.animate.mock.calls[0] as unknown as [unknown, { duration: number }])[1].duration).toBe(FINISH_SLIDE_MS);
+    const delays = rows.filter(row => row.animate.mock.calls.length).map(row => (row.animate.mock.calls[0] as unknown as [unknown, { delay: number }])[1].delay);
+    expect(delays.slice(0, 3)).toEqual([0, RESULT_ROW_STAGGER_MS, 2 * RESULT_ROW_STAGGER_MS]);
+    expect(confetti.start).toHaveBeenCalledTimes(1);
+  });
+
+  it('launches confetti only for the top three and never under reduced motion', () => {
+    finish(false, 4);
+    expect(confetti.start).not.toHaveBeenCalled();
+    finish(true, 1);
+    expect(confetti.start).not.toHaveBeenCalled();
+    const { position } = finish(true, 1);
+    expect(position.animate).not.toHaveBeenCalled();
+  });
+
+  it('cancels running B5 animations and confetti when reduced motion turns on mid-run', () => {
+    const { ui } = fakeUi();
+    const cancel = vi.fn();
+    const stopConfetti = vi.fn();
+    const media = { matches: false };
+    Object.assign(ui, { reducedMotion: media, motionAnims: [{ cancel }, { cancel }], settleAnims: [{ cancel }], cancelConfetti: stopConfetti });
+    (ui as unknown as { stopMotion(): void }).stopMotion();
+    expect(cancel).toHaveBeenCalledTimes(3);
+    expect(stopConfetti).toHaveBeenCalledTimes(1);
+    expect((ui as Record<string, unknown>).motionAnims).toEqual([]);
+    expect((ui as Record<string, unknown>).cancelConfetti).toBeNull();
   });
 });

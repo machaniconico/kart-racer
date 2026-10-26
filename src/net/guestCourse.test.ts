@@ -5,7 +5,7 @@ import { MockTransport } from './mockTransport';
 import { NEUTRAL_INPUT } from './inputBuffer';
 import { encodeControlMessage, parseControlMessage } from './protocol';
 import type { ControlMessage } from './protocol';
-import type { RosterPlayer } from './session';
+import type { RaceSettings, RosterPlayer } from './session';
 import { encodeSnapshot } from './snapshotCodec';
 import type { PeerLink } from './transport';
 import { packPong, unpackClock } from './clock';
@@ -16,7 +16,7 @@ const roster: RosterPlayer[] = createRace(1).karts.map(kart => ({
   kind: kart.id === 0 ? 'host' : kart.id === 1 ? 'guest' : 'cpu', connected: true,
 }));
 
-async function joinedGuest() {
+async function joinedGuest(settings: Partial<RaceSettings> = {}) {
   const network = new MockTransport({ latencyMs: 0 });
   const host = await network.host('AB2X');
   let link!: PeerLink;
@@ -24,7 +24,7 @@ async function joinedGuest() {
     link = peer;
     peer.onMessage((kind, data) => {
       if (kind === 'reliable' && parseControlMessage(data)?.type === 'hello') peer.send('reliable', encodeControlMessage({
-        type: 'welcome', laps: 3, trackId: 'canyon', slot: 1, roster, hostTime: network.now,
+        type: 'welcome', cpuLevel: 'normal', cpuFill: true, items: true, ...settings, laps: 3, trackId: 'canyon', slot: 1, roster, hostTime: network.now,
       }));
     });
   });
@@ -41,9 +41,9 @@ describe('GuestSession course updates outside the lobby (C-006)', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       expect(h.guest.laps).toBe(3);
-      h.send({ type: 'course', trackId: 'canyon', laps: 1 });
+      h.send({ type: 'course', cpuLevel: 'normal', cpuFill: true, items: true, trackId: 'canyon', laps: 1 });
       expect(h.guest.laps).toBe(1);
-      const start = { type: 'race_start', trackId: 'canyon', laps: 3, seed: 7, raceId: 1, roster,
+      const start = { type: 'race_start', cpuLevel: 'normal', cpuFill: true, items: true, trackId: 'canyon', laps: 3, seed: 7, raceId: 1, roster,
         startAtHostTime: h.network.now } as const;
       h.send(start);
       expect(h.guest.phase).toBe('lobby');
@@ -53,7 +53,7 @@ describe('GuestSession course updates outside the lobby (C-006)', () => {
       h.send({ ...start, laps: 1 });
       expect(h.guest.phase).toBe('countdown');
       expect(h.guest.frame()!.state.laps).toBe(1);
-      h.send({ type: 'course', trackId: 'neon', laps: 2 });
+      h.send({ type: 'course', cpuLevel: 'normal', cpuFill: true, items: true, trackId: 'neon', laps: 2 });
       expect(h.guest.course).toBe('canyon');
       expect(h.guest.laps).toBe(1);
       expect(h.guest.frame()!.state.laps).toBe(1);
@@ -66,9 +66,9 @@ describe('GuestSession course updates outside the lobby (C-006)', () => {
       expect(h.guest.phase).toBe('lobby');
       expect(h.guest.course).toBe('canyon');
       const startAt = h.network.now + 3000;
-      h.send({ type: 'race_start', laps: 3, trackId: 'canyon', seed: 7, raceId: 1, roster, startAtHostTime: startAt });
+      h.send({ type: 'race_start', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, trackId: 'canyon', seed: 7, raceId: 1, roster, startAtHostTime: startAt });
       expect(h.guest.phase).toBe('countdown');
-      h.send({ type: 'course', laps: 1, trackId: 'neon' });
+      h.send({ type: 'course', cpuLevel: 'normal', cpuFill: true, items: true, laps: 1, trackId: 'neon' });
       expect(h.guest.course).toBe('canyon');
       expect(h.guest.laps).toBe(3);
       expect(h.guest.frame()!.state.trackId).toBe('canyon');
@@ -83,7 +83,7 @@ describe('GuestSession course updates outside the lobby (C-006)', () => {
       h.network.advance(150);
       h.guest.frame();
       expect(h.guest.phase).toBe('racing');
-      h.send({ type: 'course', laps: 2, trackId: 'snowpeak' });
+      h.send({ type: 'course', cpuLevel: 'normal', cpuFill: true, items: true, laps: 2, trackId: 'snowpeak' });
       expect(h.guest.course).toBe('canyon');
       expect(h.guest.laps).toBe(3);
       expect(h.guest.frame()!.state.trackId).toBe('canyon');
@@ -95,17 +95,46 @@ describe('GuestSession course updates outside the lobby (C-006)', () => {
     const h = await joinedGuest();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
-      h.send({ type: 'race_start', laps: 3, trackId: 'neon', seed: 7, raceId: 1, roster, startAtHostTime: h.network.now });
+      h.send({ type: 'race_start', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, trackId: 'neon', seed: 7, raceId: 1, roster, startAtHostTime: h.network.now });
       expect(h.guest.phase).toBe('lobby');
       expect(warn).toHaveBeenCalledOnce();
       expect(String(warn.mock.calls[0][0])).toMatch(/neon.*canyon/);
-      h.send({ type: 'race_start', laps: 3, trackId: 'canyon', seed: 7, raceId: 1, roster, startAtHostTime: h.network.now });
+      h.send({ type: 'race_start', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, trackId: 'canyon', seed: 7, raceId: 1, roster, startAtHostTime: h.network.now });
       expect(h.guest.phase).toBe('countdown');
       expect(warn).toHaveBeenCalledOnce();
     } finally {
       warn.mockRestore();
       h.host.close();
     }
+  });
+
+  it('M12-31 takes the settings from welcome and course, ignores race_start setting mismatches and builds the host race', async () => {
+    const h = await joinedGuest({ cpuLevel: 'hard', cpuFill: false, items: false });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(h.guest.settings).toEqual({ cpuLevel: 'hard', cpuFill: false, items: false });
+      h.send({ type: 'course', cpuLevel: 'easy', cpuFill: false, items: false, trackId: 'canyon', laps: 3 });
+      expect(h.guest.settings).toEqual({ cpuLevel: 'easy', cpuFill: false, items: false });
+      const start = { type: 'race_start', cpuLevel: 'easy', cpuFill: false, items: false, trackId: 'canyon', laps: 3, seed: 7, raceId: 1, roster,
+        startAtHostTime: h.network.now } as const;
+      const mismatches = [{ cpuLevel: 'hard' }, { cpuFill: true }, { items: true }] as const;
+      for (const [index, mismatch] of mismatches.entries()) {
+        h.send({ ...start, ...mismatch });
+        expect(h.guest.phase).toBe('lobby');
+        expect(warn).toHaveBeenCalledTimes(index + 1);
+        expect(String(warn.mock.calls[index][0])).toMatch(new RegExp(`Ignored race_start for ${Object.keys(mismatch)[0]}`));
+      }
+      h.send(start);
+      expect(h.guest.phase).toBe('countdown');
+      expect(warn).toHaveBeenCalledTimes(3);
+      const state = h.guest.frame()!.state;
+      // The same createRace options as the host: easy CPUs, host + guest only, no boxes.
+      const expected = createRace(7, { trackId: 'canyon', laps: 3, cpuLevel: 'easy', karts: 2, itemBoxes: false });
+      expect(state.cpuLevel).toBe('easy');
+      expect(state.karts.map(kart => kart.id)).toEqual([0, 1]);
+      expect(state.boxes).toEqual([]);
+      expect(state.karts.map(kart => [kart.x, kart.z])).toEqual(expected.karts.map(kart => [kart.x, kart.z]));
+    } finally { warn.mockRestore(); h.host.close(); }
   });
 
   it('does not count an excused local stall as host silence, but still times out afterwards', async () => {
@@ -151,7 +180,7 @@ describe('GuestSession course updates outside the lobby (C-006)', () => {
     const h = await joinedGuest();
     try {
       const startAt = h.network.now + 12_000; // The host delays the start for slow peers.
-      h.send({ type: 'race_start', laps: 3, trackId: 'canyon', seed: 7, raceId: 1, roster, startAtHostTime: startAt });
+      h.send({ type: 'race_start', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, trackId: 'canyon', seed: 7, raceId: 1, roster, startAtHostTime: startAt });
       h.guest.frame();
       h.network.advance(6000);
       h.guest.excuseStall();

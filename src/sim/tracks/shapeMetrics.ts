@@ -1,6 +1,7 @@
 import { getAIInput } from '../ai';
 import { KART_RADIUS, widthAt } from '../corridor';
 import { createRace, stepRace } from '../race';
+import { surfaceAt } from '../surfaces';
 import { getTrack } from './index';
 import { CPU_LEVELS } from '../types';
 import type { CpuLevel, RaceState, Track, TrackId } from '../types';
@@ -67,7 +68,9 @@ function wrap(distance: number, length: number): number {
 
 // Maximum H1 totals across seeds [1, 42, 98765] on the old sixteen courses (8 CPUs × 3 laps).
 // Pinned against the recorded rows in handling.test.ts; shared with the M11 lap harness.
-export const WALL_HITS_MAX_EXISTING = 1;
+// M12-21: 1 -> 2 each from the re-measured rows (serpentine wall 2, neon band 2); the hits fall 17-140 s into races, not at GO.
+// M12-22: band 2 -> 1 (neon re-measured at cpuPace 1.02); wall stays 2 (serpentine unchanged).
+export const WALL_HITS_MAX_EXISTING = 2;
 export const BAND_HITS_MAX_EXISTING = 1;
 
 export interface CpuLapOptions {
@@ -189,6 +192,26 @@ export function maxSlope(track: Track): number {
     if (run > 0) result = Math.max(result, Math.abs(b.y - a.y) / run);
   }
   return result;
+}
+
+/**
+ * Width-normalized dirt coverage of the road: dirt road area / (2 * roadHalfWidth * length), by
+ * midpoint samples every 0.5 m along and 64 across, using surfaceAt's precedence (ice wins over dirt).
+ */
+export function dirtCoverage(track: Track): number {
+  const step = 0.5;
+  const lateralSamples = 64;
+  let dirtMetres = 0;
+  for (let start = 0; start < track.length; start += step) {
+    const length = Math.min(step, track.length - start);
+    const distance = start + length / 2;
+    const halfWidth = widthAt(track, distance).roadHalfWidth;
+    for (let lateral = 0; lateral < lateralSamples; lateral++) {
+      const offset = -halfWidth + (lateral + 0.5) / lateralSamples * 2 * halfWidth;
+      if (surfaceAt(track, distance, offset) === 'dirt') dirtMetres += length / lateralSamples;
+    }
+  }
+  return dirtMetres / track.length;
 }
 
 /**

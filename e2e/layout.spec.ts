@@ -48,7 +48,7 @@ for (const vp of viewports) {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
     const targets = page.locator('.course-option, .mode-option, #start-race');
-    expect(await page.locator('.course-option').count()).toBe(20);
+    expect(await page.locator('.course-option').count()).toBe(21);
     expect(await page.locator('.mode-option').count()).toBe(3);
     expect(await page.locator('#start-race').count()).toBe(1);
     // Scroll each target into view; the title scrolls inside .title-screen on portrait phones.
@@ -63,12 +63,12 @@ for (const vp of viewports) {
       expect(box.height, box.html).toBeGreaterThanOrEqual(MIN_TARGET);
     }
 
-    // The twenty course options must not overlap each other.
+    // The twenty-one course options must not overlap each other.
     const rects = await page.locator('.course-option').evaluateAll(els => els.map(el => {
       const r = el.getBoundingClientRect();
       return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
     }));
-    expect(rects).toHaveLength(20);
+    expect(rects).toHaveLength(21);
     for (let i = 0; i < rects.length; i++) {
       for (let j = i + 1; j < rects.length; j++) {
         const a = rects[i];
@@ -105,7 +105,7 @@ const boundarySizes = [
   [701, 720], [844, 481], [999, 720], [1000, 720], [999, 960], [1000, 960],
 ] as const;
 for (const [width, height] of boundarySizes) {
-  test(`M10-09 twenty-course title has no overlap at ${width}x${height}`, async ({ page }, info) => {
+  test(`M10-09 twenty-one-course title has no overlap at ${width}x${height}`, async ({ page }, info) => {
     await page.setViewportSize({ width, height });
     await page.goto('./');
     await expect(page.locator('#title-screen')).toBeVisible();

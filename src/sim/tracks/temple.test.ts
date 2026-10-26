@@ -197,8 +197,8 @@ describe('SUNKEN TEMPLE', () => {
             (object instanceof THREE.InstancedMesh ? object.count : 1) * (object.castShadow ? 2 : 1);
         });
         expect(triangles + 20_000).toBeLessThanOrEqual(60 * track.length + 30_000);
-        expect(theme.colors.ground).toBe(templePalette.moss);
-        expect(theme.colors.road).toBe(templePalette.stone);
+        expect(theme.colors.ground).toBe(0x3f6a3c);
+        expect(theme.colors.road).toBe(0x8c8577);
         expect(theme.colors.motionSpin).toBe(templePalette.gold);
         const columns = course.group.getObjectByName('island-scenery:building') as THREE.InstancedMesh;
         expect(columns.count).toBeGreaterThan(0);

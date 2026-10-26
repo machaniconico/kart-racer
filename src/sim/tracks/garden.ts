@@ -23,6 +23,8 @@ const layout: TrackDef = {
   scale: 1, samplesPerSegment: 32,
   roadHalfWidth: BASE_ROAD_HALF_WIDTH, wallHalfWidth: BASE_WALL_HALF_WIDTH,
   checkpointCount: 24,
+  // M12-22 (C2): CPU pace keeps easy CPU meanLap / human-model lap at most 1.14 (was above it at 1).
+  cpuPace: 1.02,
   boxRows: [0.02, 0.12, 0.24, 0.36, 0.47, 0.58, 0.695, 0.81],
   boxLanes: [-5.33, 0, 5.33],
   racingLine: [], surfaces: [],

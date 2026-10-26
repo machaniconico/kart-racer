@@ -84,15 +84,15 @@ describe('HostSession lobby', () => {
       network.flush();
       expect(host.laps).toBe(laps);
       expect(changed).toHaveBeenCalledOnce();
-      expect(one.messages.at(-1)).toEqual({ type: 'course', trackId: 'meadow', laps });
+      expect(one.messages.at(-1)).toEqual({ type: 'course', cpuLevel: 'normal', cpuFill: true, items: true, trackId: 'meadow', laps });
       host.setCourse('canyon');
       network.flush();
-      expect(one.messages.at(-1)).toEqual({ type: 'course', trackId: 'canyon', laps });
+      expect(one.messages.at(-1)).toEqual({ type: 'course', cpuLevel: 'normal', cpuFill: true, items: true, trackId: 'canyon', laps });
       const late = await guest({ name: 'LATE' });
-      expect(late.messages[0]).toMatchObject({ type: 'welcome', trackId: 'canyon', laps });
+      expect(late.messages[0]).toMatchObject({ type: 'welcome', cpuLevel: 'normal', cpuFill: true, items: true, trackId: 'canyon', laps });
       expect(host.startRace(42).laps).toBe(laps);
       network.flush();
-      for (const peer of [one, late]) expect(peer.messages.at(-1)).toMatchObject({ type: 'race_start', laps });
+      for (const peer of [one, late]) expect(peer.messages.at(-1)).toMatchObject({ type: 'race_start', cpuLevel: 'normal', cpuFill: true, items: true, laps });
       host.returnToLobby();
       expect(host.laps).toBe(laps);
       expect(host.startRace(43).laps).toBe(laps);
@@ -107,7 +107,7 @@ describe('HostSession lobby', () => {
       host.onChange(changed);
       const count = one.messages.length;
       for (const laps of [0, 4, -1, 1.5, NaN, Infinity]) expect(host.setLaps(laps)).toBe(false);
-      one.control({ type: 'course', trackId: 'meadow', laps: 1 });
+      one.control({ type: 'course', cpuLevel: 'normal', cpuFill: true, items: true, trackId: 'meadow', laps: 1 });
       network.flush();
       expect(host.laps).toBe(3);
       expect(changed).not.toHaveBeenCalled();
@@ -130,6 +130,106 @@ describe('HostSession lobby', () => {
     } finally { host.close(); }
   });
 
+  it('M12-31 broadcasts CPU level / CPU fill / items and uses them for welcome, race_start, createRace and rematches', async () => {
+    const { host, guest, network } = await setup();
+    try {
+      expect(host.settings).toEqual({ cpuLevel: 'normal', cpuFill: true, items: true });
+      const one = await guest();
+      const changed = vi.fn();
+      host.onChange(changed);
+      expect(host.setCpuLevel('hard')).toBe(true);
+      network.flush();
+      expect(one.messages.at(-1)).toEqual({ type: 'course', cpuLevel: 'hard', cpuFill: true, items: true, trackId: 'meadow', laps: 3 });
+      expect(host.setCpuFill(false)).toBe(true);
+      network.flush();
+      expect(one.messages.at(-1)).toEqual({ type: 'course', cpuLevel: 'hard', cpuFill: false, items: true, trackId: 'meadow', laps: 3 });
+      expect(host.setItems(false)).toBe(true);
+      network.flush();
+      expect(one.messages.at(-1)).toEqual({ type: 'course', cpuLevel: 'hard', cpuFill: false, items: false, trackId: 'meadow', laps: 3 });
+      expect(changed).toHaveBeenCalledTimes(3);
+      // A later course/laps change keeps the settings.
+      host.setLaps(2);
+      network.flush();
+      expect(one.messages.at(-1)).toEqual({ type: 'course', cpuLevel: 'hard', cpuFill: false, items: false, trackId: 'meadow', laps: 2 });
+      const late = await guest({ name: 'LATE' });
+      expect(late.messages[0]).toMatchObject({ type: 'welcome', cpuLevel: 'hard', cpuFill: false, items: false });
+      const settings = { cpuLevel: 'hard', cpuFill: false, items: false };
+      for (const seed of [42, 43]) {
+        const state = host.startRace(seed);
+        network.flush();
+        for (const peer of [one, late]) expect(peer.messages.at(-1)).toMatchObject({ type: 'race_start', seed, ...settings });
+        // Host + 2 guests, no CPU fill: three karts, all human; no item boxes.
+        expect(state.cpuLevel).toBe('hard');
+        expect(state.karts.map(kart => [kart.id, kart.human])).toEqual([[0, true], [1, true], [2, true]]);
+        expect(state.boxes).toEqual([]);
+        host.returnToLobby();
+        expect(host.settings).toEqual(settings);
+      }
+      host.setCpuFill(true);
+      host.setItems(true);
+      const filled = host.startRace(44);
+      expect(filled.karts).toHaveLength(8);
+      expect(filled.boxes.length).toBeGreaterThan(0);
+    } finally { host.close(); }
+  });
+
+  it('M12-31 rejects invalid and guest settings changes and locks them from race_start until the lobby', async () => {
+    const { host, guest, network } = await setup();
+    try {
+      const one = await guest();
+      const count = one.messages.length;
+      expect(host.setCpuLevel('expert' as never)).toBe(false);
+      expect(host.setCpuFill(1 as never)).toBe(false);
+      expect(host.setItems('no' as never)).toBe(false);
+      one.control({ type: 'course', cpuLevel: 'easy', cpuFill: false, items: false, trackId: 'meadow', laps: 3 });
+      network.flush();
+      expect(host.settings).toEqual({ cpuLevel: 'normal', cpuFill: true, items: true });
+      expect(one.messages).toHaveLength(count);
+      const state = host.startRace(42);
+      const locked = () => [host.setCpuLevel('easy'), host.setCpuFill(false), host.setItems(false)];
+      expect(locked()).toEqual([false, false, false]);
+      state.phase = 'racing';
+      tick(host, state);
+      expect(locked()).toEqual([false, false, false]);
+      state.phase = 'finished';
+      state.tick++;
+      host.afterTick(state);
+      expect(host.phase).toBe('results');
+      expect(locked()).toEqual([false, false, false]);
+      expect(host.settings).toEqual({ cpuLevel: 'normal', cpuFill: true, items: true });
+      host.returnToLobby();
+      expect(locked()).toEqual([true, true, true]);
+    } finally { host.close(); }
+  });
+
+  it('M12-31 without CPU fill, only the present humans race: slot 2 compacts to kart 1 and drives it', async () => {
+    const { host, guest, network } = await setup();
+    try {
+      host.setCpuFill(false);
+      expect(host.startRace(1).karts.map(kart => kart.id)).toEqual([0]);
+      host.returnToLobby();
+      const one = await guest({ name: 'ONE' });
+      const two = await guest({ name: 'TWO', color: 0x56d9c1 });
+      one.control({ type: 'leave' });
+      network.flush();
+      const state = host.startRace(2);
+      network.flush();
+      expect(state.karts.map(kart => [kart.id, kart.name, kart.human])).toEqual([[0, 'HOST', true], [1, 'TWO', true]]);
+      // race_start carries the roster; the guest derives the same slot -> kart mapping from it.
+      expect(two.messages.at(-1)).toMatchObject({ type: 'race_start', cpuFill: false });
+      // TWO sends as slot 2 and its input drives kart 1; the host's own input source stays kart 0.
+      sendInput(two, host, 1, DRIVE, 2);
+      network.flush();
+      expect(host.inputSource(1).sample(state, 1)).toEqual(quantizeInput(DRIVE));
+      expect(tick(host, state)[1]).toEqual(quantizeInput(DRIVE));
+      expect(state.karts[1].human).toBe(true);
+      // A leave during the race turns kart 1 (not kart 2, which does not exist) into a CPU.
+      two.control({ type: 'leave' });
+      network.flush();
+      expect(state.karts[1].human).toBe(false);
+    } finally { host.close(); }
+  });
+
   it.each(TRACK_IDS)('broadcasts %s to every guest and retains it for late joins and rematches', async trackId => {
     const { host, guest, network } = await setup();
     try {
@@ -142,14 +242,14 @@ describe('HostSession lobby', () => {
       network.flush();
       expect(host.course).toBe(trackId);
       expect(changed).toHaveBeenCalledOnce();
-      for (const peer of [one, two]) expect(peer.messages.at(-1)).toEqual({ type: 'course', laps: 3, trackId });
+      for (const peer of [one, two]) expect(peer.messages.at(-1)).toEqual({ type: 'course', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, trackId });
       const late = await guest({ name: 'LATE' });
-      expect(late.messages[0]).toMatchObject({ type: 'welcome', laps: 3, trackId });
+      expect(late.messages[0]).toMatchObject({ type: 'welcome', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, trackId });
       const state = host.startRace(42);
       network.flush();
       expect(state.trackId).toBe(trackId);
       for (const peer of [one, two, late]) expect(peer.messages.at(-1)).toMatchObject({
-        type: 'race_start', laps: 3, trackId, seed: 42, raceId: 1,
+        type: 'race_start', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, trackId, seed: 42, raceId: 1,
       });
       host.returnToLobby();
       network.flush();
@@ -157,7 +257,7 @@ describe('HostSession lobby', () => {
       expect(one.messages.at(-1)).toEqual({ type: 'return_lobby' });
       expect(host.startRace(43).trackId).toBe(trackId);
       network.flush();
-      expect(one.messages.at(-1)).toMatchObject({ type: 'race_start', laps: 3, trackId, raceId: 2 });
+      expect(one.messages.at(-1)).toMatchObject({ type: 'race_start', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, trackId, raceId: 2 });
     } finally { host.close(); }
   });
 
@@ -169,7 +269,7 @@ describe('HostSession lobby', () => {
       host.onChange(changed);
       const count = one.messages.length;
       expect(host.setCourse('unknown' as typeof host.course)).toBe(false);
-      one.control({ type: 'course', laps: 3, trackId: 'neon' });
+      one.control({ type: 'course', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, trackId: 'neon' });
       network.flush();
       expect(host.course).toBe('meadow');
       expect(changed).not.toHaveBeenCalled();
@@ -199,7 +299,7 @@ describe('HostSession lobby', () => {
       expect((await guest({ course: (COURSE_FINGERPRINT ^ 1) >>> 0 })).messages)
         .toEqual([{ type: 'reject', reason: 'version' }]);
       expect(host.roster.players.filter(player => player.kind === 'guest')).toHaveLength(0);
-      expect((await guest()).messages[0]).toMatchObject({ type: 'welcome', laps: 3, slot: 1 });
+      expect((await guest()).messages[0]).toMatchObject({ type: 'welcome', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, slot: 1 });
     } finally { host.close(); }
   });
 
@@ -216,7 +316,7 @@ describe('HostSession lobby', () => {
     link.onMessage((_, data) => messages.push(data));
     link.send('reliable', encodeControlMessage({ type: 'hello', protocol: PROTOCOL_VERSION, course: COURSE_FINGERPRINT, name: 'ONE', color: 0xff5f80 }));
     network.flush();
-    expect(parseControlMessage(messages[0])).toMatchObject({ type: 'welcome', laps: 3, slot: 1 });
+    expect(parseControlMessage(messages[0])).toMatchObject({ type: 'welcome', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, slot: 1 });
     host.close();
   });
 
@@ -224,7 +324,7 @@ describe('HostSession lobby', () => {
     const { host, guest } = await setup();
     for (let slot = 1; slot < 8; slot++) {
       const joined = await guest({ name: `G${slot}` });
-      expect(joined.messages[0]).toMatchObject({ type: 'welcome', laps: 3, slot,
+      expect(joined.messages[0]).toMatchObject({ type: 'welcome', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, slot,
         roster: expect.arrayContaining([expect.objectContaining({ slot, name: `G${slot}`, kind: 'guest' })]) });
     }
     expect((await guest()).messages).toEqual([{ type: 'reject', reason: 'full' }]);
@@ -247,7 +347,7 @@ describe('HostSession lobby', () => {
     host.afterTick(state);
     expect((await guest()).messages).toEqual([{ type: 'reject', reason: 'in_race' }]);
     host.returnToLobby();
-    expect((await guest()).messages[0]).toMatchObject({ type: 'welcome', laps: 3, slot: 1 });
+    expect((await guest()).messages[0]).toMatchObject({ type: 'welcome', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, slot: 1 });
     host.close();
   });
 
@@ -486,7 +586,7 @@ describe('HostSession input and disconnects', () => {
     expect(two.messages.at(-1)).toEqual({ type: 'roster', players: host.roster.players });
     host.returnToLobby();
     const replacement = await guest({ name: 'NEW' });
-    expect(replacement.messages[0]).toMatchObject({ type: 'welcome', laps: 3, slot: 1 });
+    expect(replacement.messages[0]).toMatchObject({ type: 'welcome', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, slot: 1 });
     const next = host.startRace(2);
     expect(next.karts[1].human).toBe(true);
     expect(source.sample(next, 1)).toEqual(NEUTRAL_INPUT);
@@ -528,7 +628,7 @@ describe('HostSession timing and broadcasts', () => {
     expect(host.phase).toBe('lobby');
     host.startRace(456);
     network.flush();
-    expect(one.messages.at(-1)).toMatchObject({ type: 'race_start', laps: 3, raceId: 2, seed: 456 });
+    expect(one.messages.at(-1)).toMatchObject({ type: 'race_start', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, raceId: 2, seed: 456 });
     expect(() => host.startRace()).toThrow();
     host.close();
   });

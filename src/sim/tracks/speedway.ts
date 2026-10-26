@@ -22,6 +22,9 @@ const layout: TrackDef = {
   scale: 0.94, samplesPerSegment: 32,
   roadHalfWidth: BASE_ROAD_HALF_WIDTH, wallHalfWidth: BASE_WALL_HALF_WIDTH,
   checkpointCount: 24,
+  // M12-22 (C2): CPU pace keeps THUNDER OVAL the fastest course by CPU mean speed (speedway.test.ts),
+  // ahead of the courses whose pace was raised for the easy ratio.
+  cpuPace: 1.03,
   boxRows: [0.04, 0.18, 0.30, 0.43, 0.56, 0.69, 0.82, 0.94],
   boxLanes: [-5.33, 0, 5.33],
   racingLine: [], surfaces: [],

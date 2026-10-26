@@ -14,6 +14,7 @@ import { kartRotationZ, rolledLocalPointY } from '../kartRoll';
 import { GameRenderer } from '../GameRenderer';
 import { buildCourse, place, terrainHeight, type Course } from './buildCourse';
 import { buildMotion } from './motion';
+import { RoadIndex } from './roadIndex';
 import { meadow } from './themes/meadow';
 import { canyon } from './themes/canyon';
 import { snowpeak } from './themes/snowpeak';
@@ -34,6 +35,7 @@ import { summit } from './themes/summit';
 import { chasm } from './themes/chasm';
 import { velodrome } from './themes/velodrome';
 import { spire } from './themes/spire';
+import { aqueduct } from './themes/aqueduct';
 
 // M2.5 re-measured by e2e/courses.spec.ts, 2026-10-11: Chromium, 1280x720, DPR 1,
 // desktop shadows, createRace(127, { trackId }), 8 stationary grid karts.
@@ -59,7 +61,7 @@ import { spire } from './themes/spire';
 type RenderBaseline = { drawCalls: number; triangles: number; meshes: number };
 // M6-05 / v16: Chromium on darwin-arm64, 1280×720, DPR 1, seed 127, 10 stationary frames.
 // All ten grid frames matched; all feature views also passed the length-based trianglesCap.
-const RENDER_BASELINE: Record<TrackId, RenderBaseline> = {
+const RENDER_BASELINE: Record<TrackId, RenderBaseline | null> = {
   meadow: { drawCalls: 125, triangles: 107_048, meshes: 34 },
   canyon: { drawCalls: 139, triangles: 124_630, meshes: 43 },
   snowpeak: { drawCalls: 129, triangles: 112_768, meshes: 36 },
@@ -70,12 +72,12 @@ const RENDER_BASELINE: Record<TrackId, RenderBaseline> = {
   skyline: { drawCalls: 136, triangles: 90_174, meshes: 40 },
   // M10-10 / v18: same Chromium darwin-arm64 setup (seed 127, all 10 grid frames identical);
   // meshes from buildCourse in this file. Mirrored in e2e/courses-m10.spec.ts.
-  dunes: { drawCalls: 126, triangles: 91_966, meshes: 32 },
+  dunes: { drawCalls: 126, triangles: 92_010, meshes: 32 },
   garden: { drawCalls: 123, triangles: 105_118, meshes: 42 },
   speedway: { drawCalls: 125, triangles: 73_308, meshes: 30 },
   bayou: { drawCalls: 127, triangles: 79_339, meshes: 39 },
   cavern: { drawCalls: 130, triangles: 88_825, meshes: 36 },
-  temple: { drawCalls: 138, triangles: 97_474, meshes: 43 },
+  temple: { drawCalls: 142, triangles: 98_818, meshes: 47 },
   serpentine: { drawCalls: 123, triangles: 110_066, meshes: 28 },
   lunar: { drawCalls: 140, triangles: 79_830, meshes: 45 },
   // M11-10 / v19: meshes from buildCourse in this file (darwin-arm64); drawCalls / triangles are Chromium
@@ -84,6 +86,9 @@ const RENDER_BASELINE: Record<TrackId, RenderBaseline> = {
   chasm: { drawCalls: 130, triangles: 72_538, meshes: 34 },
   velodrome: { drawCalls: 125, triangles: 94_122, meshes: 29 },
   spire: { drawCalls: 133, triangles: 78_424, meshes: 47 },
+  // M12-34: Chromium darwin-arm64, 1280x720 DPR 1, seed 127, all ten grid frames,
+  // excluding the M12-06 box addition (+1 draw / +6_048 triangles), like the rows above.
+  aqueduct: { drawCalls: 128, triangles: 83_516, meshes: 33 },
 };
 
 // Only the browser's text drawing context is supplied. All three objects and
@@ -874,18 +879,161 @@ describe('variable widths and batched barriers', () => {
     });
   });
 
+  it('temple reads as a jungle ruin: distinct ground and 3+ scenery kinds meadow lacks (M12-03)', () => {
+    const hsl = (hex: number) => new THREE.Color(hex).getHSL({ h: 0, s: 0, l: 0 });
+    const a = hsl(temple.colors.ground), b = hsl(meadow.colors.ground);
+    const hueDiff = Math.min(Math.abs(a.h - b.h), 1 - Math.abs(a.h - b.h)) * 360;
+    expect(hueDiff >= 25 || Math.abs(a.l - b.l) >= 0.12).toBe(true);
+    expect(temple.colors.ground).toBe(0x3f6a3c);
+    expect(temple.colors.road).toBe(0x8c8577);
+    expect(temple.fog.color).toBe(0x9fb98a);
+    const names = (theme: typeof temple) => {
+      const found = new Set<string>();
+      build(getTrack('temple'), theme).group.traverse(o => { if (o.name.startsWith('temple:') || o.name.startsWith('meadow:')) found.add(o.name.split(':')[1]!); });
+      return found;
+    };
+    const kinds = names(temple);
+    for (const kind of ['pyramids', 'mossColumns', 'arches', 'vines']) expect(kinds.has(kind), kind).toBe(true);
+    const course = build(getTrack('temple'), temple);
+    const counts = (n: string) => (course.group.getObjectByName(n) as THREE.InstancedMesh).count;
+    expect(counts('temple:pyramids')).toBe(6);
+    expect(counts('temple:mossColumns')).toBeGreaterThan(0);
+    expect(counts('temple:arches')).toBeGreaterThan(0);
+    expect(counts('temple:vines')).toBeGreaterThan(0);
+    expect([counts('temple:mossColumns'), counts('temple:arches'), counts('temple:vines')]).toEqual([24, 18, 40]);
+  });
+
+  it('aqueduct pins ochre stone, turquoise water and two instanced scenery batches', () => {
+    expect(RENDER_BASELINE.aqueduct!.drawCalls).toBeLessThanOrEqual(Math.max(...Object.entries(RENDER_BASELINE)
+      .filter(([id]) => id !== 'aqueduct').map(([, baseline]) => baseline!.drawCalls)));
+    expect([aqueduct.colors.ground, aqueduct.colors.road, aqueduct.colors.deck, aqueduct.fog.color])
+      .toEqual([0x96996b, 0x9a805a, 0xd8b878, 0xd8dfce]);
+    const track = getTrack('aqueduct'), before = structuredClone(track);
+    const { group } = build(track, aqueduct);
+    const arches = group.getObjectByName('aqueduct:arches') as THREE.InstancedMesh;
+    const water = group.getObjectByName('aqueduct:water') as THREE.InstancedMesh;
+    const index = new RoadIndex(track), matrix = new THREE.Matrix4(), position = new THREE.Vector3();
+    for (const [mesh, color] of [[arches, 0xc49b5d], [water, 0x328e9b]] as const) {
+      expect(mesh.count).toBe(24);
+      expect(mesh.material).toBeInstanceOf(THREE.MeshLambertMaterial);
+      expect((mesh.material as THREE.MeshLambertMaterial).color.getHex()).toBe(color);
+      expect(mesh.instanceColor).toBeNull();
+      expect(Array.isArray(mesh.material)).toBe(false);
+      for (let i = 0; i < mesh.count; i++) {
+        mesh.getMatrixAt(i, matrix);
+        position.setFromMatrixPosition(matrix);
+        expect(index.heightAt(position.x, position.z, false, 10)).toBeUndefined();
+        expect(index.heightAt(position.x, position.z, true, 10)).toBeUndefined();
+      }
+    }
+    expect(track).toEqual(before);
+  });
+
+  it.each([0, Math.PI / 15])('aqueduct distinguishes both crossing levels and leaves open upper edges (bank %s)', roll => {
+    const def = figureEightCourse(), { lower, upper } = figureEightCrossings(def);
+    const track = buildTrack({ ...def, bankKeys: [
+      { distance: upper - 40, roll: 0 }, { distance: upper - 20, roll },
+      { distance: upper + 20, roll }, { distance: upper + 40, roll: 0 },
+    ] });
+    const index = new RoadIndex(track), low = sampleTrack(track, lower), high = sampleTrack(track, upper);
+    expect(index.heightAt(high.x, high.z, true)).toBeCloseTo(high.y, 8);
+    expect(index.heightAt(high.x, high.z, false)).toBeCloseTo(low.y, 8);
+    expect(index.heightAt(high.x, high.z, true, 0, high.y - 0.6)).toBeUndefined();
+    const { group } = build(track, aqueduct);
+    const deck = group.getObjectByName('decks') as THREE.Mesh<THREE.BufferGeometry, THREE.MeshLambertMaterial>;
+    const road = group.getObjectByName('road') as THREE.Mesh<THREE.BufferGeometry, THREE.MeshLambertMaterial>;
+    expect([road.material.color.getHex(), deck.material.color.getHex()]).toEqual([0x9a805a, 0xd8b878]);
+    expect(group.children.filter(child => child.name.startsWith('aqueduct:'))).toHaveLength(4);
+    const span = track.def.decks![0];
+    for (const side of [-1, 1]) {
+      const edge = group.getObjectByName(`aqueduct:fall-edge:${side}`) as THREE.Mesh;
+      expect(edge.geometry.getAttribute('position').count).toBe(Math.ceil((span.to - span.from) / 2) * 24);
+      const vertices = edge.geometry.getAttribute('position');
+      for (let i = 0; i < vertices.count; i++) {
+        const offset = (vertices.getX(i) - high.x) * high.nx + (vertices.getZ(i) - high.z) * high.nz;
+        expect(Math.sign(offset)).toBe(side);
+        expect(vertices.getY(i)).toBeLessThan(surfaceHeightAt(track, upper, offset) + 0.061);
+      }
+    }
+    const plain = build(track, meadow), matrix = new THREE.Matrix4(), position = new THREE.Vector3();
+    for (const name of ['rails', 'posts']) {
+      const kept = group.getObjectByName(name) as THREE.InstancedMesh;
+      const original = plain.group.getObjectByName(name) as THREE.InstancedMesh;
+      const lowerMatrices: number[][] = [];
+      let upperCount = 0;
+      for (let i = 0; i < original.count; i++) {
+        original.getMatrixAt(i, matrix);
+        position.setFromMatrixPosition(matrix);
+        const y = index.heightAt(position.x, position.z, true, 0.5);
+        if (y !== undefined && Math.abs(position.y - y) < 1.5) upperCount++;
+        else lowerMatrices.push(matrix.toArray());
+      }
+      expect(upperCount).toBeGreaterThan(0);
+      expect(kept.count).toBe(original.count - upperCount);
+      for (let i = 0; i < kept.count; i++) {
+        kept.getMatrixAt(i, matrix);
+        expect(matrix.toArray()).toEqual(lowerMatrices[i]);
+      }
+    }
+  });
+
+  it('aqueduct exposes the full upper fall spans while retaining the lower crossing road', () => {
+    const track = getTrack('aqueduct'), index = new RoadIndex(track);
+    const { group } = build(track, aqueduct);
+    group.updateMatrixWorld(true);
+    const surfaces = ['road', 'decks', 'shoulder:-1', 'shoulder:1', 'ground:-1', 'ground:1']
+      .map(name => group.getObjectByName(name)!);
+    const ray = new THREE.Raycaster();
+    const heights = (distance: number, offset: number) => {
+      const point = sampleTrack(track, distance);
+      ray.set(new THREE.Vector3(point.x + point.nx * offset, point.y + 10, point.z + point.nz * offset),
+        new THREE.Vector3(0, -1, 0));
+      return ray.intersectObjects(surfaces, false).map(hit => hit.point.y);
+    };
+    const falls = track.def.surfaces.filter(zone => zone.kind === 'fall');
+    expect(falls).toHaveLength(2);
+    for (const fall of falls) {
+      const side = fall.offsetMin! < 0 ? -1 : 1;
+      const edge = group.getObjectByName(`aqueduct:fall-edge:${side}`) as THREE.Mesh;
+      expect(edge.geometry.getAttribute('position').count).toBe(Math.ceil((fall.to - fall.from) / 2) * 24);
+      const offset = (fall.offsetMin! + fall.offsetMax!) / 2;
+      for (const distance of [fall.from + 5, (fall.from + fall.to) / 2, fall.to - 5,
+        ...track.def.decks!.map(deck => (deck.from + deck.to) / 2)]) {
+        // Ribbon triangles interpolate across changing bank keys (centimetre tolerance).
+        expect(Math.abs(heights(distance, 0)[0] - surfaceHeightAt(track, distance, 0) - 0.06)).toBeLessThan(0.03);
+        expect(heights(distance, offset).every(y => y < surfaceHeightAt(track, distance, offset) - 1)).toBe(true);
+      }
+    }
+    const span = track.def.decks![0];
+    const upper = track.samples.filter(point => point.distance > span.from && point.distance < span.to)
+      .reduce((best, point) => Math.hypot(point.x, point.z) < Math.hypot(best.x, best.z) ? point : best);
+    const lower = projectToTrack(track, upper.x, upper.z, undefined, 0);
+    expect(index.heightAt(upper.x, upper.z, true)).toBeCloseTo(upper.y, 5);
+    expect(index.heightAt(upper.x, upper.z, false)).toBeCloseTo(lower.height, 5);
+    expect(upper.y - lower.height).toBeGreaterThan(10);
+    expect(heights(lower.distance, 0).some(y => Math.abs(y - lower.height - 0.06) < 0.01)).toBe(true);
+  });
+
   it.each([
     ['meadow', meadow], ['canyon', canyon], ['snowpeak', snowpeak], ['neon', neon],
     ['harbor', harbor], ['forest', forest], ['volcano', volcano], ['skyline', skyline],
     ['dunes', dunes], ['garden', garden], ['speedway', speedway], ['bayou', bayou],
     ['cavern', cavern], ['temple', temple], ['serpentine', serpentine], ['lunar', lunar],
     ['summit', summit], ['chasm', chasm], ['velodrome', velodrome], ['spire', spire],
+    ['aqueduct', aqueduct],
   ] as const)('%s stays within its measured mesh budget', (id, theme) => {
     const track = getTrack(id);
     const motionMeshes = (track.def.barriers ?? []).filter(barrier => barrier.motion).length
       + track.def.surfaces.filter(zone => zone.kind === 'spin').length;
     const course = build(track, theme);
     const baseline = RENDER_BASELINE[id];
+    if (baseline === null) {
+      // Tripwire: replacing the scaffold requires a measured row in the same change.
+      expect(trackRegistry.scaffoldIds(), id).toContain(id);
+      expect(meshCount(course.group)).toBe(RENDER_BASELINE.meadow!.meshes);
+      expect(theme).toEqual(meadow);
+      return;
+    }
     // A MEADOW-layout scaffold must not keep a stale render row (same guard as handling's BASELINE).
     expect(trackRegistry.scaffoldIds(), id).not.toContain(id);
     // Tripwire: every course needs measured, non-null render values (no pending rows).
@@ -1331,6 +1479,7 @@ describe('minimap lane drawing', () => {
 describe('course resource ownership', () => {
   it.each([
     ['meadow', meadow], ['canyon', canyon], ['snowpeak', snowpeak], ['neon', neon],
+    ['aqueduct', aqueduct],
   ] as const)('%s releases every geometry, material, label texture and instance buffer on repeated disposal', (id, theme) => {
     const scene = new THREE.Scene();
     for (let iteration = 0; iteration < 2; iteration++) {

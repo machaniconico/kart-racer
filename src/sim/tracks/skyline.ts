@@ -86,6 +86,8 @@ export const skyline: TrackDef = {
   scale: 1, samplesPerSegment: 16, spline: 'centripetal',
   roadHalfWidth: BASE_ROAD_HALF_WIDTH, wallHalfWidth: BASE_WALL_HALF_WIDTH,
   checkpointCount: 24,
+  // M12-22 (C2): CPU pace keeps easy CPU meanLap / human-model lap at most 1.14 (was above it at 1).
+  cpuPace: 1.01,
   decks: [{ from: 324.105015712864, to: 364.105015712864 },
     { from: 805.6749728948448, to: 845.6749728948448 }],
   widthKeys: [

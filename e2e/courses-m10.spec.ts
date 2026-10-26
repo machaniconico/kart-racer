@@ -25,15 +25,16 @@ function goldenPresent(testInfo: TestInfo, name: string): boolean {
 
 // M10-10, Chromium headless on darwin-arm64, 1280x720, DPR 1, seed 127, all 10 grid frames
 // (renderer.info.render including shadows). Same values as RENDER_BASELINE in buildCourse.test.ts.
+// M12-06: item box ring + icosahedron core add 1 draw and 252 triangles per box (24 boxes): +1 / +6_048.
 const courses = [
-  { id: 'dunes', name: 'SIROCCO DUNES', drawCalls: 126, triangles: 91_966 },
-  { id: 'garden', name: 'BLOSSOM GARDEN', drawCalls: 123, triangles: 105_118 },
-  { id: 'speedway', name: 'THUNDER OVAL', drawCalls: 125, triangles: 73_308 },
-  { id: 'bayou', name: 'MOONLIT BAYOU', drawCalls: 127, triangles: 79_339 },
-  { id: 'cavern', name: 'CRYSTAL HOLLOW', drawCalls: 130, triangles: 88_825 },
-  { id: 'temple', name: 'SUNKEN TEMPLE', drawCalls: 138, triangles: 97_474 },
-  { id: 'serpentine', name: 'SERPENT PASS', drawCalls: 123, triangles: 110_066 },
-  { id: 'lunar', name: 'LUNAR BASIN', drawCalls: 140, triangles: 79_830 },
+  { id: 'dunes', name: 'SIROCCO DUNES', drawCalls: 127, triangles: 98_058 }, // M12-22: sand zones re-cut (dirt ≤28%), +44 surface-strip triangles
+  { id: 'garden', name: 'BLOSSOM GARDEN', drawCalls: 124, triangles: 111_166 },
+  { id: 'speedway', name: 'THUNDER OVAL', drawCalls: 126, triangles: 79_356 },
+  { id: 'bayou', name: 'MOONLIT BAYOU', drawCalls: 128, triangles: 85_387 },
+  { id: 'cavern', name: 'CRYSTAL HOLLOW', drawCalls: 131, triangles: 94_873 },
+  { id: 'temple', name: 'SUNKEN TEMPLE', drawCalls: 143, triangles: 104_866 },
+  { id: 'serpentine', name: 'SERPENT PASS', drawCalls: 124, triangles: 116_114 },
+  { id: 'lunar', name: 'LUNAR BASIN', drawCalls: 141, triangles: 85_878 },
 ] as const satisfies readonly {
   id: string; name: string; drawCalls: number; triangles: number;
 }[];

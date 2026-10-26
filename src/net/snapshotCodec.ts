@@ -54,10 +54,13 @@ function float(view: DataView, offset: number, value: number): void {
   view.setFloat32(offset, value, true);
 }
 
+/** The wire layout always has eight kart rows and 24 box bytes. A race without CPU fill has
+ * karts with IDs 0..n-1 in any order (n >= 1) and one without items has no boxes; the unused rows/bytes stay zero and
+ * the decoder reads only the rows/bytes of its template, which both sides build from race_start. */
 function layoutMatches(state: RaceState): boolean {
-  return state.karts.length === MAX_PLAYERS && state.boxes.length === SNAPSHOT_BOX_COUNT &&
-    new Set(state.karts.map(kart => kart.id)).size === MAX_PLAYERS &&
-    state.karts.every(kart => uint(kart.id, MAX_PLAYERS - 1));
+  const count = state.karts.length;
+  return count >= 1 && count <= MAX_PLAYERS && (state.boxes.length === SNAPSHOT_BOX_COUNT || state.boxes.length === 0) &&
+    new Set(state.karts.map(kart => kart.id)).size === count && state.karts.every(kart => uint(kart.id, count - 1));
 }
 
 function selectEntities(state: RaceState): Entity[] {
@@ -75,14 +78,14 @@ function selectEntities(state: RaceState): Entity[] {
   return entities.sort((a, b) => Number('age' in a) - Number('age' in b) || a.id - b.id);
 }
 
-/** Encode a full eight-kart race. Static box poses/profiles come from race_start. */
+/** Encode a race of 1-8 karts with or without boxes. Static box poses/profiles come from race_start. */
 export function encodeSnapshot(
   state: RaceState, raceId: number, hostTime: number,
   lastAppliedInput: readonly InputFrame[] = state.karts.map(() => NEUTRAL_INPUT),
 ): ArrayBuffer {
   if (!layoutMatches(state) || !uint(raceId, 255) ||
     !Number.isFinite(hostTime) || hostTime < 0 || !uint(state.nextEntityId, 0xffff) ||
-    lastAppliedInput.length !== MAX_PLAYERS) throw new RangeError('Invalid snapshot');
+    (lastAppliedInput.length !== MAX_PLAYERS && lastAppliedInput.length !== state.karts.length)) throw new RangeError('Invalid snapshot');
   const inputs = lastAppliedInput.map(quantizeInput);
   const entities = selectEntities(state);
   // Validate the transmitted subset, without imposing the control channel's
@@ -125,7 +128,9 @@ export function encodeSnapshot(
     view.setUint16(offset + 37, quantize(kart.driftTime, 100, 0, 0xffff), true);
     if (![-1, 0, 1].includes(kart.driftDirection)) throw new RangeError('Invalid drift direction');
     view.setInt8(offset + 39, kart.driftDirection);
-    view.setUint8(offset + 40, quantize(kart.boostTime, 50, 0, 255));
+    // v20: countdown boostTime is a held-tick count, not a racing boost timer.
+    // Reuse byte 40 without changing the packet layout; 1/50 s loses tier boundaries.
+    view.setUint8(offset + 40, quantize(kart.boostTime, state.phase === 'countdown' ? 1 / FIXED_DT : 50, 0, 255));
     view.setUint8(offset + 41, quantize(kart.spinTime, 50, 0, 255));
     view.setUint8(offset + 42, quantize(kart.hopTime, 100, 0, 255));
     view.setUint8(offset + 43, quantize(kart.hitCooldown, 100, 0, 255));
@@ -193,7 +198,8 @@ export function decodeSnapshot(data: unknown, template: RaceState): Snapshot | n
     nextEntityId: view.getUint16(25, true), trackId: template.trackId, cpuLevel: template.cpuLevel,
   };
   const lastAppliedInput: InputFrame[] = [];
-  for (let id = 0; id < MAX_PLAYERS; id++) {
+  // Rows past the template's kart count are padding.
+  for (let id = 0; id < template.karts.length; id++) {
     const offset = SNAPSHOT_HEADER_BYTES + id * SNAPSHOT_KART_BYTES;
     const base = template.karts.find(kart => kart.id === id)!;
     const flags = view.getUint8(offset + 45);
@@ -215,7 +221,8 @@ export function decodeSnapshot(data: unknown, template: RaceState): Snapshot | n
       lateralOffset: view.getInt16(offset + 33, true) / 500,
       lap: view.getUint8(offset + 35), nextCheckpoint: view.getUint8(offset + 36),
       driftTime: view.getUint16(offset + 37, true) / 100, driftDirection,
-      boostTime: view.getUint8(offset + 40) / 50, spinTime: view.getUint8(offset + 41) / 50,
+      boostTime: phase === 'countdown' ? view.getUint8(offset + 40) * FIXED_DT : view.getUint8(offset + 40) / 50,
+      spinTime: view.getUint8(offset + 41) / 50,
       hopTime: view.getUint8(offset + 42) / 100, hitCooldown: view.getUint8(offset + 43) / 100, item,
       airTime: view.getUint8(offset + AIR_TIME_LAYOUT.byteOffset) / AIR_TIME_LAYOUT.scale,
       lastBand: view.getUint8(offset + 58) - 1,

@@ -4,7 +4,7 @@ import { buildTrack } from '../track';
 import type { Track } from '../types';
 import { getTrack, TRACK_IDS } from './index';
 import { LEGACY_MEADOW } from './legacyMeadow.fixture';
-import { curvatureProfile, elevationRange, findCompoundCorners, findHairpins, findSCurves,
+import { curvatureProfile, dirtCoverage, elevationRange, findCompoundCorners, findHairpins, findSCurves,
   maxSlope, minCurvatureRadius, S_CURVE_DEADBAND } from './shapeMetrics';
 
 // A turtle path of straights and arcs (positive angle turns left, from +x toward +z), walked
@@ -249,5 +249,18 @@ describe('scalar metrics', () => {
     expect(minCurvatureRadius(track)).toBeGreaterThan(0);
     expect(Number.isFinite(elevationRange(track).range)).toBe(true);
     expect(Number.isFinite(maxSlope(track))).toBe(true);
+  });
+});
+
+describe('dirtCoverage', () => {
+  it('weights dirt by the share of road width it covers', () => {
+    const base = getTrack('meadow');
+    const quarter = base.length / 4;
+    const track = buildTrack({ ...base.def, surfaces: [
+      { kind: 'dirt', from: 0, to: quarter },
+      { kind: 'dirt', from: quarter, to: 2 * quarter, offsetMin: 0 },
+    ] });
+    expect(dirtCoverage(track)).toBeCloseTo(0.375, 2);
+    expect(dirtCoverage(buildTrack({ ...base.def, surfaces: [] }))).toBe(0);
   });
 });

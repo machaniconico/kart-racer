@@ -44,17 +44,22 @@
 #lobby-screen .lobby-player[data-disconnected="true"] .lobby-player-tags { color: #ffc1ca; }
 #lobby-screen .lobby-profile { min-width: 0; }
 #lobby-screen .lobby-side { min-width: 0; }
+/* M12-31 online race settings: one row under the roster (the side column has no spare height). */
+#lobby-screen .lobby-settings { display: flex; flex-wrap: wrap; gap: 0 12px; margin-top: 10px; }
+#lobby-screen .lobby-settings #lobby-cpu-level-select { flex: 3 1 0; }
+#lobby-screen .lobby-settings #lobby-rules-select { flex: 2 1 0; }
+#lobby-screen .lobby-settings #lobby-settings-name { flex: 1 0 100%; margin-bottom: 0; }
 #lobby-screen .lobby-course { margin-bottom: 10px; }
-#lobby-screen .lobby-laps { margin: 0 0 10px; padding: 0; border: 0; min-width: 0; }
+#lobby-screen :is(.lobby-laps, .lobby-options) { margin: 0 0 10px; padding: 0; border: 0; min-width: 0; }
 #lobby-screen .lobby-laps-options { display: flex; flex-wrap: wrap; gap: 6px; }
-#lobby-screen .lobby-laps label { position: relative; flex: 1 0 44px; min-width: 44px; min-height: 44px; margin: 0; cursor: pointer; touch-action: manipulation; }
-#lobby-screen .lobby-laps input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0; opacity: 0; cursor: pointer; }
-#lobby-screen .lobby-laps span { display: grid; place-items: center; min-height: 44px; border: 1px solid #ffffff60; border-radius: 5px; background: #245448; }
-#lobby-screen .lobby-laps input:hover + span { background: #326957; }
-#lobby-screen .lobby-laps input:checked + span { background: var(--lime, #d8ff75); color: #173d35; border-color: var(--lime, #d8ff75); }
-#lobby-screen .lobby-laps input:focus-visible + span { outline: 3px solid var(--lime, #d8ff75); outline-offset: 2px; }
-#lobby-screen .lobby-laps:disabled { opacity: .5; }
-#lobby-screen #lobby-laps-name { display: block; margin-bottom: 10px; overflow-wrap: anywhere; color: var(--lime, #d8ff75); font-weight: 800; }
+#lobby-screen :is(.lobby-laps, .lobby-options) label { position: relative; flex: 1 0 44px; min-width: 44px; min-height: 44px; margin: 0; cursor: pointer; touch-action: manipulation; }
+#lobby-screen :is(.lobby-laps, .lobby-options) input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0; opacity: 0; cursor: pointer; }
+#lobby-screen :is(.lobby-laps, .lobby-options) span { display: grid; place-items: center; min-height: 44px; border: 1px solid #ffffff60; border-radius: 5px; background: #245448; }
+#lobby-screen :is(.lobby-laps, .lobby-options) input:hover + span { background: #326957; }
+#lobby-screen :is(.lobby-laps, .lobby-options) input:checked + span { background: var(--lime, #d8ff75); color: #173d35; border-color: var(--lime, #d8ff75); }
+#lobby-screen :is(.lobby-laps, .lobby-options) input:focus-visible + span { outline: 3px solid var(--lime, #d8ff75); outline-offset: 2px; }
+#lobby-screen :is(.lobby-laps, .lobby-options):disabled { opacity: .5; }
+#lobby-screen :is(#lobby-laps-name, #lobby-settings-name) { display: block; margin-bottom: 10px; overflow-wrap: anywhere; color: var(--lime, #d8ff75); font-weight: 800; }
 #lobby-screen #lobby-course-select { display: block; width: 100%; height: 40px; padding: 6px 8px; border: 1px solid #739486; border-radius: 4px; background: #f6fff7; color: #173d35; font: inherit; font-size: 16px; font-weight: 600; }
 #lobby-screen #lobby-course-select:focus-visible { outline: 3px solid var(--lime, #d8ff75); outline-offset: 2px; }
 #lobby-screen #lobby-course-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--lime, #d8ff75); font-size: 14px; font-weight: 800; letter-spacing: .5px; }
@@ -72,7 +77,7 @@
 #lobby-screen #lobby-wait { margin: 0; color: #d0e1d7; font-size: 12px; }
 #lobby-screen .lobby-note { margin: 8px 0 0; font-size: 10px; color: #b8cfc4; text-align: right; }
 @media (max-width: 700px) and (orientation: portrait) {
-  #lobby-screen .lobby-laps { margin-bottom: 6px; }
+  #lobby-screen :is(.lobby-laps, .lobby-options) { margin-bottom: 6px; }
   #online-entry { top: auto; bottom: 213px; left: 28px; right: 28px; width: auto; padding: 10px 12px; }
   #online-entry h2 { margin-bottom: 6px; font-size: 15px; }
   #online-entry .online-actions { gap: 10px; }
@@ -97,8 +102,8 @@
   #lobby-screen .lobby-note { text-align: center; }
 }
 @media (max-height: 700px) and (orientation: portrait) {
-  #lobby-screen .lobby-laps { margin-bottom: 4px; }
-  #lobby-screen .lobby-laps legend { margin-bottom: 2px; }
+  #lobby-screen :is(.lobby-laps, .lobby-options) { margin-bottom: 4px; }
+  #lobby-screen :is(.lobby-laps, .lobby-options) legend { margin-bottom: 2px; }
   #online-entry { bottom: 207px; padding: 4px 8px; }
   #online-entry h2 { margin-bottom: 2px; font-size: 12px; line-height: 16px; }
   #online-entry .online-actions { gap: 6px; }
@@ -115,14 +120,17 @@
   #lobby-screen #lobby-code { font-size: 28px; }
   #lobby-screen .lobby-body { gap: 6px; }
   #lobby-screen .lobby-player { min-height: 22px; }
+  /* Room for the settings row: the eight roster rows run in two columns of four. */
+  #lobby-screen #lobby-roster { display: grid; grid-template-rows: repeat(4, auto); grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); column-gap: 12px; }
+  #lobby-screen .lobby-settings { margin-top: 6px; }
   #lobby-screen .lobby-palette { margin-top: 6px; }
   #lobby-screen .lobby-footer { margin-top: 4px; }
   #lobby-screen .lobby-start-row { margin-top: 4px; min-height: 40px; }
   #lobby-screen .lobby-note { margin-top: 4px; }
 }
 @media (max-height: 480px) and (orientation: landscape) {
-  #lobby-screen .lobby-laps { margin-bottom: 4px; }
-  #lobby-screen .lobby-laps legend { margin-bottom: 2px; }
+  #lobby-screen :is(.lobby-laps, .lobby-options) { margin-bottom: 4px; }
+  #lobby-screen :is(.lobby-laps, .lobby-options) legend { margin-bottom: 2px; }
   #online-entry { top: 66px; right: 4%; width: 280px; padding: 8px 12px; }
   #online-entry h2 { margin-bottom: 4px; font-size: 14px; line-height: 20px; }
   #online-entry .online-actions { gap: 8px; }
@@ -142,7 +150,9 @@
   #lobby-screen .lobby-room-actions { gap: 5px; }
   #lobby-screen .lobby-room-actions button { padding-inline: 10px; }
   #lobby-screen .lobby-body { grid-template-columns: minmax(0, 1fr) 205px; gap: 20px; margin-top: 10px; }
-  #lobby-screen .lobby-player { min-height: 25px; }
+  /* 23px rows + a 4px gap keep the roster column with its settings row no taller than the side column. */
+  #lobby-screen .lobby-player { min-height: 23px; }
+  #lobby-screen .lobby-settings { margin-top: 4px; }
   #lobby-screen .lobby-palette { margin: 8px 0; }
   #lobby-screen .lobby-swatches { gap: 4px; }
   #lobby-screen .lobby-palette { margin: 4px 0; }

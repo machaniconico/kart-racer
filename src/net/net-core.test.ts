@@ -45,15 +45,15 @@ function finalState() {
 
 const messages: ControlMessage[] = [
   { type: 'hello', protocol: PROTOCOL_VERSION, course: COURSE_FINGERPRINT, name: 'ゲスト', color: 0xff0000 },
-  { type: 'welcome', laps: 3, trackId: 'meadow', slot: 1, roster: players, hostTime: 100 },
+  { type: 'welcome', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, trackId: 'meadow', slot: 1, roster: players, hostTime: 100 },
   { type: 'reject', reason: 'full' },
   { type: 'roster', players },
   { type: 'profile', name: 'PIP', color: 0xabcdef },
-  { type: 'race_start', laps: 3, trackId: 'meadow', raceId: 1, seed: 0xffffffff, roster: players, startAtHostTime: 1500 },
+  { type: 'race_start', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, trackId: 'meadow', raceId: 1, seed: 0xffffffff, roster: players, startAtHostTime: 1500 },
   { type: 'events', raceId: 1, tick: 600, events: [{ type: 'lap', kartId: 1, value: 3 }] },
   { type: 'race_end', raceId: 1, finalState: finalState() },
   { type: 'return_lobby' }, { type: 'leave' }, { type: 'host_closed' },
-  { type: 'course', laps: 3, trackId: 'neon' },
+  { type: 'course', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, trackId: 'neon' },
 ];
 
 async function pair(network: MockTransport, room = 'AB2X') {
@@ -91,6 +91,32 @@ describe('room codes', () => {
 });
 
 describe('control protocol', () => {
+  it.each(['welcome', 'course', 'race_start'] as const)('requires all v20 race settings in %s', type => {
+    const message = messages.find(message => message.type === type)!;
+    for (const cpuLevel of ['easy', 'normal', 'hard']) for (const cpuFill of [false, true]) for (const items of [false, true]) {
+      const valid = { ...message, cpuLevel, cpuFill, items };
+      expect(parseControlMessage(JSON.stringify(valid))).toEqual(valid);
+    }
+    for (const key of ['cpuLevel', 'cpuFill', 'items']) {
+      const missing: Record<string, unknown> = { ...message };
+      delete missing[key];
+      expect(controlGuards[type](missing)).toBe(false);
+      expect(parseControlMessage(JSON.stringify(missing))).toBeNull();
+      const invalid = key === 'cpuLevel' ? ['NORMAL', '', 'expert', true, 0, null, undefined, [], {}]
+        : [0, 1, 'true', 'false', null, undefined, [], {}];
+      for (const value of invalid) expect(controlGuards[type]({ ...message, [key]: value })).toBe(false);
+    }
+    expect(controlGuards[type]({ ...message, mode: 'gp' })).toBe(false);
+  });
+
+  it('keeps Hello unchanged and rejects the v20 settings on it', () => {
+    expect(Object.keys(messages[0])).toEqual(['type', 'protocol', 'course', 'name', 'color']);
+    expect(controlGuards.hello(messages[0])).toBe(true);
+    for (const [key, value] of Object.entries({ cpuLevel: 'normal', cpuFill: true, items: true })) {
+      expect(controlGuards.hello({ ...messages[0], [key]: value })).toBe(false);
+    }
+  });
+
   it.each(['welcome', 'course', 'race_start'] as const)('requires integer laps 1–3 in %s', type => {
     const message = messages.find(message => message.type === type)!;
     const guard = controlGuards[type];
@@ -109,10 +135,10 @@ describe('control protocol', () => {
     }
   });
 
-  it('isolates protocol v19 rooms from earlier versions', () => {
-    expect(PROTOCOL_VERSION).toBe(19);
-    expect(ROOM_PREFIX).toBe('pcircuit-v19-');
-    expect(fromPeerId('pcircuit-v18-AB2X')).toBeNull();
+  it('isolates protocol v20 rooms from earlier versions', () => {
+    expect(PROTOCOL_VERSION).toBe(20);
+    expect(ROOM_PREFIX).toBe('pcircuit-v20-');
+    expect(fromPeerId('pcircuit-v19-AB2X')).toBeNull();
     expect(fromPeerId('pcircuit-v17-AB2X')).toBeNull();
     expect(fromPeerId('pcircuit-v15-AB2X')).toBeNull();
     expect(fromPeerId('pcircuit-v13-AB2X')).toBeNull();
@@ -123,7 +149,7 @@ describe('control protocol', () => {
     expect(fromPeerId('pcircuit-v5-AB2X')).toBeNull();
   });
 
-  it('rejects a v18 hello before allocating a guest slot', async () => {
+  it('rejects a v19 hello before allocating a guest slot', async () => {
     const network = new MockTransport({ latencyMs: 0 });
     const host = await HostSession.create(network, { roomCode: 'AB2X', now: () => network.now });
     try {
@@ -136,7 +162,7 @@ describe('control protocol', () => {
         }
       });
       guest.send('reliable', encodeControlMessage({
-        type: 'hello', protocol: 18, course: COURSE_FINGERPRINT, name: 'GUEST', color: 0xff5f80,
+        type: 'hello', protocol: 19, course: COURSE_FINGERPRINT, name: 'GUEST', color: 0xff5f80,
       }));
       network.flush();
       expect(received).toEqual([{ type: 'reject', reason: 'version' }]);
@@ -146,9 +172,9 @@ describe('control protocol', () => {
 
   it.each(TRACK_IDS)('guards %s in welcome, course, race_start and race_end', trackId => {
     const controls: ControlMessage[] = [
-      { type: 'welcome', laps: 3, slot: 1, roster: players, hostTime: 0, trackId },
-      { type: 'course', laps: 3, trackId },
-      { type: 'race_start', laps: 3, raceId: 1, seed: 42, roster: players, startAtHostTime: 1500, trackId },
+      { type: 'welcome', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, slot: 1, roster: players, hostTime: 0, trackId },
+      { type: 'course', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, trackId },
+      { type: 'race_start', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, raceId: 1, seed: 42, roster: players, startAtHostTime: 1500, trackId },
     ];
     for (const message of controls) {
       expect(parseControlMessage(encodeControlMessage(message))).toEqual(message);
@@ -231,7 +257,7 @@ describe('control protocol', () => {
     expect(() => encodeControlMessage({ type: 'reject', reason: 'unknown' } as unknown as ControlMessage)).toThrow();
   });
 
-  it('round-trips fall events through v19 event batches and final states', () => {
+  it('round-trips fall events through v20 event batches and final states', () => {
     const event = { type: 'fall' as const, kartId: 0, x: 12, z: 34 };
     expect(isRaceEvent(event)).toBe(true);
     const batch: ControlMessage = { type: 'events', raceId: 1, tick: 600, events: [event] };
@@ -684,6 +710,7 @@ describe('input packets and host buffer', () => {
 
 it('lists the same course ids as the sim registry', () => {
   expect(PROTOCOL_TRACK_IDS).toEqual(TRACK_IDS);
+  expect(PROTOCOL_TRACK_IDS).toHaveLength(21);
 });
 
 it('keeps the net core independent of sim runtime and three', () => {
@@ -697,7 +724,7 @@ it('keeps the net core independent of sim runtime and three', () => {
         const specifier = node.moduleSpecifier.text;
         expect(specifier.includes('three')).toBe(false);
         if (specifier.includes('/sim/')) {
-          expect(['./protocol.ts', './transport.ts']).toContain(path);
+          expect(['./protocol.ts', './transport.ts', './session.ts']).toContain(path);
           expect(specifier).toBe('../sim/types');
           expect(ts.isImportDeclaration(node) ? node.importClause?.isTypeOnly : node.isTypeOnly).toBe(true);
         }

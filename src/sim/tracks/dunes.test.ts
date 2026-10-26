@@ -14,7 +14,7 @@ import { JUMP_DURATION, racingLineOffset, surfaceAt } from '../surfaces';
 import { buildTrack, rollAt, sampleTrack, slopeAt } from '../track';
 import { DUNES_LENGTH } from './dunes';
 import { getTrack, scaffoldIds } from './index';
-import { curvatureProfile, elevationRange, maxSlope } from './shapeMetrics';
+import { curvatureProfile, dirtCoverage, elevationRange, maxSlope } from './shapeMetrics';
 import { BASE_ROAD_HALF_WIDTH, BASE_WALL_HALF_WIDTH } from './widths';
 
 const track = getTrack('dunes');
@@ -49,7 +49,7 @@ describe('SIROCCO DUNES', () => {
     expect(track.def.splits ?? []).toEqual([]);
     expect(track.def.barriers ?? []).toEqual([]);
     expect(track.def.decks ?? []).toEqual([]);
-    expect(track.def.surfaces.map(zone => zone.kind).sort()).toEqual(['dirt', 'dirt', 'jump', 'jump', 'jump']);
+    expect(track.def.surfaces.map(zone => zone.kind).sort()).toEqual(['dirt', 'dirt', 'dirt', 'dirt', 'dirt', 'dirt', 'jump', 'jump', 'jump']);
     expect(track.def.racingLine[0]).toEqual({ distance: 0, offset: 0 });
     expect(track.def.racingLine.at(-1)).toEqual({ distance: track.length, offset: 0 });
     for (let d = 0; d < track.length; d += 0.5) {
@@ -81,13 +81,21 @@ describe('SIROCCO DUNES', () => {
     expect(crossings).toBe(0);
   });
 
-  it('launches from three separate ridge crests into two long dirt basins', () => {
+  it('launches from three separate ridge crests onto full-width sand pads with outside sand beyond', () => {
     expect(jumps).toHaveLength(3);
-    expect(dirt).toHaveLength(2);
-    for (const zone of dirt) {
-      expect(zone.to - zone.from).toBeGreaterThanOrEqual(180);
-      expect(zone.offsetMin).toBeUndefined();
+    // M12-22 (C2): each ridge lands on a full-width pad; the rest of the old basin keeps sand only outside.
+    const pads = dirt.filter(zone => zone.offsetMin === undefined);
+    const outside = dirt.filter(zone => zone.offsetMin !== undefined);
+    expect(pads.map(zone => zone.from)).toEqual(jumps.map(jump => jump.to));
+    for (const zone of pads) expect(zone.offsetMax).toBeUndefined();
+    expect(outside).toHaveLength(3);
+    // C2 user decision: SIROCCO DUNES sand coverage 40.7% -> at most 28% of the road area.
+    expect(dirtCoverage(track)).toBeLessThanOrEqual(0.28);
+    for (const zone of outside) {
+      expect(zone.offsetMin).toBeGreaterThan(0);
       expect(zone.offsetMax).toBeUndefined();
+      expect(pads.some(pad => pad.to === zone.from)).toBe(true);
+      expect(surfaceAt(track, (zone.from + zone.to) / 2, 0)).toBe('road');
     }
     for (const jump of jumps) {
       expect(jump.to - jump.from).toBe(4);

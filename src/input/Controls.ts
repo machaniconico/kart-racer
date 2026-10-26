@@ -156,7 +156,8 @@ export class Controls implements InputSource {
 
     if (!this.enabled || state.phase !== 'racing') {
       this.itemQueued = false;
-      return neutral();
+      // Start dash (M12-25): before GO only throttle reaches the sim; steer, drift and items stay neutral.
+      return this.enabled && state.phase === 'countdown' ? { ...neutral(), throttle: this.countdownThrottle(gamepad) } : neutral();
     }
 
     const left = this.keys.has('ArrowLeft') || this.keys.has('KeyA');
@@ -175,6 +176,12 @@ export class Controls implements InputSource {
     this.itemQueued = false;
     const kart = state.karts.find((candidate) => candidate.id === kartId);
     return this.steerAssist && kart ? applySteerAssist(state, kart, frame, 1) : frame;
+  }
+
+  private countdownThrottle(gamepad: InputFrame): number {
+    const brake = this.keys.has('ArrowDown') || this.keys.has('KeyS') || this.hasPointer('brake') || gamepad.brake;
+    const accelerating = this.auto || this.keys.has('ArrowUp') || this.keys.has('KeyW') || this.hasPointer('throttle');
+    return brake ? 0 : Math.max(Number(accelerating), gamepad.throttle);
   }
 
   reset(): void {

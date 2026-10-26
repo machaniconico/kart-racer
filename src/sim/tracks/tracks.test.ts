@@ -27,14 +27,14 @@ describe('course registry and MEADOW golden baseline', () => {
     expect(TRACK_IDS).toEqual([
       'meadow', 'canyon', 'snowpeak', 'neon', 'harbor', 'forest', 'volcano', 'skyline',
       'dunes', 'garden', 'speedway', 'bayou', 'cavern', 'temple', 'serpentine', 'lunar',
-      'summit', 'chasm', 'velodrome', 'spire',
+      'summit', 'chasm', 'velodrome', 'spire', 'aqueduct',
     ]);
     expect(TRACK_IDS.map(id => TRACKS[id].name)).toEqual([
       'MEADOW LOOP', 'SUNSCAR CANYON', 'FROSTBITE PEAK', 'NEON NIGHTLINE',
       'TIDEWATER HARBOR', 'MOSSWOOD TRAIL', 'EMBER CALDERA', 'STRATOS CITY',
       'SIROCCO DUNES', 'BLOSSOM GARDEN', 'THUNDER OVAL', 'MOONLIT BAYOU',
       'CRYSTAL HOLLOW', 'SUNKEN TEMPLE', 'SERPENT PASS', 'LUNAR BASIN',
-      'SUMMIT DROP', 'CHASM LEAP', 'WALL BOWL', 'SKY SPIRE',
+      'SUMMIT DROP', 'CHASM LEAP', 'WALL BOWL', 'SKY SPIRE', 'AQUEDUCT',
     ]);
     for (const id of TRACK_IDS) {
       expect(getTrack(id).def.id).toBe(id);
@@ -42,13 +42,13 @@ describe('course registry and MEADOW golden baseline', () => {
       expect(getTrack(id).def).toBe(TRACKS[id]);
       expect(getTrack(id)).toBe(getTrack(id));
     }
-    expect(new Set(TRACK_IDS.map(getTrack)).size).toBe(20);
+    expect(new Set(TRACK_IDS.map(getTrack)).size).toBe(21);
     expect(COURSE_FINGERPRINT).toBe(fnv1a32(TRACK_IDS.map(id => TRACKS[id])));
     expectFrozen(TRACK_IDS);
     expectFrozen(TRACKS);
   });
 
-  it('has no MEADOW-layout scaffold left (all twenty courses are real layouts)', () => {
+  it('has no remaining MEADOW-layout scaffolds', () => {
     expect(scaffoldIds()).toEqual([]);
   });
 
@@ -190,8 +190,8 @@ describe.each(TRACK_IDS)('%s course contract', id => {
     expect(track.checkpointDistances).toEqual(Array.from({ length: track.def.checkpointCount },
       (_, i) => (i === 0 || track.def.physics === undefined ? i : i + (track.def.checkpointPhase ?? 0)) *
         track.length / track.def.checkpointCount));
-    expect(track.def.roadHalfWidth).toBe(BASE_ROAD_HALF_WIDTH);
-    expect(track.def.wallHalfWidth).toBe(BASE_WALL_HALF_WIDTH);
+    expect(track.def.roadHalfWidth).toBe(id === 'aqueduct' ? 5.5 : BASE_ROAD_HALF_WIDTH);
+    expect(track.def.wallHalfWidth).toBe(id === 'aqueduct' ? 8 : BASE_WALL_HALF_WIDTH);
     expect(buildTrack(JSON.parse(JSON.stringify(track.def)))).toEqual(track);
   });
 

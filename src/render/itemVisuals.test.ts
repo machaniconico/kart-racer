@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { createRace } from '../sim/race';
-import { attachKartEffects, createEntityMesh, entityPose, updateKartEffects } from './itemVisuals';
+import { attachKartEffects, boxCoreRadius, createBoxAnim, createEntityMesh, createWarmupMeshes, entityPose, boltTrailSpark, createHitTracker, hitElapsed, hitSquash, stepBoxAnim, updateKartEffects } from './itemVisuals';
 
 function kartVisual() {
   const root = new THREE.Group();
@@ -129,5 +129,73 @@ describe('kart item effects', () => {
     kart.effects.holding = 0;
     updateKartEffects(effects, kart, 2);
     expect(effects.held.visible).toBe(false);
+  });
+});
+
+describe('item box and hit animation', () => {
+  it('shrinks within 0.15 s after pickup and grows back in 0.4 s with ease-out', () => {
+    const anim = createBoxAnim();
+    expect(stepBoxAnim(anim, true, 1 / 60)).toBe(1);
+    expect(stepBoxAnim(anim, false, 0.15)).toBe(0);
+    const early = stepBoxAnim(anim, true, 0.1);
+    expect(early).toBeGreaterThan(0.1 / 0.4);
+    expect(stepBoxAnim(anim, true, 0.3)).toBe(1);
+  });
+
+  it('pulses the core 0.55-0.75 at 2 Hz and holds still under reduced motion', () => {
+    expect(boxCoreRadius(0.125, false)).toBeCloseTo(0.75);
+    expect(boxCoreRadius(0.375, false)).toBeCloseTo(0.55);
+    expect(boxCoreRadius(0.125, true)).toBeCloseTo(0.65);
+  });
+
+  it('squashes y to 0.7 for 0.2 s after the hit origin', () => {
+    expect(hitSquash(Infinity)).toBe(1);
+    expect(hitSquash(0)).toBeCloseTo(1);
+    expect(hitSquash(0.1)).toBeCloseTo(0.7);
+    expect(hitSquash(0.2)).toBeCloseTo(1);
+    const { effects, kart } = kartVisual();
+    updateKartEffects(effects, kart, 0, 0, false, 0.1);
+    expect(effects.root.scale.y).toBeCloseTo(0.7);
+  });
+
+  it('times the squash from the rising spinTime edge for any start value, and ignores falls', () => {
+    for (const start of [1.05, 1.0, 1.5]) {
+      const tracker = createHitTracker();
+      expect(hitElapsed(tracker, 0, false, 1)).toBe(Infinity);
+      expect(hitElapsed(tracker, start, false, 2)).toBe(0);
+      expect(hitElapsed(tracker, start - 0.1, false, 2.1)).toBeCloseTo(0.1);
+      expect(hitElapsed(tracker, start - 0.3, false, 2.3)).toBeCloseTo(0.3);
+    }
+    const fall = createHitTracker();
+    expect(hitElapsed(fall, 1.5, true, 5)).toBe(Infinity);
+    expect(hitElapsed(fall, 1.4, false, 5.1)).toBe(Infinity);
+  });
+
+  it('shows the aura ring only while aura is active, sharing an existing lambert material', () => {
+    const { effects, kart } = kartVisual();
+    updateKartEffects(effects, kart, 0, 0, false);
+    expect(effects.ring.visible).toBe(false);
+    kart.effects.auraTime = 3;
+    updateKartEffects(effects, kart, 0.2, 0.2, false);
+    expect(effects.ring.visible).toBe(true);
+    expect(effects.ring.scale.x).not.toBeCloseTo(1);
+    updateKartEffects(effects, kart, 0.2, 0.2, true);
+    expect(effects.ring.scale.x).toBeCloseTo(1);
+    expect(effects.ring.material).toBe(createEntityMesh('bolt').material);
+  });
+
+  it('lays bolt trail sparks behind the heading, shrinking', () => {
+    const first = boltTrailSpark(0, 0);
+    const last = boltTrailSpark(0, 3);
+    expect(first.z).toBeLessThan(0);
+    expect(last.z).toBeLessThan(first.z);
+    expect(last.scale).toBeLessThan(first.scale);
+    expect(boltTrailSpark(Math.PI / 2, 0).x).toBeLessThan(0);
+  });
+
+  it('warm-up meshes cover every entity look at zero scale', () => {
+    const meshes = createWarmupMeshes();
+    expect(meshes).toHaveLength(6);
+    expect(meshes.every((mesh) => mesh.scale.x === 0 && !mesh.frustumCulled)).toBe(true);
   });
 });

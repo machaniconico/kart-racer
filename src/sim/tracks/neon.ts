@@ -85,6 +85,8 @@ export const neon: TrackDef = {
   scale: 1, samplesPerSegment: 16, spline: 'centripetal',
   ...base,
   checkpointCount: 24,
+  // M12-22 (C2): CPU pace keeps easy CPU meanLap / human-model lap at most 1.14 (was above it at 1).
+  cpuPace: 1.02,
   boxRows: [0.02, 0.16, 0.27, 0.39, 0.52, 0.66, 0.79, 0.91],
   boxLanes: [-5.33, 0, 5.33],
   // The 18 m rooftop crosses the tunnel at 235 m / 1290.06 m, at 90 degrees.

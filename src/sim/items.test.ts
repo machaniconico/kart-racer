@@ -23,15 +23,16 @@ const PRESS: InputFrame = { ...NEUTRAL_INPUT, useItem: true };
 const ITEMS: readonly ItemType[] = ['dash', 'trap', 'bolt', 'seeker', 'skycomet',
   'tripleDash', 'rapidDash', 'aura', 'storm', 'ink', 'decoy', 'bomb', 'autopilot', 'barrier'];
 // Independent copy of the design's rows, so editing production weights changes the result.
+// M12-23 (C3) rebalanced rows (itemTable.ts comment explains the targets).
 const EXPECTED_WEIGHTS = [
-  [8, 30, 12, 4, 0, 0, 0, 0, 0, 6, 20, 10, 0, 10],
-  [12, 20, 16, 12, 0, 0, 0, 0, 0, 8, 12, 12, 0, 8],
-  [14, 10, 16, 16, 0, 8, 0, 0, 0, 10, 6, 12, 0, 8],
-  [12, 0, 12, 16, 8, 14, 0, 4, 2, 10, 2, 10, 0, 10],
-  [8, 0, 8, 14, 12, 18, 2, 8, 6, 8, 0, 6, 0, 10],
+  [16, 8, 0, 0, 0, 0, 0, 0, 0, 0, 8, 2, 0, 36],
+  [20, 6, 14, 4, 0, 0, 0, 0, 0, 6, 6, 6, 0, 14],
+  [14, 4, 18, 8, 10, 8, 0, 0, 0, 10, 4, 12, 0, 8],
+  [12, 0, 12, 12, 16, 14, 0, 4, 2, 10, 2, 10, 0, 10],
+  [8, 0, 8, 12, 16, 18, 2, 8, 6, 8, 0, 6, 0, 10],
   [4, 0, 4, 10, 14, 18, 8, 12, 12, 4, 0, 4, 4, 6],
-  [2, 0, 2, 6, 12, 16, 14, 16, 16, 2, 0, 2, 12, 0],
-  [2, 0, 0, 4, 10, 12, 18, 18, 16, 0, 0, 0, 20, 0],
+  [2, 0, 2, 6, 12, 16, 14, 16, 16, 0, 0, 2, 12, 0],
+  [8, 0, 0, 0, 6, 26, 28, 14, 8, 0, 0, 0, 10, 0],
 ];
 
 function place(kart: KartState, distance: number): void {
@@ -400,18 +401,18 @@ describe('dash charges and timed presses', () => {
 });
 
 describe('aura and storm', () => {
-  it('grants seven seconds of speed, immunity and contact damage then expires', () => {
+  it('grants six seconds of speed, immunity and contact damage then expires', () => {
     const state = race();
     const kart = state.karts[0]!;
     kart.item = 'aura';
     press(state, kart);
     expect(kart.item).toBeNull();
-    expect(kart.effects.auraTime).toBe(7);
+    expect(kart.effects.auraTime).toBe(6); // M12-23 (C3): 7 -> 6 s
     expect(getKartModifiers(state, kart, PRESS)).toEqual({
       input: PRESS, maxSpeedMultiplier: 1.3, invulnerable: true, contactHit: true,
     });
     expect(state.events).toContainEqual({ type: 'aura_start', kartId: kart.id });
-    for (let tick = 0; tick < 419; tick++) advanceItems(track, state, FIXED_DT);
+    for (let tick = 0; tick < 359; tick++) advanceItems(track, state, FIXED_DT);
     expect(getKartModifiers(state, kart, PRESS).invulnerable).toBe(true);
     advanceItems(track, state, FIXED_DT);
     expect(kart.effects.auraTime).toBe(0);
@@ -470,7 +471,7 @@ describe('aura and storm', () => {
     expect(second.spinTime).toBe(1.05);
   });
 
-  it('shrinks every unprotected opponent for five seconds and clears all held inventory', () => {
+  it('shrinks every unprotected opponent for four seconds and clears all held inventory', () => {
     const state = race();
     const user = state.karts[0]!;
     const protectedKart = state.karts[1]!;
@@ -488,14 +489,14 @@ describe('aura and storm', () => {
     expect(JSON.stringify(protectedKart)).toBe(protectedBefore);
     for (const target of state.karts.slice(2)) {
       expect(target.item).toBeNull();
-      expect(target.effects).toMatchObject({ rouletteTime: 0, shrinkTime: 5, charges: 0, rapidTime: 0,
+      expect(target.effects).toMatchObject({ rouletteTime: 0, shrinkTime: 4, charges: 0, rapidTime: 0,
         holding: 0, orbitKind: 0, orbitCount: 0 });
       expect(getKartModifiers(state, target, PRESS).maxSpeedMultiplier).toBe(0.65);
       press(state, target);
       expect(target.boostTime).toBe(0);
     }
     expect(state.events.filter((event) => event.type === 'storm')).toEqual([{ type: 'storm', kartId: user.id, value: 0b11111100 }]);
-    for (let tick = 0; tick < 299; tick++) advanceItems(track, state, FIXED_DT);
+    for (let tick = 0; tick < 239; tick++) advanceItems(track, state, FIXED_DT);
     expect(state.karts[2]!.effects.shrinkTime).toBeGreaterThan(0);
     advanceItems(track, state, FIXED_DT);
     expect(state.karts[2]!.effects.shrinkTime).toBe(0);
@@ -509,10 +510,10 @@ describe('aura and storm', () => {
     user.item = 'storm';
     press(state, user);
     advanceItems(track, state, 2);
-    expect(target.effects.shrinkTime).toBe(3);
+    expect(target.effects.shrinkTime).toBe(2); // M12-23 (C3): shrink 5 -> 4 s
     user.item = 'storm';
     press(state, user);
-    expect(target.effects.shrinkTime).toBe(5);
+    expect(target.effects.shrinkTime).toBe(4);
     target.item = 'aura';
     press(state, target);
     expect(getKartModifiers(state, target, PRESS).maxSpeedMultiplier).toBeCloseTo(1.3 * 0.65);
@@ -532,7 +533,7 @@ describe('aura and storm', () => {
 });
 
 describe('effect snapshot compatibility and deterministic replay', () => {
-  it('registers every effect field and matches the protocol v19 fingerprint', () => {
+  it('registers every effect field and matches the protocol v20 fingerprint', () => {
     expect(KART_EFFECT_LAYOUT.map(({ field }) => field).sort()).toEqual(Object.keys(createKartEffects()).sort());
     for (const field of ['charges', 'rapidTime', 'auraTime', 'shrinkTime']) {
       expect(KART_EFFECT_LAYOUT.some((entry) => entry.field === field)).toBe(true);
@@ -542,7 +543,7 @@ describe('effect snapshot compatibility and deterministic replay', () => {
       hash = Math.imul(hash ^ character.charCodeAt(0), 0x01000193) >>> 0;
     }
     expect(hash.toString(16).padStart(8, '0')).toBe(LAYOUT_FINGERPRINT);
-    expect(PROTOCOL_VERSION).toBe(19);
+    expect(PROTOCOL_VERSION).toBe(20);
     const state = race();
     state.karts[0]!.item = 'rapidDash';
     press(state, state.karts[0]!);
@@ -1254,7 +1255,7 @@ describe('I3 ink and autopilot', () => {
     expect(kart.effects.rapidTime).toBeCloseTo(8 - FIXED_DT);
   });
 
-  it('inks every active higher-ranked kart for exactly four seconds and emits both events', () => {
+  it('inks every active higher-ranked kart for exactly 2.4 seconds and emits both events', () => {
     const state = race();
     state.karts.forEach((kart, id) => { kart.startedLap = true; kart.lapProgress = id * 10; });
     const owner = state.karts[3];
@@ -1262,9 +1263,9 @@ describe('I3 ink and autopilot', () => {
     owner.item = 'ink';
     press(state, owner);
     expect(owner.item).toBeNull();
-    expect(state.karts.map(kart => kart.effects.inkTime)).toEqual([0, 0, 0, 0, 4, 4, 4, 0]);
+    expect(state.karts.map(kart => kart.effects.inkTime)).toEqual([0, 0, 0, 0, 2.4, 2.4, 2.4, 0]); // M12-23 (C3): 4 -> 2.4 s
     expect(state.events).toEqual([{ type: 'use', kartId: 3 }, { type: 'ink', kartId: 3, value: 0b01110000 }]);
-    for (let tick = 0; tick < 239; tick++) advanceItems(track, state, FIXED_DT);
+    for (let tick = 0; tick < 143; tick++) advanceItems(track, state, FIXED_DT);
     expect(state.karts[4].effects.inkTime).toBeCloseTo(FIXED_DT, 8);
     advanceItems(track, state, FIXED_DT);
     expect(state.karts.every(kart => kart.effects.inkTime === 0)).toBe(true);

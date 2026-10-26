@@ -40,10 +40,13 @@ function allRacersFinished(state: RaceState): boolean {
   return racers.length > 0 && racers.every((kart) => kart.finishTime !== null);
 }
 
-// CPU level base-speed factors (normal never multiplies). H7 in handling.test.ts measured meanLap
-// (8 CPU, seeds 1, 42, 98765, 3 laps): meadow easy 73.0414 / hard 66.6086, skyline easy 72.5565 / hard 64.7785.
-const CPU_SPEED_EASY = 0.93;
-const CPU_SPEED_HARD = 1.04;
+// CPU level base-speed factors (normal never multiplies). M12-22 (C2) targets CPU meanLap / human-model lap
+// of easy [1.07, 1.14], normal [1.00, 1.06], hard [0.96, 1.01] on every course (measure.test.ts).
+const CPU_SPEED_EASY = 0.91;
+const CPU_SPEED_HARD = 1.06;
+/** TrackDef.cpuPace is clamped to this range; it scales CPU (never human) max speed at every level. */
+const CPU_PACE_MIN = 0.95;
+const CPU_PACE_MAX = 1.06;
 
 export function createRace(seed: number, options: RaceOptions = {}): RaceState {
   if (options.racers && options.racers.length > NAMES.length) throw new RangeError('A race supports at most eight racers');
@@ -337,6 +340,9 @@ function advanceKart(track: Track, state: RaceState, kart: KartState, input: Inp
     grade = slope * (Math.sin(kart.heading) * sample.tx + Math.cos(kart.heading) * sample.tz);
   }
   let maxSpeed = kart.human ? 32 : 30.2 + (kart.id % 3) * 0.35;
+  if (!kart.human && track.def.cpuPace !== undefined) {
+    maxSpeed *= Math.max(CPU_PACE_MIN, Math.min(CPU_PACE_MAX, track.def.cpuPace));
+  }
   if (!kart.human && state.cpuLevel === 'normal') {
     const humanProgress = state.karts.filter((racer) => racer.human).map(racer => raceProgress(track, racer));
     if (humanProgress.length > 0) {
@@ -350,7 +356,7 @@ function advanceKart(track: Track, state: RaceState, kart: KartState, input: Inp
     const humanProgress = state.karts.filter((racer) => racer.human).map(racer => raceProgress(track, racer));
     if (humanProgress.length > 0) {
       const difference = Math.max(...humanProgress) - raceProgress(track, kart);
-      maxSpeed *= 1 + Math.max(easy ? -0.04 : -0.01, Math.min(easy ? 0 : 0.06, difference / 1800));
+      maxSpeed *= 1 + Math.max(easy ? -0.06 : -0.01, Math.min(easy ? 0 : 0.08, difference / 1800));
     }
   }
   maxSpeed *= modifiers.maxSpeedMultiplier;
@@ -443,6 +449,19 @@ function collideKarts(track: Track, state: RaceState): void {
   }
 }
 
+const START_WINDOW_FIRST_TICK = 120;
+
+/**
+ * Seconds of boost granted at GO for `heldTicks` of throttle in the tick 120..179 window: 12-36 ticks
+ * (started 0.2-0.6 s before GO) 1.0 s, 6-11 or 37-48 ticks 0.5 s, anything else (too late or held
+ * through most of the last second) 0 with no penalty.
+ */
+export function startDashBoost(heldTicks: number): number {
+  if (heldTicks >= 12 && heldTicks <= 36) return 1.0;
+  if ((heldTicks >= 6 && heldTicks <= 11) || (heldTicks >= 37 && heldTicks <= 48)) return 0.5;
+  return 0;
+}
+
 /** Mutates only the supplied JSON-safe state by one deterministic 60 Hz tick. */
 export function stepRace(state: RaceState, inputs: readonly InputFrame[]): void {
   const track = getTrack(state.trackId);
@@ -455,9 +474,18 @@ export function stepRace(state: RaceState, inputs: readonly InputFrame[]): void 
     if (Math.ceil(state.countdown) !== previousCount && state.countdown > 0) {
       state.events.push({ type: 'countdown', kartId: 0, value: Math.ceil(state.countdown) });
     }
+    // Start dash: during countdown boostTime accumulates held seconds (never decremented here), so
+    // the snapshot shape stays the same. Only ticks 120..179 (the last second before GO) count.
+    if (state.tick >= START_WINDOW_FIRST_TICK && state.tick < 180) {
+      for (const kart of state.karts) if (normalizeInput(inputs[kart.id]).throttle >= 0.5) kart.boostTime += FIXED_DT;
+    }
     if (state.countdown === 0) {
       state.phase = 'racing';
       state.events.push({ type: 'go', kartId: 0 });
+      for (const kart of state.karts) {
+        kart.boostTime = startDashBoost(Math.round(kart.boostTime / FIXED_DT));
+        if (kart.boostTime > 0) state.events.push({ type: 'boost', kartId: kart.id, value: 2 });
+      }
     }
     return;
   }

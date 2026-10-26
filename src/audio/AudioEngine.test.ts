@@ -10,11 +10,15 @@ vi.mock('./itemSounds', async (importOriginal) => ({
 import { AudioEngine } from './AudioEngine';
 import * as sounds from './itemSounds';
 
+let oscillators = 0;
+
 function fakeContext() {
+  const param = () => ({ value: 0, setTargetAtTime: vi.fn(), setValueAtTime: vi.fn(),
+    linearRampToValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn(), cancelScheduledValues: vi.fn() });
   const node = () => ({
     connect: vi.fn(), disconnect: vi.fn(), start: vi.fn(), stop: vi.fn(),
-    gain: { value: 0, setTargetAtTime: vi.fn() },
-    frequency: { value: 0, setTargetAtTime: vi.fn() },
+    gain: param(),
+    frequency: param(),
     Q: { value: 0 },
   });
   return class {
@@ -23,7 +27,7 @@ function fakeContext() {
     sampleRate = 8;
     destination = {};
     createGain = node;
-    createOscillator = node;
+    createOscillator = () => { oscillators++; return node(); };
     createBiquadFilter = node;
     createBufferSource = node;
     createBuffer = () => ({ getChannelData: () => new Float32Array(8) });
@@ -70,5 +74,30 @@ describe('AudioEngine hit branching', () => {
     (await readyEngine()).playEvents(hit());
     expect(sounds.playHitSound).toHaveBeenCalledTimes(1);
     expect(sounds.playFallSound).not.toHaveBeenCalled();
+  });
+});
+
+describe('AudioEngine start dash cue', () => {
+  beforeEach(() => {
+    vi.stubGlobal('window', { AudioContext: fakeContext() });
+    vi.stubGlobal('performance', { now: () => 0 });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const oscillatorsFor = async (events: RaceEvent[]): Promise<number> => {
+    const engine = await readyEngine();
+    const before = oscillators;
+    engine.playEvents(events);
+    return oscillators - before;
+  };
+
+  it('a GO-tick boost (value 2) adds a rocket whoop on top of the boost sound', async () => {
+    const plain = await oscillatorsFor([{ type: 'boost', kartId: 0 }]);
+    expect(plain).toBeGreaterThan(0);
+    expect(await oscillatorsFor([{ type: 'boost', kartId: 0, value: 2 }])).toBe(plain + 1);
+  });
+
+  it("another kart's start dash stays silent", async () => {
+    expect(await oscillatorsFor([{ type: 'boost', kartId: 3, value: 2 }])).toBe(0);
   });
 });

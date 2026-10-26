@@ -10,7 +10,7 @@ import { racingLineOffset } from './surfaces';
 import { buildTrack, sampleTrack } from './track';
 import * as tracks from './tracks';
 import { LEGACY_MEADOW } from './tracks/legacyMeadow.fixture';
-import { measureCpuLaps } from './tracks/shapeMetrics';
+import { measureCpuLaps, WALL_HITS_MAX_EXISTING } from './tracks/shapeMetrics';
 import { CPU_LEVELS } from './types';
 import type { Barrier, RaceState, Track, TrackDef } from './types';
 
@@ -236,6 +236,24 @@ describe('gated CPU jump alignment', () => {
 });
 
 describe('CPU lap fall measurement', () => {
+  it('finishes AQUEDUCT without items at every difficulty within the existing fall/wall budgets', () => {
+    // aqueduct.test.ts covers the same seeds with items. This sweep isolates steering,
+    // jump alignment and the narrow upper road from item hits and recovery effects.
+    const results = measureCpuLaps('aqueduct', { itemBoxes: false, fallBudget: 1 });
+    for (const result of results) {
+      console.info('AQUEDUCT no-items CPU', { level: result.cpuLevel,
+        falls: result.falls, meanFalls: result.meanFalls, wallHits: result.wallHits });
+      expect(result.passed).toBe(true);
+      expect(result.meanFalls).toBeLessThanOrEqual(1);
+      expect(result.wallHits).toBeLessThanOrEqual(WALL_HITS_MAX_EXISTING);
+      expect(result.runs.map(run => run.seed)).toEqual([1, 42, 98765]);
+      for (const run of result.runs) {
+        expect(run.finished).toBe(true);
+        expect(run.state.karts.flatMap(kart => kart.lapTimes)).toHaveLength(24);
+      }
+    }
+  }, 120_000);
+
   it('requires an explicit fall budget for any course containing falls', () => {
     vi.spyOn(tracks, 'getTrack').mockReturnValue(buildTrack(jumpCourse('fall')));
     expect(() => measureCpuLaps('meadow')).toThrow(/fallBudget/);
@@ -248,14 +266,15 @@ describe('CPU lap fall measurement', () => {
       for (const kart of state.karts) Object.assign(kart, { lap: 3, lapTimes: [1, 1, 1], finishTime: 3 });
       state.events = [{ type: 'hit', kartId: 0, value: 1 }];
     });
-    const options = { seeds: [1, 42], cpuLevels: ['normal'] as const };
+    // M12-22: the legacy band maximum is 1, so three one-hit seeds exceed it.
+    const options = { seeds: [1, 42, 98765], cpuLevels: ['normal'] as const };
     const [overBudget] = measureCpuLaps('meadow', options);
     expect(overBudget!.runs.every(run => run.finished && run.bandHits === 1)).toBe(true);
-    expect(overBudget!.bandHits).toBe(2);
+    expect(overBudget!.bandHits).toBe(3);
     expect(overBudget!.wallHits).toBe(0);
     expect(overBudget!.falls).toBe(0);
     expect(overBudget!.passed).toBe(false);
-    expect(measureCpuLaps('meadow', { ...options, bandHitBudget: 2 })[0]!.passed).toBe(true);
+    expect(measureCpuLaps('meadow', { ...options, bandHitBudget: 3 })[0]!.passed).toBe(true);
     expect(measureCpuLaps('meadow', { ...options, seeds: [1] })[0]!.passed).toBe(true);
     expect(measureCpuLaps('meadow', { ...options, seeds: [1], bandHitBudget: 0 })[0]!.passed).toBe(false);
   });

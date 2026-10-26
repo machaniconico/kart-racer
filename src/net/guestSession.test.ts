@@ -6,11 +6,12 @@ import type { InputFrame, RaceState } from '../sim/types';
 import { packPong, TICK_MS, unpackClock } from './clock';
 import { COURSE_GRACE_MS, GuestSession, LOBBY_TIMEOUT_MS } from './guestSession';
 import { HostSession } from './hostSession';
-import { InputBuffer, NEUTRAL_INPUT, unpack } from './inputBuffer';
+import { InputBuffer, NEUTRAL_INPUT, quantizeInput, unpack } from './inputBuffer';
 import type { InputPacket } from './inputBuffer';
 import { interpolateState, MAX_EXTRAPOLATION_MS, respawnedBetween, SnapshotBuffer } from './interpolation';
 import { MockTransport } from './mockTransport';
 import type { MockTransportOptions } from './mockTransport';
+import { Predictor } from './predictor';
 import { encodeControlMessage, PacketKind, parseControlMessage, PROTOCOL_VERSION } from './protocol';
 import type { ControlMessage } from './protocol';
 import type { NetPhase, RosterPlayer } from './session';
@@ -49,7 +50,7 @@ async function setup(options: MockTransportOptions = {}, hostOffset = 0, autoWel
         const message = parseControlMessage(data);
         if (message) controls.push(message);
         if (message?.type === 'hello' && autoWelcome) peer.send('reliable', encodeControlMessage({
-          type: 'welcome', laps: 3, trackId: 'meadow', slot: 1, roster, hostTime: network.now + hostOffset,
+          type: 'welcome', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, trackId: 'meadow', slot: 1, roster, hostTime: network.now + hostOffset,
         }));
       } else {
         const clock = unpackClock(data);
@@ -68,7 +69,7 @@ async function setup(options: MockTransportOptions = {}, hostOffset = 0, autoWel
   await guest.join('ab2x ');
   const send = (message: ControlMessage) => link.send('reliable', encodeControlMessage(message));
   const start = (raceId = 1, startAtHostTime = network.now + hostOffset, seed = 1) => {
-    send({ type: 'race_start', laps: 3, trackId: 'meadow', raceId, seed, roster, startAtHostTime });
+    send({ type: 'race_start', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, trackId: 'meadow', raceId, seed, roster, startAtHostTime });
     network.advance(options.latencyMs ?? 0);
   };
   const sendSnapshot = (value: Snapshot) => link.send('unreliable',
@@ -225,21 +226,21 @@ describe('GuestSession', () => {
   it.each([1, 2, 3])('uses welcome and lobby course laps %i for race creation and rematches', async laps => {
     const h = await setup({}, 0, false);
     try {
-      h.send({ type: 'course', trackId: 'meadow', laps: 1 });
+      h.send({ type: 'course', cpuLevel: 'normal', cpuFill: true, items: true, trackId: 'meadow', laps: 1 });
       h.network.advance(0);
       expect(h.guest.laps).toBe(3);
-      h.send({ type: 'welcome', trackId: 'meadow', laps, slot: 1, roster, hostTime: 0 });
+      h.send({ type: 'welcome', cpuLevel: 'normal', cpuFill: true, items: true, trackId: 'meadow', laps, slot: 1, roster, hostTime: 0 });
       h.network.advance(0);
       expect(h.guest.laps).toBe(laps);
       const changed = vi.fn();
       h.guest.onChange(changed);
-      h.send({ type: 'course', trackId: 'canyon', laps: 2 });
+      h.send({ type: 'course', cpuLevel: 'normal', cpuFill: true, items: true, trackId: 'canyon', laps: 2 });
       h.network.advance(0);
       expect(h.guest.laps).toBe(2);
       expect(changed).toHaveBeenCalledOnce();
-      h.send({ type: 'course', trackId: 'canyon', laps });
+      h.send({ type: 'course', cpuLevel: 'normal', cpuFill: true, items: true, trackId: 'canyon', laps });
       h.network.advance(0);
-      const start = { type: 'race_start', trackId: 'canyon', laps, seed: 42, raceId: 1, roster, startAtHostTime: 0 } as const;
+      const start = { type: 'race_start', cpuLevel: 'normal', cpuFill: true, items: true, trackId: 'canyon', laps, seed: 42, raceId: 1, roster, startAtHostTime: 0 } as const;
       h.send(start);
       h.network.advance(0);
       expect(h.guest.frame()!.state.laps).toBe(laps);
@@ -255,29 +256,29 @@ describe('GuestSession', () => {
   it.each(TRACK_IDS)('uses %s from welcome and course updates for race creation and rematches', async trackId => {
     const h = await setup({}, 0, false);
     try {
-      h.send({ type: 'course', laps: 3, trackId: 'neon' });
+      h.send({ type: 'course', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, trackId: 'neon' });
       h.network.advance(0);
       expect(h.guest.phase).toBe('connecting');
       expect(h.guest.course).toBe('meadow');
-      h.send({ type: 'welcome', laps: 3, slot: 1, roster, hostTime: 0, trackId });
+      h.send({ type: 'welcome', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, slot: 1, roster, hostTime: 0, trackId });
       h.network.advance(0);
       expect(h.guest.course).toBe(trackId);
       const changed = vi.fn();
       h.guest.onChange(changed);
-      h.send({ type: 'course', laps: 3, trackId: 'snowpeak' });
+      h.send({ type: 'course', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, trackId: 'snowpeak' });
       h.network.advance(0);
       expect(h.guest.course).toBe('snowpeak');
       expect(changed).toHaveBeenCalledOnce();
-      h.send({ type: 'course', laps: 3, trackId });
+      h.send({ type: 'course', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, trackId });
       h.network.advance(0);
-      const start = { type: 'race_start', laps: 3, trackId, seed: 42, raceId: 1, roster, startAtHostTime: 0 } as const;
+      const start = { type: 'race_start', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, trackId, seed: 42, raceId: 1, roster, startAtHostTime: 0 } as const;
       h.send(start);
       h.network.advance(0);
       expect(h.guest.phase).toBe('countdown');
       expect(h.guest.frame()!.state).toEqual(createRace(42, { trackId, racers: roster.map(player => ({
         name: player.name, color: player.color, human: player.kind !== 'cpu',
       })) }));
-      h.send({ type: 'course', laps: 3, trackId: trackId === 'neon' ? 'canyon' : 'neon' });
+      h.send({ type: 'course', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, trackId: trackId === 'neon' ? 'canyon' : 'neon' });
       h.network.advance(0);
       expect(h.guest.course).toBe(trackId);
       const airborne = snapshot(3, 50, 1);
@@ -301,12 +302,12 @@ describe('GuestSession', () => {
     const h = await setup();
     try {
       h.network.advance(0);
-      h.send({ type: 'course', laps: 3, trackId: 'canyon' });
+      h.send({ type: 'course', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, trackId: 'canyon' });
       h.network.advance(0);
-      const start = { type: 'race_start', laps: 3, trackId: 'neon', seed: 42, raceId: 1, roster, startAtHostTime: 0 } as const;
+      const start = { type: 'race_start', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, trackId: 'neon', seed: 42, raceId: 1, roster, startAtHostTime: 0 } as const;
       h.send(start);
       for (const message of [
-        { type: 'course', laps: 3, trackId: 'unknown' }, { type: 'course', laps: 3, trackId: 'neon', extra: true },
+        { type: 'course', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, trackId: 'unknown' }, { type: 'course', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, trackId: 'neon', extra: true },
         { ...start, trackId: 'unknown' }, { ...start, trackId: 'canyon', extra: true },
       ]) h.link.send('reliable', JSON.stringify(message));
       h.network.advance(0);
@@ -655,7 +656,7 @@ describe('GuestSession', () => {
     expect(h.guest.updateProfile('New name', 0xff00ff)).toBe(true);
     h.link.send('reliable', '{not json');
     h.link.send('unreliable', new ArrayBuffer(1));
-    h.link.send('reliable', JSON.stringify({ type: 'race_start', laps: 3, trackId: 'meadow', raceId: -1 }));
+    h.link.send('reliable', JSON.stringify({ type: 'race_start', cpuLevel: 'normal', cpuFill: true, items: true, laps: 3, trackId: 'meadow', raceId: -1 }));
     h.network.advance(0);
     expect(h.guest.phase).toBe('lobby');
     expect(h.controls.at(-1)).toEqual({ type: 'profile', name: 'New name', color: 0xff00ff });
@@ -883,6 +884,425 @@ describe('HostSession integration', () => {
     host.close();
   });
 
+  // M12-25: the guest's countdown input reaches the host from tick 1 (well before the tick 120 start-dash
+  // window), and pressing from 0.4 s before GO (guest input tick 156) earns the 1.0 s rocket start on the host.
+  // The guest predicts the same hold, so the GO boost needs no prediction correction, even on a lossy link.
+  // Measured: guest input first applied at host tick 6 (clean) / 7 (impaired), lead 6, 24 held ticks, worst
+  // correction over ticks 120..300 0.0013 m on both links.
+  it.each([
+    { link: 'clean', options: { latencyMs: 60 } },
+    { link: 'impaired', options: { latencyMs: 60, jitterMs: 20, lossRate: 0.1, seed: 25 } },
+  ])('delivers countdown input and predicts the GO rocket start on a $link link', async ({ options }) => {
+    const network = new MockTransport(options);
+    const host = await HostSession.create(network, { roomCode: 'AB2X', now: () => network.now, hostInput: { sample: getAIInput } });
+    const guest = new GuestSession(network, { now: () => network.now, prediction: true });
+    const corrections: { tick: number; metres: number }[] = [];
+    const reconcile = Predictor.prototype.reconcile;
+    const spy = vi.spyOn(Predictor.prototype, 'reconcile').mockImplementation(function (this: Predictor, snapshot: Snapshot) {
+      const snapped = reconcile.call(this, snapshot);
+      corrections.push({ tick: snapshot.state.tick, metres: this.lastCorrectionMetres });
+      return snapped;
+    });
+    try {
+      await guest.join('AB2X');
+      for (let n = 0; n < 200; n++) { host.frame(); guest.frame(); network.advance(10); }
+      const state = host.startRace(431);
+      network.advance(host.startAtHostTime - network.now);
+      // Like a CPU, the guest revs below the 0.5 hold threshold until it presses (a zero frame reads as no input).
+      const idle = { ...NEUTRAL_INPUT, throttle: 0.3 };
+      const press = { ...NEUTRAL_INPUT, throttle: 1 };
+      let firstArrival = Infinity;
+      let held = 0;
+      let goBoost = -1;
+      const sentHeld = new Set<number>();
+      for (let tick = 1; tick <= 300; tick++) {
+        // The guest's input stream runs ahead of the host by its lead: this frame goes to tick next.
+        const next = (guest.predictedState?.tick ?? 0) + 1;
+        const input = next >= 156 ? press : idle;
+        if (next >= 120 && next < 180 && input === press) sentHeld.add(next);
+        guest.tick(input);
+        network.advance(TICK_MS);
+        const applied = state.karts.map(kart => host.inputSource(kart.id).sample(state, kart.id));
+        if (applied[1].throttle > 0) firstArrival = Math.min(firstArrival, state.tick + 1);
+        if (state.tick + 1 >= 120 && state.tick + 1 < 180 && applied[1].throttle >= 0.5) held++;
+        stepRace(state, applied);
+        if (state.tick === 180) goBoost = state.karts[1].boostTime;
+        host.afterTick(state);
+        guest.frame();
+      }
+      expect(firstArrival).toBeLessThanOrEqual(guest.lead + 2);
+      expect(held).toBe(sentHeld.size);
+      expect(held).toBeGreaterThanOrEqual(20);
+      expect(held).toBeLessThanOrEqual(28);
+      expect(goBoost).toBe(1.0);
+      const start = corrections.filter(({ tick }) => tick >= 120 && tick <= 300);
+      expect(start.length).toBeGreaterThan(40);
+      const worst = Math.max(...start.map(({ metres }) => metres));
+      expect(worst).toBeLessThanOrEqual(0.6);
+    } finally {
+      spy.mockRestore();
+      host.close();
+    }
+  });
+
+  it('M12-31 a guest races the host settings: hard CPUs, humans only, no item boxes', async () => {
+    const network = new MockTransport({ latencyMs: 30 });
+    const host = await HostSession.create(network, { roomCode: 'AB2X', now: () => network.now, hostInput: { sample: getAIInput } });
+    const guest = new GuestSession(network, { now: () => network.now, prediction: true });
+    try {
+      await guest.join('AB2X');
+      for (let n = 0; n < 50; n++) { host.frame(); guest.frame(); network.advance(10); }
+      expect(host.setCpuLevel('hard') && host.setCpuFill(false) && host.setItems(false)).toBe(true);
+      network.advance(50);
+      expect(guest.settings).toEqual({ cpuLevel: 'hard', cpuFill: false, items: false });
+      const state = host.startRace(77);
+      network.advance(host.startAtHostTime - network.now);
+      for (let tick = 1; tick <= 420; tick++) {
+        guest.tick({ ...NEUTRAL_INPUT, throttle: 1 });
+        network.advance(TICK_MS);
+        stepRace(state, state.karts.map(kart => host.inputSource(kart.id).sample(state, kart.id)));
+        host.afterTick(state);
+        guest.frame();
+      }
+      expect(guest.phase).toBe('racing');
+      for (const raced of [state, guest.predictedState!]) {
+        expect(raced.cpuLevel).toBe('hard');
+        expect(raced.karts.map(kart => [kart.id, kart.human])).toEqual([[0, true], [1, true]]);
+        expect(raced.boxes).toEqual([]);
+      }
+      expect(guest.predictedState!.karts.every(kart => kart.item === null)).toBe(true);
+    } finally { host.close(); }
+  });
+
+  it('M12-31 without CPU fill, host and guest compact slots to the same kart IDs and slot 2 drives kart 1', async () => {
+    const network = new MockTransport({ latencyMs: 30 });
+    const host = await HostSession.create(network, { roomCode: 'AB2X', name: 'HOST', now: () => network.now, hostInput: { sample: getAIInput } });
+    const one = new GuestSession(network, { name: 'ONE', color: 0xff5f80, now: () => network.now, prediction: true });
+    const two = new GuestSession(network, { name: 'TWO', color: 0x56d9c1, now: () => network.now, prediction: true });
+    try {
+      await one.join('AB2X');
+      for (let n = 0; n < 20; n++) { host.frame(); one.frame(); network.advance(10); }
+      await two.join('AB2X');
+      for (let n = 0; n < 20; n++) { host.frame(); one.frame(); two.frame(); network.advance(10); }
+      expect([one.localSlot, two.localSlot]).toEqual([1, 2]);
+      // main.ts binds its renderer to localKartId on every change; it must reach the race's ID in the lobby
+      // so the countdown never rebinds (a renderer rebuild there would stall the start-dash window).
+      const seen: [NetPhase, number][] = [];
+      two.onChange(() => seen.push([two.phase, two.localKartId]));
+      expect(two.localKartId).toBe(2);
+      one.close(); // Sends leave.
+      expect(host.setCpuFill(false)).toBe(true);
+      for (let n = 0; n < 20; n++) { host.frame(); two.frame(); network.advance(10); }
+      expect([two.phase, two.localKartId]).toEqual(['lobby', 1]);
+      const state = host.startRace(78);
+      network.advance(host.startAtHostTime - network.now);
+      expect(two.phase).toBe('countdown');
+      const countdown = seen.findIndex(([phase]) => phase === 'countdown');
+      expect(seen[countdown - 1]).toEqual(['lobby', 1]);
+      expect(seen[countdown]).toEqual(['countdown', 1]);
+      expect(two.localSlot).toBe(2);
+      expect(two.localKartId).toBe(1);
+      expect(two.raceRoster.map(player => [player.slot, player.name, player.kind])).toEqual([[0, 'HOST', 'host'], [1, 'TWO', 'guest']]);
+      const steer = { ...NEUTRAL_INPUT, throttle: 1, steer: -1 };
+      let applied: InputFrame | null = null;
+      for (let tick = 1; tick <= 300; tick++) {
+        two.tick(steer);
+        network.advance(TICK_MS);
+        const inputs = state.karts.map(kart => host.inputSource(kart.id).sample(state, kart.id));
+        if (inputs[1].steer < 0) applied = inputs[1];
+        stepRace(state, inputs);
+        host.afterTick(state);
+        two.frame();
+      }
+      // The guest's input (sent as slot 2) reaches kart 1 on the host, never kart 0.
+      expect(applied).toEqual(quantizeInput(steer));
+      expect(two.phase).toBe('racing');
+      const predicted = two.predictedState!;
+      for (const raced of [state, predicted]) {
+        expect(raced.karts.map(kart => [kart.id, kart.name, kart.human])).toEqual([[0, 'HOST', true], [1, 'TWO', true]]);
+      }
+      // The guest predicts kart 1 as its own kart, close to the host's authoritative position.
+      const hostKart = state.karts[1];
+      const guestKart = predicted.karts[1];
+      expect(Math.hypot(hostKart.x - guestKart.x, hostKart.z - guestKart.z)).toBeLessThan(15);
+    } finally { host.close(); }
+  });
+
+  // M12-25: a guest times its start-dash press by the HUD countdown, and its input runs `lead` ticks ahead
+  // of the host (plus a render delay ahead of the snapshots). The HUD countdown and its countdown/go sounds
+  // therefore follow the guest's input tick, not the interpolated snapshot.
+  it.each([{ lead: 10, latencyMs: 130 }, { lead: 40, latencyMs: 630 }])
+  ('counts down on the guest input tick (within 1 tick) at lead $lead', async ({ lead, latencyMs }) => {
+    const network = new MockTransport({ latencyMs });
+    const host = await HostSession.create(network, { roomCode: 'AB2X', now: () => network.now, hostInput: { sample: getAIInput } });
+    const guest = new GuestSession(network, { now: () => network.now, prediction: true });
+    let sentTick = -1;
+    const original = (GuestSession.prototype as unknown as { send: (kind: string, data: unknown) => boolean }).send;
+    const spy = vi.spyOn(GuestSession.prototype as unknown as { send: (kind: string, data: unknown) => boolean }, 'send')
+      .mockImplementation(function (this: GuestSession, kind: string, data: unknown) {
+        const packet = kind === 'unreliable' ? unpack(data) : null;
+        if (packet) sentTick = Math.max(sentTick, packet.latestTick);
+        return original.call(this, kind, data);
+      });
+    try {
+      await guest.join('AB2X');
+      for (let n = 0; n < 300; n++) { host.frame(); guest.frame(); network.advance(10); }
+      const state = host.startRace(431);
+      network.advance(host.startAtHostTime - network.now);
+      // The sim's own countdown/go events, by tick, as the reference for the guest's sounds.
+      const reference = createRace(431);
+      const expected = new Map<number, string>();
+      while (reference.tick < 180) {
+        stepRace(reference, inputs());
+        for (const event of reference.events) if (event.type === 'countdown' || event.type === 'go') {
+          expected.set(reference.tick, `${event.type}${event.value ?? ''}`);
+        }
+      }
+      const heard: { tick: number; event: string }[] = [];
+      let checked = 0;
+      let racingShown = 0;
+      for (let tick = 1; tick <= 400; tick++) {
+        guest.tick({ ...NEUTRAL_INPUT, throttle: 0.3 });
+        network.advance(TICK_MS);
+        stepRace(state, state.karts.map(kart => host.inputSource(kart.id).sample(state, kart.id)));
+        host.afterTick(state);
+        const view = guest.frame();
+        if (!view || sentTick < 0) continue;
+        for (const event of view.state.events) if (event.type === 'countdown' || event.type === 'go') {
+          heard.push({ tick: sentTick, event: `${event.type}${event.value ?? ''}` });
+        }
+        if (sentTick > 175 + lead) expect(guest.lead).toBeGreaterThanOrEqual(lead - 1);
+        if (view.state.phase === 'racing' && view.state.time === 0) racingShown++;
+        if (sentTick >= 200) continue;
+        // The HUD reads phase/countdown: it shows the input tick's count, not the snapshot's.
+        const shown = view.state.phase === 'countdown' ? Math.round(180 - view.state.countdown * 60) : 180;
+        if (view.state.phase === 'countdown' || sentTick <= 181) {
+          expect(Math.abs(shown - Math.min(sentTick, 180)), `input tick ${sentTick}`).toBeLessThanOrEqual(1);
+          checked++;
+        }
+      }
+      expect(guest.lead).toBeGreaterThanOrEqual(lead - 1);
+      expect(guest.lead).toBeLessThanOrEqual(lead + 1);
+      expect(checked).toBeGreaterThan(100);
+      // GO is shown while the snapshots are still in the countdown, for about lead + render delay ticks.
+      expect(racingShown).toBeGreaterThanOrEqual(lead);
+      // Each countdown sound once, at its input tick (heard on the frame that sent that tick).
+      expect(heard.map(({ event }) => event)).toEqual([...expected.values()]);
+      for (const [index, [tick]] of [...expected].entries()) expect(Math.abs(heard[index].tick - tick)).toBeLessThanOrEqual(1);
+    } finally {
+      spy.mockRestore();
+      host.close();
+    }
+  });
+
+  // M12-25 AC3 (review 3): real HostSession/GuestSession/codec. The guest stalls (no tick/frame), snapshots are
+  // dropped, and the guest resyncs near GO. Measured per run:
+  //  - goBoost: the guest's predicted boostTime at tick 180, read from the predictor's timer history just
+  //    before the first post-GO snapshot replaces it; it must equal the host's (the start-dash prediction);
+  //  - worst: Predictor.lastCorrectionMetres over the non-snapping reconciles from tick 150 through that
+  //    first post-GO snapshot (the GO correction);
+  //  - late: ticks up to that snapshot where the host applied a different throttle than the guest sent for
+  //    them (an input that arrived after its tick, replaced by the host's repeat/neutral rule).
+  interface StartScenario {
+    latencyMs: number; stall: [number, number] | null; drop: [number, number] | null; pressFrom: number;
+    dropInput?: [number, number];
+  }
+  async function startScenario({ latencyMs, stall, drop, pressFrom, dropInput }: StartScenario) {
+    const network = new MockTransport({ latencyMs });
+    const host = await HostSession.create(network, { roomCode: 'AB2X', now: () => network.now, hostInput: { sample: getAIInput } });
+    const guest = new GuestSession(network, { now: () => network.now, prediction: true });
+    const corrections: { tick: number; metres: number; snapped: boolean }[] = [];
+    let goBoost: number | null | undefined;
+    const reconcile = Predictor.prototype.reconcile;
+    const spy = vi.spyOn(Predictor.prototype, 'reconcile').mockImplementation(function (this: Predictor, snapshot: Snapshot) {
+      if (snapshot.state.tick >= 180 && goBoost === undefined) {
+        const history = (this as unknown as { timerHistory: Map<number, { id: number; boostTime: number }[]> }).timerHistory;
+        // null: the prediction had not reached GO (it was behind this snapshot), so it predicted no GO boost.
+        goBoost = this.tick >= 180 ? history.get(180)!.find(({ id }) => id === 1)!.boostTime : null;
+      }
+      const snapped = reconcile.call(this, snapshot);
+      corrections.push({ tick: snapshot.state.tick, metres: this.lastCorrectionMetres, snapped });
+      return snapped;
+    });
+    const sent = new Map<number, boolean>();
+    const droppedInputs: number[] = [];
+    const droppedSnapshots: number[] = [];
+    const original = (GuestSession.prototype as unknown as { send: (kind: string, data: unknown) => boolean }).send;
+    const sends = vi.spyOn(GuestSession.prototype as unknown as { send: (kind: string, data: unknown) => boolean }, 'send')
+      .mockImplementation(function (this: GuestSession, kind: string, data: unknown) {
+        const packet = kind === 'unreliable' ? unpack(data) : null;
+        packet?.frames.forEach((frame, index) => sent.set(packet.latestTick - index, frame.throttle >= 0.5));
+        return original.call(this, kind, data);
+      });
+    try {
+      await guest.join('AB2X');
+      for (let n = 0; n < 300; n++) { host.frame(); guest.frame(); network.advance(10); }
+      const state = host.startRace(431);
+      network.advance(host.startAtHostTime - network.now);
+      guest.frame();
+      const net = network as unknown as { schedule: (link: unknown, kind: unknown, data: unknown) => void };
+      const schedule = net.schedule.bind(network);
+      net.schedule = (link, kind, data) => {
+        if (drop && data instanceof ArrayBuffer && new Uint8Array(data)[0] === PacketKind.SNAPSHOT &&
+          state.tick >= drop[0] && state.tick <= drop[1]) {
+          droppedSnapshots.push(state.tick);
+          return;
+        }
+        const input = unpack(data);
+        if (dropInput && input && input.latestTick >= dropInput[0] && input.latestTick <= dropInput[1]) {
+          droppedInputs.push(input.latestTick);
+          return;
+        }
+        schedule(link, kind, data);
+      };
+      let held = 0;
+      let hostBoost = -1;
+      const applied = new Map<number, boolean>();
+      while (state.tick < 240) {
+        const stalled = !!stall && state.tick >= stall[0] && state.tick < stall[1];
+        if (!stalled) {
+          // Accelerate from input tick pressFrom: the next send goes to inputTick + 1 or, re-anchoring, about
+          // host tick + lead.
+          const inputTick = (guest as unknown as { inputTick: number | null }).inputTick;
+          const next = inputTick === null ? state.tick + guest.lead : inputTick + 1;
+          guest.tick({ ...NEUTRAL_INPUT, throttle: next >= pressFrom ? 1 : 0 });
+        }
+        network.advance(TICK_MS);
+        const inputs = state.karts.map(kart => host.inputSource(kart.id).sample(state, kart.id));
+        applied.set(state.tick + 1, inputs[1].throttle >= 0.5);
+        if (state.tick + 1 >= 120 && state.tick + 1 < 180 && inputs[1].throttle >= 0.5) held++;
+        stepRace(state, inputs);
+        if (state.tick === 180) hostBoost = state.karts[1].boostTime;
+        host.afterTick(state);
+        if (!stalled) guest.frame();
+      }
+      const firstAfterGo = corrections.find(({ tick }) => tick >= 180)?.tick ?? Infinity;
+      const go = corrections.filter(({ tick, snapped }) => tick >= 150 && tick <= firstAfterGo && !snapped);
+      const late = [...sent].filter(([tick, pressed]) => tick >= 120 && tick <= firstAfterGo && applied.get(tick) !== pressed).length;
+      return { held, hostBoost, goBoost, firstAfterGo, late, worst: Math.max(0, ...go.map(({ metres }) => metres)),
+        corrections, droppedInputs, droppedSnapshots };
+    } finally {
+      spy.mockRestore();
+      sends.mockRestore();
+      host.close();
+    }
+  }
+
+  it('keeps GO correction within 0.6m with lost input packets as well as snapshots (Codex review 4 repro)', async () => {
+    const result = await startScenario({ latencyMs: 300, stall: [60, 153], drop: [138, 174],
+      dropInput: [174, 177], pressFrom: 0 });
+    expect(result.droppedInputs).toEqual([174, 175, 176, 177]);
+    expect(result.droppedSnapshots).toEqual(Array.from({ length: 13 }, (_, i) => 138 + i * 3));
+    expect(result.held).toBe(5);
+    expect(result.hostBoost).toBe(0);
+    expect(result.goBoost).toBe(0);
+    expect(result.corrections.some(({ tick }) => tick === 177)).toBe(true);
+    expect(result.firstAfterGo).toBe(180);
+    expect(result.worst).toBeLessThanOrEqual(0.6);
+    // Match the original counterexample's entire 150..198 window, including clock re-anchors.
+    const goCorrections = result.corrections.filter(({ tick }) => tick >= 150 && tick <= 198);
+    expect(goCorrections.map(({ tick }) => tick)).toEqual(Array.from({ length: 8 }, (_, i) => 177 + i * 3));
+    expect(Math.max(...goCorrections.map(({ metres }) => metres))).toBeLessThanOrEqual(0.6);
+  });
+
+  it('predicts the host hold after a stall and dropped snapshots (Codex review 3 repro)', async () => {
+    // One-way 300 ms; the guest stalls for host ticks 60..153, snapshots 138..174 are lost, and the guest
+    // holds from its first send after the stall (input tick 175). The v19 tick 177 snapshot carried 3 held
+    // ticks as 0.06 s (3 or 4); the never-sent ticks 120..174 were neutral on the host (no input within
+    // INPUT_HOLD_TICKS), so the host totals 5: no boost. Before the fix the guest took 4 + 2 = 6 (0.5 s)
+    // and the GO reconcile (gap 37) corrected it by 2.625 m.
+    const result = await startScenario({ latencyMs: 300, stall: [60, 154], drop: [138, 174], pressFrom: 0 });
+    expect(result.held).toBe(5);
+    expect(result.hostBoost).toBe(0);
+    expect(result.goBoost).toBe(0);
+    expect(result.corrections.some(({ tick }) => tick === 177)).toBe(true);
+    expect(result.worst).toBeLessThanOrEqual(0.6);
+  });
+
+  // Deterministic sweep: stall windows x dropped-snapshot ranges x hold start x one-way latency 50-300 ms
+  // (the stall end is the re-sync tick). v20 snapshots provide the authoritative held tick count.
+  // Measured (96 runs): the predicted GO boost equals the host's in all 64 that predicted past GO (in 32
+  // the first post-GO snapshot arrived before the prediction reached GO); worst GO correction 0 m,
+  // including the 7 runs where inputs reached the host after their tick. Before the fix, 300 ms + stall
+  // 150..176 + drop 138..174 corrected 3.9 m and 6.5 m: ticks a re-anchor skipped were replayed with the
+  // held throttle, while the host repeated it for INPUT_HOLD_TICKS and then applied neutral.
+  it('predicts the host GO boost across stall, drop, hold and latency combinations', async () => {
+    const stalls: ([number, number] | null)[] = [null, [60, 154], [100, 170], [150, 176]];
+    const drops: ([number, number] | null)[] = [null, [138, 174], [120, 179], [165, 178]];
+    const holds = [120, 131, 150, 169, 175, 179];
+    const latencies = [50, 150, 300];
+    const wrongBoost: string[] = [];
+    const tooLarge: string[] = [];
+    let runs = 0;
+    let lateRuns = 0;
+    let unpredicted = 0;
+    let worst = 0;
+    for (const latencyMs of latencies) for (const stall of stalls) for (const drop of drops) for (const pressFrom of holds) {
+      // Every stall x drop x latency, with a rotating pair of hold starts each (96 runs).
+      if ((stalls.indexOf(stall) + drops.indexOf(drop) + holds.indexOf(pressFrom) + latencies.indexOf(latencyMs)) % 3 !== 0) continue;
+      const result = await startScenario({ latencyMs, stall, drop, pressFrom });
+      const label = `${latencyMs}ms stall ${stall} drop ${drop} press ${pressFrom}`;
+      runs++;
+      if (result.goBoost === null) unpredicted++;
+      else if (result.goBoost !== result.hostBoost) wrongBoost.push(`${label}: guest ${result.goBoost} host ${result.hostBoost}`);
+      if (result.late > 0) lateRuns++;
+      if (result.worst > 0.6) tooLarge.push(`${label}: ${result.worst.toFixed(3)} m`);
+      worst = Math.max(worst, result.worst);
+    }
+    expect(runs).toBe(96);
+    expect(wrongBoost).toEqual([]);
+    expect(tooLarge).toEqual([]);
+    expect(worst).toBeLessThanOrEqual(0.6);
+    // The sweep must exercise late inputs and GO predictions, not only easy runs.
+    expect(lateRuns).toBeGreaterThan(0);
+    expect(runs - unpredicted).toBeGreaterThanOrEqual(runs / 2);
+  });
+
+  // M12-25: GO sounds exactly once, normally on its input tick, and also when the guest's frames stall
+  // across GO: the host's go event is replaced, so the guest must supply it. `stall` = host ticks [from, to)
+  // without guest tick/frame: 165-195 (~0.52 s), or from the "3" shown at tick 0 until host tick 200.
+  it.each([
+    { stall: null, sounds: ['countdown2', 'countdown1', 'go'] },
+    { stall: [165, 195], sounds: ['countdown2', 'countdown1', 'go'] },
+    { stall: [0, 200], sounds: ['go'] },
+  ])('sounds GO exactly once (stalled over host ticks $stall)', async ({ stall, sounds: expected }) => {
+    const network = new MockTransport({ latencyMs: 60 });
+    const host = await HostSession.create(network, { roomCode: 'AB2X', now: () => network.now, hostInput: { sample: getAIInput } });
+    const guest = new GuestSession(network, { now: () => network.now, prediction: true });
+    try {
+      await guest.join('AB2X');
+      for (let n = 0; n < 200; n++) { host.frame(); guest.frame(); network.advance(10); }
+      const state = host.startRace(431);
+      network.advance(host.startAtHostTime - network.now);
+      const sounds: { hostTick: number; event: string }[] = [];
+      const listen = () => {
+        const view = guest.frame();
+        for (const event of view?.state.events ?? []) {
+          if (event.type === 'countdown' || event.type === 'go') sounds.push({ hostTick: state.tick, event: `${event.type}${event.value ?? ''}` });
+        }
+        return view;
+      };
+      // The grid with "3" is on screen at tick 0.
+      expect(listen()?.state.phase).toBe('countdown');
+      while (state.tick < 300) {
+        const stalled = !!stall && state.tick >= stall[0] && state.tick < stall[1];
+        if (!stalled) guest.tick({ ...NEUTRAL_INPUT, throttle: 0.3 });
+        network.advance(TICK_MS);
+        stepRace(state, state.karts.map(kart => host.inputSource(kart.id).sample(state, kart.id)));
+        host.afterTick(state);
+        if (!stalled) listen();
+      }
+      expect(sounds.map(({ event }) => event)).toEqual(expected);
+      const go = sounds.at(-1)!.hostTick;
+      // Normally GO plays lead ticks before the host's GO (hostTick is read after that tick's step); after
+      // a stall, on the first frame after it.
+      if (stall) expect(go).toBe(stall[1] + 1);
+      else expect(Math.abs(go - (180 - guest.lead))).toBeLessThanOrEqual(1);
+    } finally {
+      host.close();
+    }
+  });
+
   // M6-07: seeds x TRACK_IDS x prediction; seed 92 runs 600 ticks, the added seeds 400 (AC3: +30 s).
   // Max non-local error per seed and course (worse prediction mode) as "views <= 100 ms old (m) /
   // stale excess over |v| x (age - 100 ms) (m)"; "-" means no view was older than the cap:
@@ -950,7 +1370,9 @@ describe('HostSession integration', () => {
         if (localPrediction) expect(error, at).toBeLessThanOrEqual(0.1);
         // M5-07 (a): extrapolation advances y along the last snapshot pair's slope. Measured max on
         // M5 MEADOW 0.4179 m (host tick 438, kart 2); with seed 92 the other tracks stay under 0.28 m.
-        else if (seed === 92) expect(error, at).toBeLessThan(0.5);
+        // M12-21: kart 2 now takes an item hit at host tick 430 (35 -> 14 m/s) inside a snapshot gap; max 0.7197 m
+        // (LUNAR), re-pinned with the old 0.5 / 0.4179 margin.
+        else if (seed === 92) expect(error, at).toBeLessThan(0.86);
         // (a) A view at most MAX_EXTRAPOLATION_MS past its newest snapshot is interpolated or extrapolated.
         else if (view.age <= MAX_EXTRAPOLATION_MS) expect(error, `${at}, age ${view.age}`).toBeLessThan(1.0);
         // (b) Consecutive losses leave the view older than the cap. Extrapolation stops there on purpose

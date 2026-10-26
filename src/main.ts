@@ -109,6 +109,7 @@ const soloSources: InputSource[] = state.karts.map((kart) => kart.id === 0 ? con
 // The host swaps in HostSession.inputSource(slot); solo keeps controls + CPU.
 let inputSources = soloSources;
 let previous = captureRenderSnapshot(state);
+let rendererBuilds = 0;
 let screen: 'title' | 'lobby' | 'race' | 'results' | 'standings' = 'title';
 let paused = false;
 let accumulator = 0;
@@ -253,6 +254,8 @@ function launch(next: RaceState): void {
     recreateRenderer(localId);
   }
   if (mode !== 'solo') renderer?.setRoster(next.karts);
+  // Online rooms may switch item boxes off; solo modes always keep the item HUD (time attack hides it itself).
+  ui.setItems(mode === 'solo' || ((host ?? guest)?.settings.items ?? true));
   leaving = false;
   previous = captureRenderSnapshot(state);
   accumulator = 0;
@@ -414,7 +417,8 @@ const bind = (id: string, handler: () => void) => root.querySelector(`#${id}`)?.
 /** Recreates the local-kart-bound renderer/audio when the guest slot differs. */
 function setLocal(next: typeof mode, id: number): void {
   mode = next;
-  // Online is always a plain race; returning to solo restores the title's selected mode.
+  // Online is always a plain race (its CPU level / CPU fill / items come from the lobby settings);
+  // returning to solo restores the title's selected mode.
   // Before setMode so the retry label follows the restored play mode.
   if (next !== 'solo') {
     gp = null;
@@ -439,6 +443,7 @@ function setLocal(next: typeof mode, id: number): void {
  */
 function recreateRenderer(id: number): void {
   if (!renderer || fatal) return;
+  rendererBuilds++;
   // Kept although the WebGLRenderer is now reused (so its unpack state is three's own): resetting
   // to the defaults three assumes is harmless and guards against anything else touching the context.
   const gl = renderer.renderer.getContext();
@@ -540,6 +545,8 @@ async function createRoom(): Promise<void> {
   host = session;
   resetStallCount();
   session.setCourse(course);
+  // The title's CPU level seeds the room; the host changes it in the lobby.
+  session.setCpuLevel(cpuLevel);
   setLocal('host', 0);
   session.onChange(() => { if (host === session && screen === 'lobby') renderLobby(); });
   // Guests already connected keep playing; only new joins are impossible.
@@ -571,18 +578,27 @@ function guestChanged(session: GuestSession): void {
   wasStalled = session.stalled;
   switch (session.phase) {
     case 'lobby':
-      if (screen === 'lobby') renderLobby();
-      else {
+      if (screen === 'lobby') {
+        // The race's local kart ID follows the lobby roster/CPU fill. Rebinding here, in the lobby, keeps the
+        // renderer rebuild out of the countdown (start-dash window); with CPU fill it always equals the slot.
+        if (session.localKartId !== localId) setLocal('guest', session.localKartId);
+        renderLobby();
+      } else {
         // Set the course first so the slot change below builds the right renderer once.
         prepareCourse(session.course, false);
-        setLocal('guest', session.localSlot);
+        setLocal('guest', session.localKartId);
         enterLobby();
       }
       break;
     case 'countdown':
       if (screen === 'lobby' && !fatal) {
+        // The lobby already bound the renderer to this kart ID; rebinding now would stall the countdown.
+        if (session.localKartId !== localId) {
+          console.warn(`Renderer rebound at race start (kart ${localId} -> ${session.localKartId}); the lobby did not prepare it.`);
+          setLocal('guest', session.localKartId);
+        }
         launch(session.frame()?.state ?? state);
-        renderer?.setRoster([...session.roster.players].sort((a, b) => a.slot - b.slot));
+        renderer?.setRoster(session.raceRoster);
       }
       break;
     case 'results': {
@@ -640,6 +656,7 @@ function renderLobby(): void {
   lobby.render(session.roster, 'lobby');
   lobby.setCourse(session.course, host ? 'host' : 'guest');
   lobby.setLaps(session.laps, host ? 'host' : 'guest');
+  lobby.setSettings(session.settings, host ? 'host' : 'guest');
 }
 
 function startOnline(): void {
@@ -687,6 +704,19 @@ const lobby = new LobbyUI(root, {
   },
   onLaps: (laps) => {
     host?.setLaps(laps);
+    renderLobby();
+  },
+  // A refused change (outside the lobby) re-renders the host's actual settings.
+  onCpuLevel: (level) => {
+    host?.setCpuLevel(level);
+    renderLobby();
+  },
+  onCpuFill: (fill) => {
+    host?.setCpuFill(fill);
+    renderLobby();
+  },
+  onItems: (items) => {
+    host?.setItems(items);
     renderLobby();
   },
   onCourse: (id) => {
@@ -797,6 +827,7 @@ function frame(now: number): void {
         respawned = new Set(view.respawned);
         respawnedFor = previous;
         audio.playEvents(state.events);
+        ui.noteEvents(state.events);
         audio.update(state);
         ui.update(state);
       }
@@ -815,6 +846,7 @@ function frame(now: number): void {
       stepOnce(inputs);
       for (const event of state.events) if (event.type === 'fall') respawned.add(event.kartId);
       audio.playEvents(state.events);
+      ui.noteEvents(state.events);
       accumulator -= FIXED_DT;
     }
     if (stepped) respawnedFor = previous;
@@ -875,6 +907,8 @@ function createDebugBridge() {
       get drawCalls() { return renderer?.getDrawCalls() ?? 0; },
       get triangles() { return renderer?.renderer.info.render.triangles ?? 0; },
       get trackId() { return renderer?.getTrackId() ?? null; },
+      /** Renderer rebuilds so far (recreateRenderer calls); e2e checks none happens at race start. */
+      get builds() { return rendererBuilds; },
       get programCount() { return renderer?.programCount ?? null; },
       get ghost() { return renderer ? { visible: renderer.ghostVisible, wheelSpin: renderer.ghostWheelSpin } : null; },
     },

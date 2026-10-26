@@ -4,12 +4,13 @@ import type { RosterPlayer } from './session';
 export type { InputFrame, RaceEvent, RaceState } from '../sim/types';
 export type { RosterPlayer } from './session';
 
-export const PROTOCOL_VERSION = 19;
+export const PROTOCOL_VERSION = 20;
 export const ROOM_PREFIX = `pcircuit-v${PROTOCOL_VERSION}-`;
 // Kept local: the net core may only type-import from sim (sim/types CPU_LEVELS is the source of truth).
 const CPU_LEVELS: readonly CpuLevel[] = ['easy', 'normal', 'hard'];
 /** FNV-1a32 of JSON.stringify(SNAPSHOT_LAYOUT), including enum order and flight fields.
  * Pinned to protocol v14; snapshot codec tests compare the actual wire descriptors.
+ * v20 changes countdown boost units in the existing byte; the version handshake guards that meaning.
  */
 export const LAYOUT_FINGERPRINT = 'aa03c454';
 export const MAX_PLAYERS = 8;
@@ -19,14 +20,16 @@ export const MAX_EVENTS = 256;
 export const PacketKind = { INPUT: 0x01, SNAPSHOT: 0x02, PING: 0x03, PONG: 0x04 } as const;
 
 export interface Hello { type: 'hello'; protocol: number; course: number; name: string; color: number }
-export interface Welcome { type: 'welcome'; slot: number; roster: RosterPlayer[]; hostTime: number; trackId: TrackId; laps: number }
+export interface Welcome { type: 'welcome'; slot: number; roster: RosterPlayer[]; hostTime: number; trackId: TrackId; laps: number;
+  cpuLevel: CpuLevel; cpuFill: boolean; items: boolean }
 export type RejectReason = 'version' | 'full' | 'in_race' | 'bad_name';
 export interface Reject { type: 'reject'; reason: RejectReason }
 export interface Roster { type: 'roster'; players: RosterPlayer[] }
 export interface Profile { type: 'profile'; name: string; color: number }
-export interface Course { type: 'course'; trackId: TrackId; laps: number }
+export interface Course { type: 'course'; trackId: TrackId; laps: number; cpuLevel: CpuLevel; cpuFill: boolean; items: boolean }
 export interface RaceStart {
   type: 'race_start'; raceId: number; seed: number; roster: RosterPlayer[]; startAtHostTime: number; trackId: TrackId; laps: number;
+  cpuLevel: CpuLevel; cpuFill: boolean; items: boolean;
 }
 export interface Events { type: 'events'; raceId: number; tick: number; events: RaceEvent[] }
 export interface RaceEnd { type: 'race_end'; raceId: number; finalState: RaceState }
@@ -89,7 +92,7 @@ const itemTypes = ['dash', 'trap', 'bolt', 'seeker', 'skycomet', 'tripleDash', '
 export const PROTOCOL_TRACK_IDS: readonly TrackId[] = [
   'meadow', 'canyon', 'snowpeak', 'neon', 'harbor', 'forest', 'volcano', 'skyline',
   'dunes', 'garden', 'speedway', 'bayou', 'cavern', 'temple', 'serpentine', 'lunar',
-  'summit', 'chasm', 'velodrome', 'spire',
+  'summit', 'chasm', 'velodrome', 'spire', 'aqueduct',
 ];
 const poseFields = ['x', 'y', 'z', 'heading'];
 const kartNumbers = [...poseFields, 'speed', 'steer', 'trackDistance', 'lateralOffset',
@@ -149,7 +152,9 @@ export function isHello(value: unknown): value is Hello {
     integer(value.protocol, 1, 0xffff) && integer(value.course) && isPlayerName(value.name) && color(value.color);
 }
 export function isWelcome(value: unknown): value is Welcome {
-  return record(value) && keys(value, ['type', 'slot', 'roster', 'hostTime', 'trackId', 'laps']) && value.type === 'welcome' && integer(value.laps, 1, 3) &&
+  return record(value) && keys(value, ['type', 'slot', 'roster', 'hostTime', 'trackId', 'laps', 'cpuLevel', 'cpuFill', 'items']) &&
+    oneOf(value.cpuLevel, CPU_LEVELS) && typeof value.cpuFill === 'boolean' && typeof value.items === 'boolean' &&
+    value.type === 'welcome' && integer(value.laps, 1, 3) &&
     slot(value.slot) && oneOf(value.trackId, PROTOCOL_TRACK_IDS) && isRosterPlayers(value.roster) &&
     value.roster.some(player => player.slot === value.slot) && positiveTime(value.hostTime);
 }
@@ -165,12 +170,15 @@ export function isProfile(value: unknown): value is Profile {
     isPlayerName(value.name) && color(value.color);
 }
 export function isRaceStart(value: unknown): value is RaceStart {
-  return record(value) && keys(value, ['type', 'raceId', 'seed', 'roster', 'startAtHostTime', 'trackId', 'laps']) && integer(value.laps, 1, 3) &&
+  return record(value) && keys(value, ['type', 'raceId', 'seed', 'roster', 'startAtHostTime', 'trackId', 'laps', 'cpuLevel', 'cpuFill', 'items']) &&
+    oneOf(value.cpuLevel, CPU_LEVELS) && typeof value.cpuFill === 'boolean' && typeof value.items === 'boolean' && integer(value.laps, 1, 3) &&
     value.type === 'race_start' && integer(value.raceId, 0, 255) && integer(value.seed) && oneOf(value.trackId, PROTOCOL_TRACK_IDS) &&
     isRosterPlayers(value.roster) && positiveTime(value.startAtHostTime);
 }
 export function isCourse(value: unknown): value is Course {
-  return record(value) && keys(value, ['type', 'trackId', 'laps']) && value.type === 'course' && integer(value.laps, 1, 3) &&
+  return record(value) && keys(value, ['type', 'trackId', 'laps', 'cpuLevel', 'cpuFill', 'items']) &&
+    oneOf(value.cpuLevel, CPU_LEVELS) && typeof value.cpuFill === 'boolean' && typeof value.items === 'boolean' &&
+    value.type === 'course' && integer(value.laps, 1, 3) &&
     oneOf(value.trackId, PROTOCOL_TRACK_IDS);
 }
 export function isEvents(value: unknown): value is Events {

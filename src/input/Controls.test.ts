@@ -125,6 +125,58 @@ describe('Controls steering direction (input -> sample -> sim)', () => {
   });
 });
 
+// M12-25: the start dash counts throttle held in ticks 120..179, so a held accelerate must reach the sim
+// during the countdown on every input path. Steer, drift and item stay neutral until GO.
+describe('countdown start dash input', () => {
+  const held = { ...neutral, throttle: 1 };
+  function holdKeyboard(): void {
+    for (const code of ['ArrowUp', 'ArrowLeft', 'Space', 'KeyE']) fire(win, 'keydown', { code });
+  }
+  function holdTouch(): void {
+    const props = { pointerId: 1, pointerType: 'touch', button: 0, clientX: 10, clientY: 100 };
+    fire(root.children.get('#accelerate')!, 'pointerdown', { ...props, pointerId: 2 });
+    fire(root.children.get('#drift')!, 'pointerdown', { ...props, pointerId: 3 });
+    fire(root.children.get('#use-item')!, 'pointerdown', { ...props, pointerId: 4 });
+    fire(root.children.get('#steering-pad')!, 'pointerdown', props);
+    fire(root.children.get('#steering-pad')!, 'pointermove', props);
+  }
+  function holdGamepad(): void {
+    const buttons = Array.from({ length: 17 }, () => ({ pressed: false, value: 0 }));
+    for (const index of [7, 2, 5, 14]) buttons[index] = { pressed: true, value: 1 };
+    gamepads = [{ connected: true, axes: [-1, 0], buttons }];
+  }
+
+  it.each([['keyboard', holdKeyboard], ['touch', holdTouch], ['gamepad', holdGamepad]] as const)
+  ('passes only a held %s accelerate before GO and earns the 1.0 s rocket start', (_, hold) => {
+    controls.setAutoAccelerate(false);
+    const state = createRace(1);
+    const me = state.karts.find((kart) => kart.human)!;
+    const step = () => stepRace(state, state.karts.map((kart) => kart.id === me.id ? controls.sample(state, me.id) : { ...neutral }));
+    expect(controls.sample(state, me.id)).toEqual(neutral);
+    while (state.tick < 155) step();
+    hold();
+    expect(controls.sample(state, me.id)).toEqual(held);
+    const start = { x: me.x, z: me.z, heading: me.heading };
+    while (state.phase === 'countdown') step();
+    expect(state.tick).toBe(180);
+    expect(me.boostTime).toBe(1.0);
+    expect({ x: me.x, z: me.z, heading: me.heading }).toEqual(start);
+    expect(state.events).toContainEqual({ type: 'boost', kartId: me.id, value: 2 });
+    // After GO the same hold steers and drifts as usual.
+    const racing = controls.sample(state, me.id);
+    expect(racing.throttle).toBe(1);
+    expect(racing.steer).not.toBe(0);
+  });
+
+  it('stays neutral before GO when the controls are disabled', () => {
+    const state = createRace(1);
+    const me = state.karts.find((kart) => kart.human)!;
+    controls.setEnabled(false);
+    fire(win, 'keydown', { code: 'ArrowUp' });
+    expect(controls.sample(state, me.id)).toEqual(neutral);
+  });
+});
+
 describe('touch steering sensitivity curve', () => {
   const levels = [1, 2, 3, 4, 5];
 

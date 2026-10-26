@@ -11,6 +11,8 @@ import type { InputFrame, KartState, RaceState } from './types';
 import { formatResultTime } from '../ui/GameUI';
 import { getTrack, TRACK_IDS } from './tracks';
 import { widthAt } from './corridor';
+import { aiStartHeldTicks } from './ai';
+import { startDashBoost } from './race';
 
 const track = getTrack('meadow');
 
@@ -745,12 +747,13 @@ describe('CPU race integration', () => {
         kart.lapTimes.length === 3 && kart.finishTime !== null)).toBe(true);
     }, 120_000);
 
-  it('resolves eight-CPU races across ten seeds, using all fourteen items from boxes', () => {
+  it('resolves eight-CPU races across eleven seeds, using all fourteen items from boxes', () => {
     const uses = new Set<string>();
     const orbitKinds = new Set<number>();
     // M4-01 slope physics: seeds 1 and 2 supply autopilot and seed 25 the only rapidDash
     // (seed 19 no longer adds an item); seed 8 still covers both barrier kinds.
-    for (const seed of [1, 2, 3, 4, 5, 6, 7, 8, 9, 25]) {
+    // M12-21: start dashes shift item draws; seeds 1-9 and 25 no longer use autopilot, seed 10 does.
+    for (const seed of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 25]) {
       const racers = createRace(seed).karts.map(({ name, color }) => ({ name, color, human: false }));
       const state = createRace(seed, { racers });
       let restored: RaceState = JSON.parse(JSON.stringify(state));
@@ -1083,37 +1086,126 @@ describe('sim fingerprint', () => {
   it('keeps the legacy roster equal to the first sixteen registered courses', () => {
     expect([...LEGACY_TRACK_IDS]).toEqual(TRACK_IDS.slice(0, 16));
   });
-  type LegacyTrackId = (typeof LEGACY_TRACK_IDS)[number];
-  // Measured on darwin-arm64 before M11 registration or sim changes (2026-10-19).
+  // M12-32: add AQUEDUCT without replacing any of the existing twenty digests.
+  const PINNED_TRACK_IDS = [...LEGACY_TRACK_IDS, 'summit', 'chasm', 'velodrome', 'spire', 'aqueduct'] as const;
+  it('pins all twenty-one registered courses', () => {
+    expect([...PINNED_TRACK_IDS]).toEqual(TRACK_IDS);
+  });
+  type LegacyTrackId = (typeof PINNED_TRACK_IDS)[number];
+  // M12-21 (C1 start dash): re-measured on darwin-arm64 with KART_MEASURE=1 src/sim/measure.test.ts
+  // (.omc/research/m12-sim-before.json holds the pre-M12 values). Every course changes: CPUs now
+  // take a start-dash tier from hash(seed, kartId) and boost at GO.
+  // M12-22 (C2) re-measured the same way: neon, skyline, dunes, garden, speedway, temple, chasm, spire change (TrackDef.cpuPace on seven
+  // courses, dunes sand pads); the other courses are bit-identical to M12-21.
+  // M12-23 (C3 item WEIGHTS + effect durations) re-measured the same way: meadow, canyon, snowpeak, neon, forest, volcano, skyline, dunes, garden, speedway, bayou, cavern, temple, serpentine, lunar, chasm, velodrome, spire change (item draws
+  // and so trajectories differ); the others are bit-identical to M12-22.
   const DARWIN_FINGERPRINTS: Record<LegacyTrackId, number> = {
-    meadow: 1966540717, canyon: 3341480753, snowpeak: 3467777940, neon: 1211865273,
-    harbor: 574551284, forest: 3540472050, volcano: 1670979859, skyline: 2169329929,
-    dunes: 3978778904, garden: 2518970942, speedway: 423780863, bayou: 4231114521,
-    cavern: 3010529552, temple: 11197763, serpentine: 3716402600, lunar: 3214773241,
+    meadow: 3798630211, canyon: 1929341024, snowpeak: 3580747361, neon: 3312172821,
+    harbor: 2797421994, forest: 4148545529, volcano: 2379932897, skyline: 85133815,
+    dunes: 2673660054, garden: 2971958928, speedway: 270844923, bayou: 1810499046,
+    cavern: 4139808966, temple: 563750109, serpentine: 2005625640, lunar: 1577980575,
+    summit: 3381224184, chasm: 500866582, velodrome: 1921419394, spire: 1670742459,
+    aqueduct: 190753284,
   };
   const FINGERPRINTS: Record<string, Partial<Record<LegacyTrackId, number>>> = {
     'darwin-arm64': DARWIN_FINGERPRINTS,
-    // meadow/neon predate M11; the other fourteen were measured by the M11 deploy run 39363189693 (ubuntu-latest).
-    'linux-x64': {
-      meadow: 1670404181, canyon: 1297074450, snowpeak: 1950370678, neon: 1324528798,
-      harbor: 4255376981, forest: 2979876036, volcano: 1670979859, skyline: 1932104455,
-      dunes: 3119583155, garden: 3053316717, speedway: 1049644157, bayou: 367943984,
-      cavern: 3457247850, temple: 11197763, serpentine: 3716402600, lunar: 1221136564,
-    },
+    // M12-24 decision (2026-10-24): keep linux {} / pending-ci logging, as in M11.
+    // After the publication commit/push, one goldens-linux workflow_dispatch will measure and
+    // pin digests and surfaces/BASELINE for all 21 courses, including aqueduct. No CI pin here.
+    'linux-x64': {},
   };
   const platform = `${process.platform}-${process.arch}`;
 
-  it('pins every pre-M11 course on darwin-arm64', () => {
-    expect(Object.keys(DARWIN_FINGERPRINTS)).toEqual(LEGACY_TRACK_IDS);
+  it('pins every registered course on darwin-arm64', () => {
+    expect(Object.keys(DARWIN_FINGERPRINTS)).toEqual(PINNED_TRACK_IDS);
     for (const digest of Object.values(DARWIN_FINGERPRINTS)) expect(Number.isInteger(digest)).toBe(true);
   });
 
-  it.each(LEGACY_TRACK_IDS)('%s seed 7 stays bit-exact for 1800 ticks', (trackId) => {
+  it.each(PINNED_TRACK_IDS)('%s seed 7 stays bit-exact for 1800 ticks', (trackId) => {
     const state = createRace(7, { trackId, racers: [] });
     for (let i = 0; i < 1800; i++) stepRace(state, state.karts.map((kart) => getAIInput(state, kart.id)));
     const digest = fnv1a(state.karts.map((k) => [k.x, k.z, k.speed, k.trackDistance, k.heading]));
     const pinned = FINGERPRINTS[platform]?.[trackId];
     if (pinned === undefined) console.info(`sim fingerprint (${platform}) ${trackId}: ${digest}`);
     else expect(digest).toBe(pinned);
+  });
+});
+
+describe('C1 start dash', () => {
+  const press = (on: boolean): InputFrame => ({ steer: 0, throttle: on ? 1 : 0, brake: false, drift: false, useItem: false });
+  /** Holds throttle for the last `held` countdown ticks (179 - held + 1 .. 179) and through GO. */
+  function runCountdown(held: number, karts = 1) {
+    const state = createRace(3, { karts, itemBoxes: false });
+    const start = state.karts.map(kart => ({ x: kart.x, y: kart.y, z: kart.z }));
+    const countdownEvents: RaceState['events'] = [];
+    while (state.tick < 179) {
+      stepRace(state, state.karts.map(() => press(state.tick + 1 >= 180 - held)));
+      expect(state.phase).toBe('countdown');
+      countdownEvents.push(...state.events);
+      state.karts.forEach((kart, i) => expect({ x: kart.x, y: kart.y, z: kart.z }).toEqual(start[i]));
+    }
+    stepRace(state, state.karts.map(() => press(true)));
+    expect(state.tick).toBe(180);
+    expect(state.phase).toBe('racing');
+    return { state, countdownEvents, goEvents: state.events };
+  }
+
+  it.each([
+    [0, 0], [5, 0], [6, 0.5], [11, 0.5], [12, 1.0], [24, 1.0], [36, 1.0], [37, 0.5], [48, 0.5], [49, 0], [60, 0],
+  ])('held %i ticks before GO -> %f s boost, karts frozen and no boost event during countdown', (held, boost) => {
+    expect(startDashBoost(held)).toBe(boost);
+    const { state, countdownEvents, goEvents } = runCountdown(held);
+    expect(state.karts[0]!.boostTime).toBe(boost);
+    expect(countdownEvents.filter(event => event.type === 'boost')).toHaveLength(0);
+    expect(goEvents[0]).toEqual({ type: 'go', kartId: 0 });
+    expect(goEvents.filter(event => event.type === 'boost')).toEqual(boost > 0 ? [{ type: 'boost', kartId: 0, value: 2 }] : []);
+  });
+
+  it('counts only ticks 120..179: holding from the first countdown tick is a too-early start', () => {
+    const state = createRace(3, { karts: 1, itemBoxes: false });
+    for (let i = 0; i < 119; i++) stepRace(state, [press(true)]);
+    expect(state.karts[0]!.boostTime).toBe(0);
+    while (state.tick < 180) stepRace(state, [press(true)]);
+    expect(state.karts[0]!.boostTime).toBe(0);
+  });
+
+  it('a 1.0 s start dash leads a no-dash start by at least 6 m two seconds after GO', () => {
+    const distanceAfterGo = (held: number) => {
+      const { state } = runCountdown(held);
+      for (let i = 0; i < 120; i++) stepRace(state, [{ ...getAIInput(state, 0), throttle: 1, brake: false, useItem: false }]);
+      expect(state.time).toBeCloseTo(2, 10);
+      return state.karts[0]!.trackDistance;
+    };
+    const big = distanceAfterGo(24);
+    const none = distanceAfterGo(0);
+    expect(big - none).toBeGreaterThanOrEqual(6);
+  });
+
+  it('CPU tiers come from hash(seed, kartId) without consuming the shared PRNG', () => {
+    const state = createRace(42, { racers: [] });
+    const seed = state.seed;
+    const first = state.karts.map(kart => aiStartHeldTicks(state, kart.id));
+    for (let i = 0; i < 180; i++) {
+      stepRace(state, state.karts.map(kart => getAIInput(state, kart.id)));
+      expect(state.seed).toBe(seed);
+    }
+    expect(state.karts.map(kart => aiStartHeldTicks(state, kart.id))).toEqual(first);
+    expect(state.karts.map(kart => kart.boostTime)).toEqual(first.map(held => startDashBoost(held)));
+  });
+
+  // 20 courses x 3 seeds per level, eight CPUs each: the share of big / small / no dash at GO.
+  it.each([
+    ['easy', [25, 45, 30]], ['normal', [50, 40, 10]], ['hard', [75, 25, 0]],
+  ] as const)('%s CPUs take big / small / none start dashes at %j %% within 8 points', (cpuLevel, expected) => {
+    const counts = [0, 0, 0];
+    TRACK_IDS.forEach((trackId, course) => {
+      for (const base of [1, 42, 98765]) {
+        const state = createRace(base + course * 7919, { trackId, racers: [], cpuLevel, itemBoxes: false });
+        while (state.phase === 'countdown') stepRace(state, state.karts.map(kart => getAIInput(state, kart.id)));
+        for (const kart of state.karts) counts[kart.boostTime === 1 ? 0 : kart.boostTime === 0.5 ? 1 : 2]!++;
+      }
+    });
+    const total = TRACK_IDS.length * 3 * 8;
+    counts.forEach((count, tier) => expect(Math.abs(count / total * 100 - expected[tier]!), `tier ${tier}: ${count}/${total}`).toBeLessThanOrEqual(8));
   });
 });

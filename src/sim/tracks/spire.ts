@@ -38,6 +38,8 @@ export const spire: TrackDef = {
   roadHalfWidth: BASE_ROAD_HALF_WIDTH, wallHalfWidth: BASE_WALL_HALF_WIDTH,
   // Keep all six crossing approaches over 25 m from the regular checkpoint grid.
   checkpointCount: 24, checkpointPhase: -0.12,
+  // M12-22 (C2): CPU pace keeps easy CPU meanLap / human-model lap at most 1.14 (was above it at 1).
+  cpuPace: 1.02,
   // Spread pickups along straights so packs can separate before the switchbacks.
   boxRows: [0.15, 0.30, 0.52, 0.61, 0.68, 0.77, 0.85, 0.935],
   boxLanes: [-5.33, 0, 5.33],

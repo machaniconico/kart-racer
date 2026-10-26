@@ -47,6 +47,7 @@ export interface KartState extends Pose {
   finishTime: number | null;
   driftTime: number;
   driftDirection: number;
+  /** Racing: boost seconds left. Countdown: seconds of throttle held in the start-dash window (race.ts). */
   boostTime: number;
   spinTime: number;
   hopTime: number;
@@ -105,7 +106,7 @@ export interface TrackProjection {
 
 export type TrackId = 'meadow' | 'canyon' | 'snowpeak' | 'neon' | 'harbor' | 'forest' | 'volcano' | 'skyline'
   | 'dunes' | 'garden' | 'speedway' | 'bayou' | 'cavern' | 'temple' | 'serpentine' | 'lunar'
-  | 'summit' | 'chasm' | 'velodrome' | 'spire';
+  | 'summit' | 'chasm' | 'velodrome' | 'spire' | 'aqueduct';
 
 export interface WidthKey {
   readonly distance: number;
@@ -186,6 +187,8 @@ export interface TrackDef {
   readonly decks?: readonly { readonly from: number; readonly to: number }[];
   /** Fraction of checkpoint spacing, applied to gates 1..n-1; gate 0 stays at zero. */
   readonly checkpointPhase?: number;
+  /** CPU-only max-speed factor for this course (race.ts clamps it to [0.95, 1.06]); absent means 1. */
+  readonly cpuPace?: number;
 }
 
 export interface Track {

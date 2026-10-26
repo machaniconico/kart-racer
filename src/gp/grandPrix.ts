@@ -15,7 +15,7 @@ export const CUPS: readonly Cup[] = [
   { id: 'horizon', name: 'HORIZON CUP', tracks: ['harbor', 'forest', 'volcano', 'skyline'] },
   { id: 'zenith', name: 'ZENITH CUP', tracks: ['dunes', 'garden', 'speedway', 'bayou'] },
   { id: 'eclipse', name: 'ECLIPSE CUP', tracks: ['cavern', 'temple', 'serpentine', 'lunar'] },
-  { id: 'extreme', name: 'EXTREME CUP', tracks: ['summit', 'chasm', 'velodrome', 'spire'] },
+  { id: 'extreme', name: 'EXTREME CUP', tracks: ['summit', 'chasm', 'velodrome', 'spire', 'aqueduct'] },
 ];
 
 export const GP_POINTS = [10, 8, 6, 5, 4, 3, 2, 1] as const;
@@ -70,7 +70,7 @@ export function nextTrack(gp: GrandPrix): TrackId | null {
 }
 
 export function recordRace(gp: GrandPrix, finalState: RaceState): GrandPrix {
-  if (gp.results.length >= 4) throw new RangeError('A Grand Prix contains four races');
+  if (gp.results.length >= getCup(gp.cupId).tracks.length) throw new RangeError('All races in this cup are complete');
   const expectedTrack = nextTrack(gp);
   if (finalState.trackId !== expectedTrack) {
     throw new RangeError(`Expected a ${expectedTrack} race but received ${finalState.trackId}`);
@@ -109,5 +109,5 @@ export function standings(gp: GrandPrix): StandingRow[] {
 }
 
 export function isComplete(gp: GrandPrix): boolean {
-  return gp.results.length === 4;
+  return gp.results.length === getCup(gp.cupId).tracks.length;
 }

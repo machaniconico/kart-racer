@@ -17,6 +17,87 @@ async function startSolo(page: Page) {
   await page.waitForFunction(() => window.__kartDebug.state.phase === 'racing' && window.__kartDebug.state.time > 1);
 }
 
+test('M12-24: holding throttle 0.4 s before GO shows ROCKET START and leads by at least 6 m after 2 s', async ({ page }, testInfo) => {
+  await page.goto('./');
+  await page.waitForFunction(() => !!window.__kartDebug);
+  await page.locator('#start-race').click();
+  await expect(page.locator('#race-screen')).toBeVisible();
+  await page.locator('#game-canvas').focus();
+
+  const log = await page.evaluate(async () => {
+    const debug = window.__kartDebug;
+    const { createRace, getTrack, FIXED_DT } = debug.modules;
+    const key = (type: 'keydown' | 'keyup') => window.dispatchEvent(
+      new KeyboardEvent(type, { code: 'ArrowUp', key: 'ArrowUp', cancelable: true }));
+    const reset = () => {
+      key('keyup');
+      Object.assign(debug.state, createRace(3, { trackId: 'meadow', karts: 1, itemBoxes: false }));
+      debug.advance(0);
+      return debug.state.karts[0];
+    };
+    const status = document.getElementById('race-status')!;
+    const visible = () => !status.hidden && getComputedStyle(status).visibility === 'visible'
+      && status.getBoundingClientRect().width > 0;
+    const trackLength = getTrack('meadow').length;
+    const travelled = (from: number) => (debug.state.karts[0].trackDistance - from + trackLength) % trackLength;
+
+    try {
+      // Both runs use the same human kart and Controls input, without CPUs, items or autopilot.
+      const plain = reset();
+      const plainStart = plain.trackDistance;
+      debug.advance(180);
+      const plainBoost = plain.boostTime;
+      key('keydown');
+      debug.advance(120);
+      const baseline = { boost: plainBoost, time: debug.state.time, distance: travelled(plainStart) };
+
+      const rocket = reset();
+      const rocketStart = rocket.trackDistance;
+      // The next input is sampled on tick 156: exactly 24 held ticks (156..179) before GO.
+      debug.advance(155);
+      const firstHeldTick = debug.state.tick + 1;
+      key('keydown');
+      debug.advance(24);
+      const countdown = { tick: debug.state.tick, heldSeconds: rocket.boostTime, statusVisible: visible() };
+
+      // Let the real frame loop cross GO and deliver its boost event to GameUI.noteEvents.
+      // debug.advance alone deliberately does not deliver those events to the HUD.
+      const go = await new Promise<{ tick: number; boost: number; text: string | null; visible: boolean }>(resolve => {
+        const poll = () => {
+          if (debug.state.phase === 'countdown') { requestAnimationFrame(poll); return; }
+          resolve({ tick: debug.state.tick, boost: rocket.boostTime + (debug.state.tick - 180) * FIXED_DT,
+            text: status.textContent, visible: visible() });
+        };
+        requestAnimationFrame(poll);
+      });
+      // Finish at tick 300 even if the GO frame stepped several ticks on a slow machine.
+      debug.advance(300 - debug.state.tick);
+      return { firstHeldTick, human: rocket.human, countdown, go, baseline,
+        boosted: { tick: debug.state.tick, time: debug.state.time, distance: travelled(rocketStart) },
+        lead: travelled(rocketStart) - baseline.distance };
+    } finally {
+      key('keyup');
+    }
+  });
+
+  await testInfo.attach('rocket-start', { body: JSON.stringify(log), contentType: 'application/json' });
+  expect(log.human).toBe(true);
+  expect(log.firstHeldTick).toBe(156);
+  expect(log.countdown.tick).toBe(179);
+  expect(log.countdown.heldSeconds).toBeCloseTo(0.4, 10);
+  expect(log.countdown.statusVisible).toBe(false);
+  expect(log.baseline.boost).toBe(0);
+  expect(log.go.tick).toBeGreaterThanOrEqual(180);
+  expect(log.go.tick).toBeLessThan(240);
+  expect(log.go.boost).toBeCloseTo(1, 10);
+  expect(log.go.text).toBe('ROCKET START!');
+  expect(log.go.visible).toBe(true);
+  expect(log.baseline.time).toBeCloseTo(2, 10);
+  expect(log.boosted.tick).toBe(300);
+  expect(log.boosted.time).toBeCloseTo(2, 10);
+  expect(log.lead).toBeGreaterThanOrEqual(6);
+});
+
 test.describe('touch device', () => {
   test.use({ hasTouch: true, isMobile: true, viewport: { width: 844, height: 390 } });
 

@@ -2,14 +2,15 @@ import { getAIInput } from '../sim/ai';
 import { DEFAULT_LAPS, isLapCount } from '../sim/laps';
 import { createRace } from '../sim/race';
 import { COURSE_FINGERPRINT, TRACK_IDS } from '../sim/tracks';
-import type { InputFrame, InputSource, RaceEvent, RaceState, TrackId } from '../sim/types';
+import type { CpuLevel, InputFrame, InputSource, RaceEvent, RaceState, TrackId } from '../sim/types';
 import { CLOCK_WINDOW_MS, ClockSync, packPing, packPong, unpackClock } from './clock';
 import { InputBuffer, NEUTRAL_INPUT, unpack } from './inputBuffer';
-import { encodeControlMessage, isHello, isProfile, MAX_EVENTS, MAX_PLAYERS, PacketKind,
+import { encodeControlMessage, isCourse, isHello, isProfile, MAX_EVENTS, MAX_PLAYERS, PacketKind,
   parseControlMessage, PROTOCOL_VERSION } from './protocol';
 import type { ControlMessage, Hello, Profile, RejectReason } from './protocol';
 import { normalize } from './roomCode';
-import type { NetPhase, RosterPlayer, RosterView } from './session';
+import { DEFAULT_RACE_SETTINGS, raceKartSlots } from './session';
+import type { NetPhase, RaceSettings, RosterPlayer, RosterView } from './session';
 import { encodeSnapshot } from './snapshotCodec';
 import type { ChannelKind, PeerLink, Transport, TransportError, TransportHost, WireData } from './transport';
 
@@ -54,7 +55,10 @@ export class HostSession {
   private currentPhase: NetPhase = 'lobby';
   private selectedTrackId: TrackId = 'meadow';
   private selectedLaps = DEFAULT_LAPS;
+  private selectedSettings: RaceSettings = { ...DEFAULT_RACE_SETTINGS };
   private currentRaceId = 0;
+  /** Roster slot per kart ID for the current race (identity until a race without CPU fill). */
+  private kartSlots = Array.from({ length: MAX_PLAYERS }, (_, slot) => slot);
   private currentState: RaceState | null = null;
   private completedTick = 0;
   private startAt = 0;
@@ -74,15 +78,17 @@ export class HostSession {
     if (!isProfile(profile) || !this.assignProfile(0, profile)) throw new TypeError('Invalid host profile');
     this.sources = this.players.map((_, slot) => ({
       sample: (state: RaceState): InputFrame => {
-        if (state !== this.currentState || !this.inRace) return { ...NEUTRAL_INPUT };
+        const kartId = this.kartSlots.indexOf(slot);
+        if (state !== this.currentState || !this.inRace || kartId < 0) return { ...NEUTRAL_INPUT };
         const tick = state.tick + 1;
         this.sampledTicks[slot] = Math.max(this.sampledTicks[slot], tick);
-        const kart = state.karts.find(candidate => candidate.id === slot);
+        const kart = state.karts.find(candidate => candidate.id === kartId);
         if (kart) kart.human = this.players[slot].kind !== 'cpu';
-        const input = this.players[slot].kind === 'cpu' ? getAIInput(state, slot)
-          : slot === 0 ? options.hostInput?.sample(state, slot) ?? { ...NEUTRAL_INPUT }
+        const input = this.players[slot].kind === 'cpu' ? getAIInput(state, kartId)
+          : slot === 0 ? options.hostInput?.sample(state, kartId) ?? { ...NEUTRAL_INPUT }
           : this.buffers[slot].get(tick);
-        this.lastInputs[slot] = { ...input };
+        // Snapshots carry the applied inputs by kart ID.
+        this.lastInputs[kartId] = { ...input };
         return { ...input };
       },
     }));
@@ -98,6 +104,7 @@ export class HostSession {
   get phase(): NetPhase { return this.currentPhase; }
   get course(): TrackId { return this.selectedTrackId; }
   get laps(): number { return this.selectedLaps; }
+  get settings(): RaceSettings { return { ...this.selectedSettings }; }
   get raceId(): number { return this.currentRaceId; }
   get state(): RaceState | null { return this.currentState; }
   get startAtHostTime(): number { return this.startAt; }
@@ -124,9 +131,10 @@ export class HostSession {
   private get inRace(): boolean { return this.currentPhase === 'countdown' || this.currentPhase === 'racing'; }
   private copyPlayers(): RosterPlayer[] { return this.players.map(player => ({ ...player })); }
 
-  inputSource(slot: number): InputSource {
-    if (!Number.isInteger(slot) || slot < 0 || slot >= MAX_PLAYERS) throw new RangeError('Invalid slot');
-    return this.sources[slot];
+  /** The input source of kart `kartId` in the current race (the kart ID equals the slot with CPU fill). */
+  inputSource(kartId: number): InputSource {
+    if (!Number.isInteger(kartId) || kartId < 0 || kartId >= MAX_PLAYERS) throw new RangeError('Invalid slot');
+    return this.sources[this.kartSlots[kartId] ?? kartId];
   }
 
   /** Returns the state the caller should advance, starting at startAtHostTime. */
@@ -149,12 +157,14 @@ export class HostSession {
     this.sampledTicks.fill(0);
     this.buffers.forEach(buffer => buffer.reset(this.currentRaceId));
     this.lastInputs.forEach((_, slot) => { this.lastInputs[slot] = { ...NEUTRAL_INPUT }; });
-    this.currentState = createRace(seed, { trackId: this.selectedTrackId, laps: this.selectedLaps, racers: this.players.map(player => ({
-      name: player.name, color: player.color, human: player.kind !== 'cpu',
-    })) });
+    const { cpuLevel, cpuFill, items } = this.selectedSettings;
+    this.kartSlots = raceKartSlots(this.players, cpuFill);
+    this.currentState = createRace(seed, { trackId: this.selectedTrackId, laps: this.selectedLaps, cpuLevel,
+      karts: this.kartSlots.length, itemBoxes: items, racers: this.kartSlots.map(slot => this.players[slot]).map(player => ({
+        name: player.name, color: player.color, human: player.kind !== 'cpu' })) });
     this.currentPhase = 'countdown';
-    this.broadcast({ type: 'race_start', raceId: this.currentRaceId, seed, trackId: this.selectedTrackId, laps: this.selectedLaps,
-      roster: this.copyPlayers(), startAtHostTime: this.startAt });
+    this.broadcast({ type: 'race_start', ...this.selectedSettings, raceId: this.currentRaceId, seed, trackId: this.selectedTrackId,
+      laps: this.selectedLaps, roster: this.copyPlayers(), startAtHostTime: this.startAt });
     this.notify();
     return this.currentState;
   }
@@ -179,17 +189,33 @@ export class HostSession {
   setCourse(id: TrackId): boolean {
     if (this.currentPhase !== 'lobby' || !TRACK_IDS.includes(id)) return false;
     this.selectedTrackId = id;
-    this.broadcast({ type: 'course', trackId: id, laps: this.selectedLaps });
-    this.notify();
+    this.broadcastCourse();
     return true;
   }
 
   setLaps(n: number): boolean {
     if (this.currentPhase !== 'lobby' || !isLapCount(n)) return false;
     this.selectedLaps = n;
-    this.broadcast({ type: 'course', trackId: this.selectedTrackId, laps: n });
-    this.notify();
+    this.broadcastCourse();
     return true;
+  }
+
+  setCpuLevel(level: CpuLevel): boolean { return this.setSettings({ ...this.selectedSettings, cpuLevel: level }); }
+  setCpuFill(fill: boolean): boolean { return this.setSettings({ ...this.selectedSettings, cpuFill: fill }); }
+  setItems(items: boolean): boolean { return this.setSettings({ ...this.selectedSettings, items }); }
+
+  /** Like setCourse/setLaps: lobby only, so a sent race_start's settings hold until the race ends. */
+  private setSettings(next: RaceSettings): boolean {
+    if (this.currentPhase !== 'lobby' ||
+      !isCourse({ type: 'course', ...next, trackId: this.selectedTrackId, laps: this.selectedLaps })) return false;
+    this.selectedSettings = next;
+    this.broadcastCourse();
+    return true;
+  }
+
+  private broadcastCourse(): void {
+    this.broadcast({ type: 'course', ...this.selectedSettings, trackId: this.selectedTrackId, laps: this.selectedLaps });
+    this.notify();
   }
 
   /** Host-originated probes measure RTT without trusting a guest-supplied duration.
@@ -298,7 +324,7 @@ export class HostSession {
     // An occupied/unknown requested color falls back to this slot's free color.
     this.assignProfile(player.slot, { ...message, type: 'profile',
       color: this.colorAvailable(player.slot, message.color) ? message.color : player.color });
-    this.send(guest, 'reliable', encodeControlMessage({ type: 'welcome', slot: player.slot,
+    this.send(guest, 'reliable', encodeControlMessage({ type: 'welcome', ...this.selectedSettings, slot: player.slot,
       roster: this.copyPlayers(), hostTime: this.now(), trackId: this.selectedTrackId, laps: this.selectedLaps }));
     this.broadcastRoster();
     this.frame();
@@ -346,7 +372,8 @@ export class HostSession {
     player.kind = 'cpu';
     player.connected = false;
     this.buffers[guest.slot].reset(this.currentRaceId);
-    const kart = this.currentState?.karts.find(candidate => candidate.id === guest.slot);
+    const kartId = this.kartSlots.indexOf(guest.slot);
+    const kart = this.currentState?.karts.find(candidate => candidate.id === kartId);
     if (kart) kart.human = false;
     if (this.currentPhase !== 'closed') this.broadcastRoster();
   }

@@ -9,7 +9,7 @@ permissions:
 jobs:
   goldens:
     runs-on: ubuntu-latest
-    timeout-minutes: 90  # M11: 17 tests x 2 passes; M10: 13 tests x 2 passes; M9 ran 5 x 2 in ~20 min on SwiftShader
+    timeout-minutes: 90  # M12: 18 tests x 2 passes; M11: 17 tests x 2 passes; M10: 13 tests x 2 passes; M9 ran 5 x 2 in ~20 min on SwiftShader
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -19,9 +19,9 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - name: A. Capture linux goldens
-        run: KART_GOLDENS=write npx playwright test e2e/courses.spec.ts e2e/courses-m10.spec.ts e2e/courses-m11.spec.ts -g 'TIDEWATER|MOSSWOOD|EMBER|STRATOS|SIROCCO DUNES|BLOSSOM GARDEN|THUNDER OVAL|MOONLIT BAYOU|CRYSTAL HOLLOW|SUNKEN TEMPLE|SERPENT PASS|LUNAR BASIN|SUMMIT DROP|CHASM LEAP selection|WALL BOWL|SKY SPIRE|twenty-course picker' --update-snapshots
+        run: KART_GOLDENS=write npx playwright test e2e/courses.spec.ts e2e/courses-m10.spec.ts e2e/courses-m11.spec.ts e2e/courses-m12.spec.ts --project=solo -g 'TIDEWATER|MOSSWOOD|EMBER|STRATOS|SIROCCO DUNES|BLOSSOM GARDEN|THUNDER OVAL|MOONLIT BAYOU|CRYSTAL HOLLOW|SUNKEN TEMPLE|SERPENT PASS|LUNAR BASIN|SUMMIT DROP|CHASM LEAP selection|WALL BOWL|SKY SPIRE|AQUEDUCT completes|twenty-one-course picker' --update-snapshots
       - name: B. Re-verify against the goldens just written (same-runner determinism)
-        run: npx playwright test e2e/courses.spec.ts e2e/courses-m10.spec.ts e2e/courses-m11.spec.ts -g 'TIDEWATER|MOSSWOOD|EMBER|STRATOS|SIROCCO DUNES|BLOSSOM GARDEN|THUNDER OVAL|MOONLIT BAYOU|CRYSTAL HOLLOW|SUNKEN TEMPLE|SERPENT PASS|LUNAR BASIN|SUMMIT DROP|CHASM LEAP selection|WALL BOWL|SKY SPIRE|twenty-course picker'
+        run: npx playwright test e2e/courses.spec.ts e2e/courses-m10.spec.ts e2e/courses-m11.spec.ts e2e/courses-m12.spec.ts --project=solo -g 'TIDEWATER|MOSSWOOD|EMBER|STRATOS|SIROCCO DUNES|BLOSSOM GARDEN|THUNDER OVAL|MOONLIT BAYOU|CRYSTAL HOLLOW|SUNKEN TEMPLE|SERPENT PASS|LUNAR BASIN|SUMMIT DROP|CHASM LEAP selection|WALL BOWL|SKY SPIRE|AQUEDUCT completes|twenty-one-course picker'
       - name: C. Upload linux goldens
         if: always()
         uses: actions/upload-artifact@v4

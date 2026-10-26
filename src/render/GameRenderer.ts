@@ -1,11 +1,16 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { getTrack, projectToTrack, rollAt, sampleTrack, surfaceHeightAt } from '../sim';
+import { FIXED_DT, getTrack, projectToTrack, rollAt, sampleTrack, surfaceHeightAt } from '../sim';
 import type { KartState, Pose, RaceEvent, RaceState, Track, TrackId } from '../sim';
 import { widthAt } from '../sim/corridor';
+import { surfaceAt } from '../sim/surfaces';
+import { createDustState, dustScale, updateDust, SURFACE_DUST_CAPACITY, DRIFT_SMOKE_CAPACITY, TIRE_MARK_CAPACITY } from './dust';
+import type { DustState } from './dust';
 import { LOOK_AHEAD_DISTANCE, lookAheadOffset, trackTurn } from './cameraLookAhead';
 import type { RenderSnapshot } from './snapshot';
 import { kartRotationZ } from './kartRoll';
+import { BASE_FOV, boostFov, racingEffectsKart } from './cameraFov';
+import { SpeedLines, speedLineOpacity } from './speedLines';
 import { buildCourse, disposeObjectTree, type Course } from './course/buildCourse';
 import type { CourseTheme } from './course/CourseTheme';
 import { meadow } from './course/themes/meadow';
@@ -28,12 +33,13 @@ import { summit } from './course/themes/summit';
 import { chasm } from './course/themes/chasm';
 import { velodrome } from './course/themes/velodrome';
 import { spire } from './course/themes/spire';
-import { attachKartEffects, createEntityMesh, entityPose, updateKartEffects, type KartEffectVisuals } from './itemVisuals';
+import { aqueduct } from './course/themes/aqueduct';
+import { attachKartEffects, boxCoreRadius, createBoxAnim, type BoxAnim, createEntityMesh, createWarmupMeshes, BOLT_TRAIL_COUNT, boltTrailSpark, createHitTracker, hitElapsed, HIT_SQUASH_TIME, stepBoxAnim, type HitTracker, entityPose, updateKartEffects, type KartEffectVisuals } from './itemVisuals';
 
 const themes: Readonly<Record<TrackId, CourseTheme>> = {
   meadow, canyon, snowpeak, neon, harbor, forest, volcano, skyline,
   dunes, garden, speedway, bayou, cavern, temple, serpentine, lunar,
-  summit, chasm, velodrome, spire,
+  summit, chasm, velodrome, spire, aqueduct,
 };
 
 const mix = (a: number, b: number, t: number) => a + (b - a) * t;
@@ -110,15 +116,24 @@ interface KartVisual {
   wheels: THREE.Mesh[];
   paint: THREE.MeshLambertMaterial;
   sparks: THREE.InstancedMesh;
+  hit: HitTracker;
   effects: KartEffectVisuals;
 }
+
+/**
+ * WebGLRenderers whose program cache already holds every item effect look. The looks' materials are
+ * module-scope and never disposed, and every course uses the same fog type and light set, so their
+ * programs survive course rebuilds on a shared WebGLRenderer. Redrawing the vertex-colored looks in
+ * each rebuild's first frame still cost ~150-250 ms of GPU time per lobby course switch (M12-08).
+ */
+const itemLooksWarmed = new WeakSet<THREE.WebGLRenderer>();
 
 /** Rendering owns all three objects; the serializable simulation stays unaware of them. */
 export class GameRenderer {
   private readonly track: Track;
   readonly renderer: THREE.WebGLRenderer;
   private readonly scene = new THREE.Scene();
-  private readonly camera = new THREE.PerspectiveCamera(58, 1, 0.2, 650);
+  private readonly camera = new THREE.PerspectiveCamera(BASE_FOV, 1, 0.2, 650);
   private readonly sun: THREE.DirectionalLight;
   private readonly cameraTarget = new THREE.Vector3();
   private readonly desiredCamera = new THREE.Vector3();
@@ -128,16 +143,24 @@ export class GameRenderer {
   private readonly lastPlayerPosition = new THREE.Vector3();
   private readonly sunOffset: THREE.Vector3;
   private readonly transform = new THREE.Object3D();
+  private readonly dustTransform = new THREE.Object3D();
   private readonly kartVisuals: KartVisual[] = [];
   private readonly boxCubes: THREE.InstancedMesh;
   private readonly boxCores: THREE.InstancedMesh;
+  private readonly boxRings: THREE.InstancedMesh;
+  private readonly boltTrail: THREE.InstancedMesh;
+  private readonly boxAnims: BoxAnim[];
   private readonly entities = new Map<number, THREE.Mesh>();
+  private dust: DustState;
+  private readonly dustMeshes: Record<'surface' | 'drift' | 'marks', THREE.InstancedMesh>;
+  private dustWarmed = false;
   /** Time-attack ghost: a translucent copy of kart 0's body, outside the roster, minimap and shadows. */
   private ghost: { root: THREE.Group; body: THREE.Group; wheels: THREE.Object3D[] } | null = null;
   private readonly course: Course;
   private elapsed = 0;
   private cameraReady = false;
   private lastMode = '';
+  private readonly speedLines: SpeedLines;
   private reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   /** False when the WebGLRenderer was passed in; dispose() then leaves it (and its program cache) to the owner. */
   private owned: boolean;
@@ -169,19 +192,48 @@ export class GameRenderer {
     this.course = buildCourse(this.track, theme);
     this.scene.add(this.course.group);
     this.setRoster(initial.karts);
-    const cubeGeometry = new THREE.BoxGeometry(1.3, 1.3, 1.3);
-    cubeGeometry.applyMatrix4(new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(Math.PI / 5, 0, Math.PI / 4)));
+    const cubeGeometry = new THREE.BoxGeometry(1.2, 1.2, 1.2);
     // Sized for the course, not this race: a time-attack race (no boxes) may build the renderer a later race reuses.
     const boxSlots = Math.max(initial.boxes.length, this.track.boxPoses.length);
     this.boxCubes = new THREE.InstancedMesh(cubeGeometry, material(0x9ce9d2), boxSlots);
-    this.boxCores = new THREE.InstancedMesh(new THREE.OctahedronGeometry(0.62).translate(0, 0.2, 0), material(0xfff4a3), boxSlots);
+    this.boxCores = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 0), material(0xfff4a3), boxSlots);
+    this.boxRings = new THREE.InstancedMesh(new THREE.TorusGeometry(0.75, 0.06, 6, 20), material(0xc9fff0), boxSlots);
+    this.boxAnims = Array.from({ length: boxSlots }, createBoxAnim);
     this.boxCubes.castShadow = true;
-    for (const mesh of [this.boxCubes, this.boxCores]) {
+    for (const mesh of [this.boxCubes, this.boxCores, this.boxRings]) {
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       // The small set spans the course and bobs every frame; avoid stale instance bounds.
       mesh.frustumCulled = false;
       this.scene.add(mesh);
     }
+    // Same MeshBasicMaterial + instancing as the kart spark pools, so it reuses their program.
+    this.boltTrail = new THREE.InstancedMesh(new THREE.OctahedronGeometry(0.13), new THREE.MeshBasicMaterial({ color: 0xffdc41 }),
+      BOLT_TRAIL_COUNT * 16);
+    this.boltTrail.count = 0;
+    this.boltTrail.frustumCulled = false;
+    this.boltTrail.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.scene.add(this.boltTrail);
+    this.speedLines = new SpeedLines(canvas);
+    this.dust = createDustState(initial.tick);
+    const smokeGeometry = new THREE.IcosahedronGeometry(0.5, 0);
+    const makePool = (name: string, capacity: number, color: number, marks = false) => {
+      const geometry = marks ? new THREE.PlaneGeometry(0.26, 0.7).rotateX(-Math.PI / 2) : smokeGeometry;
+      const mesh = new THREE.InstancedMesh(geometry, new THREE.MeshBasicMaterial({
+        color, transparent: true, depthWrite: false, opacity: marks ? 0.32 : 0.28,
+        polygonOffset: marks, polygonOffsetFactor: marks ? -1 : 0, polygonOffsetUnits: marks ? -1 : 0,
+      }), capacity);
+      mesh.name = name;
+      mesh.count = 0;
+      mesh.frustumCulled = false;
+      mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      this.scene.add(mesh);
+      return mesh;
+    };
+    this.dustMeshes = {
+      surface: makePool('surface-dust', SURFACE_DUST_CAPACITY, 0xd8caa8),
+      drift: makePool('drift-smoke', DRIFT_SMOKE_CAPACITY, 0xf0f0f0),
+      marks: makePool('tire-marks', TIRE_MARK_CAPACITY, 0x1a1410, true),
+    };
     this.resize();
   }
 
@@ -207,6 +259,7 @@ export class GameRenderer {
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / Math.max(1, h);
     this.camera.updateProjectionMatrix();
+    this.speedLines.resize(w, h);
   }
 
   private buildKart(color: number): KartVisual {
@@ -294,7 +347,7 @@ export class GameRenderer {
     originals.forEach((geo) => geo.dispose());
     const sparks = new THREE.InstancedMesh(new THREE.OctahedronGeometry(0.13), new THREE.MeshBasicMaterial({ color: 0x64e3ff }), 12);
     root.add(sparks);
-    return { root, body, wheels, paint, sparks, effects: attachKartEffects(root) };
+    return { root, body, wheels, paint, sparks, hit: createHitTracker(), effects: attachKartEffects(root) };
   }
 
   /** Builds (or disposes) the ghost kart; a course rebuild disposes it with the scene. */
@@ -381,6 +434,7 @@ export class GameRenderer {
     }
     this.elapsed += dt;
     this.course.update(state.time);
+    this.updateDust(state, respawned);
     if (mode !== this.lastMode) { this.cameraReady = false; this.lastMode = mode; }
     for (const kart of state.karts) {
       const visual = this.kartVisuals[kart.id];
@@ -400,7 +454,8 @@ export class GameRenderer {
         wheel.rotation.x += kart.speed * dt / 0.43;
         wheel.rotation.y = wheel.position.z > 0 ? kart.steer * 0.3 : 0;
       }
-      visual.sparks.visible = kart.driftTime > 0.15;
+      const sinceHit = hitElapsed(visual.hit, kart.spinTime, respawned.has(kart.id), this.elapsed);
+      visual.sparks.visible = kart.driftTime > 0.15 || sinceHit < HIT_SQUASH_TIME;
       if (visual.sparks.visible) {
         (visual.sparks.material as THREE.MeshBasicMaterial).color.setHex(kart.driftTime >= 1.5 ? 0xffae48 : kart.driftTime >= 0.65 ? 0x47dfff : 0xe2f7ea);
         for (let j = 0; j < visual.sparks.count; j++) {
@@ -413,19 +468,31 @@ export class GameRenderer {
         }
         visual.sparks.instanceMatrix.needsUpdate = true;
       }
-      updateKartEffects(visual.effects, kart, this.elapsed, state.time);
+      // Countdown reuses boostTime/auraTime for other meanings: flame and aura only render while racing.
+      updateKartEffects(visual.effects, racingEffectsKart(kart, state.phase), this.elapsed, state.time, this.reducedMotion, sinceHit);
     }
     state.boxes.forEach((item, i) => {
-      this.transform.position.set(item.x, item.y + 1.5 + (this.reducedMotion ? 0 : Math.sin(this.elapsed * 2.6 + i) * 0.2), item.z);
-      this.transform.rotation.set(0, this.elapsed * 1.1 + i, 0);
-      this.transform.scale.setScalar(item.respawnTime <= 0 ? 1 : 0);
-      this.transform.updateMatrix();
-      this.boxCubes.setMatrixAt(i, this.transform.matrix);
-      this.boxCores.setMatrixAt(i, this.transform.matrix);
+      const presence = stepBoxAnim(this.boxAnims[i] ??= createBoxAnim(), item.respawnTime <= 0, dt);
+      const t = this.reducedMotion ? 0 : this.elapsed;
+      const bob = this.reducedMotion ? 0 : Math.sin(this.elapsed * 2.6 + i) * 0.2;
+      const t3 = this.transform;
+      t3.position.set(item.x, item.y + 1.5 + bob, item.z);
+      t3.scale.setScalar(presence);
+      t3.rotation.set(t * 0.6 + i, t * 1.2 + i, 0);
+      t3.updateMatrix();
+      this.boxCubes.setMatrixAt(i, t3.matrix);
+      t3.rotation.set(Math.PI / 2, t * 1.5 + i, 0);
+      t3.updateMatrix();
+      this.boxRings.setMatrixAt(i, t3.matrix);
+      t3.rotation.set(0, 0, 0);
+      t3.scale.setScalar(presence * boxCoreRadius(this.elapsed + i * 0.17, this.reducedMotion));
+      t3.updateMatrix();
+      this.boxCores.setMatrixAt(i, t3.matrix);
     });
-    this.boxCubes.count = this.boxCores.count = Math.min(state.boxes.length, this.boxCubes.instanceMatrix.count);
+    this.boxCubes.count = this.boxCores.count = this.boxRings.count = Math.min(state.boxes.length, this.boxCubes.instanceMatrix.count);
     this.boxCubes.instanceMatrix.needsUpdate = true;
     this.boxCores.instanceMatrix.needsUpdate = true;
+    this.boxRings.instanceMatrix.needsUpdate = true;
     const active = new Set<number>();
     for (const item of [...state.projectiles, ...state.traps]) {
       active.add(item.id);
@@ -440,6 +507,21 @@ export class GameRenderer {
       mesh.position.set(mix(prev.x, item.x, alpha), mix(prev.y, item.y, alpha) + pose.lift, mix(prev.z, item.z, alpha));
       mesh.rotation.y = pose.spin ? this.elapsed * 9 : angleMix(prev.heading, item.heading, alpha);
     }
+    let trail = 0;
+    for (const item of state.projectiles) {
+      if (item.kind !== 'bolt') continue;
+      const mesh = this.entities.get(item.id)!;
+      for (let k = 0; k < BOLT_TRAIL_COUNT && trail < this.boltTrail.instanceMatrix.count; k++, trail++) {
+        const spark = boltTrailSpark(item.heading, k);
+        this.transform.position.set(mesh.position.x + spark.x, mesh.position.y, mesh.position.z + spark.z);
+        this.transform.rotation.set(k, k * 2, 0);
+        this.transform.scale.setScalar(spark.scale);
+        this.transform.updateMatrix();
+        this.boltTrail.setMatrixAt(trail, this.transform.matrix);
+      }
+    }
+    this.boltTrail.count = trail;
+    this.boltTrail.instanceMatrix.needsUpdate = true;
     for (const [id, mesh] of this.entities) if (!active.has(id)) {
       this.scene.remove(mesh);
       this.entities.delete(id);
@@ -495,12 +577,96 @@ export class GameRenderer {
     this.cameraTarget.lerp(this.desiredTarget, follow);
     this.camera.lookAt(this.cameraTarget);
     this.cameraReady = true;
+    const kicking = chaseStation !== null && player;
+    const fov = kicking
+      ? boostFov(this.camera.fov, { boostTime: player.boostTime, phase: state.phase, reducedMotion: this.reducedMotion }, dt)
+      : BASE_FOV;
+    if (fov !== this.camera.fov) { this.camera.fov = fov; this.camera.updateProjectionMatrix(); }
+    this.speedLines.update(kicking && state.phase === 'racing' ? speedLineOpacity(player.speed, player.boostTime, this.reducedMotion) : 0);
     this.course.sky.position.copy(this.camera.position);
     // Without a local kart (spectating, roster mismatch) the sun follows the camera target instead.
     const sunAnchor = playerVisual ? playerVisual.root.position : this.cameraTarget;
     this.sun.position.copy(sunAnchor).add(this.sunOffset);
     this.sun.target.position.copy(sunAnchor);
+    // Basic materials still have distinct instanced/opaque variants. A first drift also reveals
+    // the existing sparks and boost flame; warm one representative of each without changing looks.
+    const drivingWarmup = this.dustWarmed ? [] : this.kartVisuals.slice(0, 1)
+      .flatMap(visual => [visual.sparks, visual.effects.flame])
+      .map(mesh => ({ mesh, visible: mesh.visible, culled: mesh.frustumCulled, scale: mesh.scale.clone() }));
+    for (const { mesh } of drivingWarmup) {
+      mesh.visible = true;
+      mesh.frustumCulled = false;
+      mesh.scale.setScalar(0);
+    }
+    // The first course frame submits all three pools, even with no particles yet. Zero scale
+    // prevents visible pixels; count=1 and disabled culling ensure an actual shader compilation.
+    if (!this.dustWarmed) {
+      this.transform.scale.setScalar(0);
+      this.transform.updateMatrix();
+      for (const mesh of [...Object.values(this.dustMeshes), this.boltTrail]) {
+        mesh.count = 1;
+        mesh.setMatrixAt(0, this.transform.matrix);
+        mesh.instanceMatrix.needsUpdate = true;
+      }
+    }
+    // Every item effect look (lambert and vertex-colored variants) is drawn once per WebGLRenderer,
+    // invisibly, so its first in-race appearance never compiles a program.
+    const itemWarmup = itemLooksWarmed.has(this.renderer) ? [] : createWarmupMeshes();
+    itemLooksWarmed.add(this.renderer);
+    if (itemWarmup.length) this.scene.add(...itemWarmup);
     this.renderer.render(this.scene, this.camera);
+    itemWarmup.forEach(mesh => mesh.removeFromParent());
+    for (const { mesh, visible, culled, scale } of drivingWarmup) {
+      mesh.visible = visible;
+      mesh.frustumCulled = culled;
+      mesh.scale.copy(scale);
+    }
+    if (!this.dustWarmed) {
+      for (const mesh of [...Object.values(this.dustMeshes), this.boltTrail]) mesh.count = 0;
+      this.dustWarmed = true;
+    }
+  }
+
+  private updateDust(state: RaceState, respawned: ReadonlySet<number>): void {
+    const transform = this.dustTransform;
+    const emitters = state.phase === 'racing' ? state.karts.filter(kart => !respawned.has(kart.id)).map(kart => {
+      const here = sampleTrack(this.track, kart.trackDistance);
+      const ahead = sampleTrack(this.track, kart.trackDistance + 1);
+      return { ...kart,
+        grass: Math.abs(kart.lateralOffset) > widthAt(this.track, kart.trackDistance).roadHalfWidth,
+        dirt: surfaceAt(this.track, kart.trackDistance, kart.lateralOffset) === 'dirt',
+        pitch: -Math.atan((ahead.y - here.y) * Math.cos(kart.heading - Math.atan2(here.tx, here.tz))),
+        roll: kartRotationZ(this.track, kart.trackDistance),
+      };
+    }) : [];
+    this.dust = updateDust(this.dust, state.tick, emitters, this.localKartId);
+    for (const kind of ['surface', 'drift'] as const) {
+      const mesh = this.dustMeshes[kind];
+      let count = 0;
+      for (const particle of this.dust[kind].slots) {
+        if (!particle) continue;
+        const age = (state.tick - particle.born) * FIXED_DT;
+        transform.position.set(particle.x + particle.vx * age, particle.y + 0.9 * age, particle.z + particle.vz * age);
+        transform.rotation.set(0, 0, 0);
+        transform.scale.setScalar(dustScale(age));
+        transform.updateMatrix();
+        mesh.setMatrixAt(count++, transform.matrix);
+      }
+      mesh.count = count;
+      mesh.instanceMatrix.needsUpdate = true;
+    }
+    const mesh = this.dustMeshes.marks;
+    let count = 0;
+    for (const mark of this.dust.marks.slots) {
+      if (!mark) continue;
+      transform.position.set(mark.x, mark.y, mark.z);
+      transform.rotation.set(mark.pitch, mark.heading, mark.roll, 'YXZ');
+      transform.scale.setScalar(1);
+      transform.updateMatrix();
+      mesh.setMatrixAt(count++, transform.matrix);
+    }
+    mesh.count = count;
+    mesh.instanceMatrix.needsUpdate = true;
   }
 
   get courseGroup(): THREE.Group {
@@ -542,6 +708,7 @@ export class GameRenderer {
     shared.forEach((object) => object.removeFromParent());
     this.entities.clear();
     this.course.dispose();
+    this.speedLines.dispose();
     disposeObjectTree(this.scene);
     this.sun.dispose();
   }

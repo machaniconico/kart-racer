@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { getAIInput } from '../sim/ai';
 import { ROULETTE_TIME } from '../sim/items';
-import { createRace, FIXED_DT, stepRace } from '../sim/race';
+import { createRace, FIXED_DT, startDashBoost, stepRace } from '../sim/race';
 import { sampleTrack } from '../sim/track';
 import { getTrack } from '../sim/tracks';
 import type { InputFrame, RaceState, TrackId } from '../sim/types';
@@ -315,6 +315,104 @@ describe('Predictor', () => {
     expect(predictor.kart.boostTime).toBe(0);
   });
 
+  // v20 preserves the held tick count across re-anchors at every start-dash tier boundary.
+  it.each([[5, 177], [11, 177], [11, 171], [36, 176], [37, 169], [48, 176]])
+  ('predicts the host GO boost of a %i tick hold after a countdown re-anchor at tick %i', (total, snapAt) => {
+    const initial = snapshot(0);
+    Object.assign(initial.state, { phase: 'countdown', countdown: 3, racingTicks: 0, time: 0 });
+    const host = structuredClone(initial.state);
+    const predictor = new Predictor(initial, 1);
+    const input = (tick: number) => ({ ...NEUTRAL_INPUT, throttle: tick >= 180 - total ? 1 : 0.3 });
+    // Snapshots are lost: the prediction stalls 40 ticks ahead of tick 0 while inputs are still sent.
+    for (let tick = 1; tick <= 181; tick++) {
+      predictor.recordInput(tick, input(tick));
+      stepRace(host, host.karts.map(kart => !kart.human ? getAIInput(host, kart.id) : kart.id === 1 ? input(tick) : NEUTRAL_INPUT));
+      if (tick === snapAt) {
+        const decoded = decodeSnapshot(encodeSnapshot(host, 1, tick * TICK_MS,
+          host.karts.map(kart => kart.id === 1 ? input(tick) : NEUTRAL_INPUT)), initial.state)!;
+        expect(predictor.reconcile(decoded)).toBe(true);
+      }
+      predictor.advanceTo(tick);
+    }
+    expect(predictor.tick).toBe(181);
+    expect(host.karts[1].boostTime).toBe(Math.max(0, startDashBoost(total) - FIXED_DT));
+    expect(predictor.kart.boostTime).toBe(host.karts[1].boostTime);
+  });
+
+  // M12-25 AC3: a guest re-synced just before GO with no record of its own hold (溜め 0 locally) still
+  // predicts the host's GO boost, for any gap up to the 40-tick replay limit. `gap` = prediction tick -
+  // snapshot tick (input lead + one-way transit; about 17 at RTT 240 ms). "Correction" is the simulated
+  // local-kart displacement of each reconcile (Predictor.lastCorrectionMetres), not the blended view.
+  //  - fresh: the predictor starts from the tick 177 countdown snapshot; it knows only the wire boostTime.
+  //  - skipped: it recorded ticks up to 160 (pressed from 150), then a re-anchor skipped 161..177; the host
+  //    InputBuffer repeated the press for INPUT_HOLD_TICKS (161..170), then used neutral until 177.
+  // Before the fix: 0.665 m at gap 18, 0.817 m at gap 20 when the hold was dropped.
+  it.each((['fresh', 'skipped'] as const).flatMap(scenario => [3, 10, 17, 18, 20, 25, 30, 35, 40].map(gap => ({ scenario, gap }))))
+  ('predicts the GO boost after a $scenario re-sync with no hold record, $gap ticks ahead of snapshots', ({ scenario, gap }) => {
+    const initial = snapshot(0);
+    Object.assign(initial.state, { phase: 'countdown', countdown: 3, racingTicks: 0, time: 0 });
+    const host = structuredClone(initial.state);
+    const idle = { ...NEUTRAL_INPUT, throttle: 0.3 };
+    const press = { ...NEUTRAL_INPUT, throttle: 1 };
+    const sent = (tick: number) => tick >= 150 ? press : idle;
+    const applied = (tick: number) => scenario === 'skipped' && tick > 170 && tick <= 177 ? NEUTRAL_INPUT : sent(tick);
+    const hostStep = () => {
+      const input = applied(host.tick + 1);
+      stepRace(host, host.karts.map(kart => !kart.human ? getAIInput(host, kart.id) : kart.id === 1 ? input : NEUTRAL_INPUT));
+    };
+    const encode = () => decodeSnapshot(encodeSnapshot(host, 1, host.tick * TICK_MS,
+      host.karts.map(kart => kart.id === 1 ? applied(host.tick) : NEUTRAL_INPUT)), initial.state)!;
+    let predictor: Predictor;
+    if (scenario === 'fresh') {
+      while (host.tick < 177) hostStep();
+      predictor = new Predictor(encode(), 1);
+    } else {
+      predictor = new Predictor(initial, 1);
+      for (let tick = 1; tick <= 160; tick++) predictor.recordInput(tick, sent(tick));
+      predictor.advanceTo(40);
+      while (host.tick < 177) hostStep();
+      expect(predictor.reconcile(encode())).toBe(true);
+    }
+    const corrections: number[] = [];
+    for (let tick = 178; tick <= 177 + gap; tick++) predictor.recordInput(tick, press);
+    predictor.advanceTo(177 + gap);
+    while (host.tick < 300) {
+      hostStep();
+      predictor.recordInput(host.tick + gap, press);
+      predictor.advanceTo(host.tick + gap);
+      if (host.tick === 180) expect(host.karts[1].boostTime).toBe(1.0);
+      if (host.tick % 3 === 0) {
+        expect(predictor.reconcile(encode())).toBe(false);
+        corrections.push(predictor.lastCorrectionMetres);
+      }
+    }
+    // Position quantization leaves sub-centimetre replays later in the run; none is a GO correction.
+    expect(corrections.filter(metres => metres > 0.01)).toEqual([]);
+    expect(Math.max(...corrections)).toBeLessThanOrEqual(0.6);
+  });
+
+  it.each(Array.from({ length: 61 }, (_, held) => held))
+  ('uses the exact %i-tick host hold with no local history or conflicting prediction', held => {
+    const host = snapshot(179);
+    Object.assign(host.state, { phase: 'countdown', countdown: FIXED_DT, racingTicks: 0, time: 0 });
+    host.state.karts[1].boostTime = held * FIXED_DT;
+    const decoded = decodeSnapshot(encodeSnapshot(host.state, 1, host.hostTime, host.lastAppliedInput), host.state)!;
+    const fresh = new Predictor(decoded, 1);
+    const earlier = structuredClone(host);
+    earlier.state.tick = 178;
+    earlier.state.countdown = 2 * FIXED_DT;
+    earlier.state.karts[1].boostTime = (held === 5 ? 6 : 5) * FIXED_DT;
+    const reconciled = new Predictor(earlier, 1);
+    reconciled.recordInput(179, NEUTRAL_INPUT);
+    reconciled.advanceTo(179);
+    reconciled.reconcile(decoded);
+    for (const predictor of [fresh, reconciled]) {
+      expect(predictor.kart.boostTime).toBe(held * FIXED_DT);
+      predictor.advanceTo(180);
+      expect(predictor.kart.boostTime).toBe(startDashBoost(held));
+    }
+  });
+
   it.each([
     { entry: 'constructor', rapidUnused: 0 },
     { entry: 'constructor', rapidUnused: 1 },
@@ -463,8 +561,8 @@ describe('GuestSession prediction', () => {
       const players = roster(initial.state);
       const send = (data: Parameters<typeof encodeControlMessage>[0]) => peer.send('reliable', encodeControlMessage(data));
       const sendSnapshot = (tick: number) => peer.send('unreliable', encodeSnapshot(snapshot(tick).state, 1, network.now));
-      send({ type: 'welcome', trackId: 'meadow', laps: 3, slot: 1, roster: players, hostTime: 0 });
-      send({ type: 'race_start', trackId: 'meadow', laps: 3, raceId: 1, seed: 431, roster: players, startAtHostTime: 0 });
+      send({ type: 'welcome', cpuLevel: 'normal', cpuFill: true, items: true, trackId: 'meadow', laps: 3, slot: 1, roster: players, hostTime: 0 });
+      send({ type: 'race_start', cpuLevel: 'normal', cpuFill: true, items: true, trackId: 'meadow', laps: 3, raceId: 1, seed: 431, roster: players, startAtHostTime: 0 });
       sendSnapshot(180);
       network.advance(0);
       guest.tick(drive);
@@ -490,7 +588,7 @@ describe('GuestSession prediction', () => {
 
       sendSnapshot(192);
       send({ type: 'return_lobby' });
-      send({ type: 'race_start', trackId: 'meadow', laps: 3, raceId: 2, seed: 432, roster: players, startAtHostTime: 0 });
+      send({ type: 'race_start', cpuLevel: 'normal', cpuFill: true, items: true, trackId: 'meadow', laps: 3, raceId: 2, seed: 432, roster: players, startAtHostTime: 0 });
       network.advance(0);
       guest.frame();
       expect(guest.predictedState!.tick).toBe(0);
@@ -654,7 +752,7 @@ describe('GuestSession prediction', () => {
     try {
       await guest.join('AB2X');
       const initial = snapshot();
-      peer.send('reliable', encodeControlMessage({ type: 'welcome', trackId: 'meadow', laps: 3, slot: 1,
+      peer.send('reliable', encodeControlMessage({ type: 'welcome', cpuLevel: 'normal', cpuFill: true, items: true, trackId: 'meadow', laps: 3, slot: 1,
         roster: roster(initial.state), hostTime: network.now }));
       network.advance(0);
       for (let i = 0; i < 5; i++) { network.advance(100); guest.frame(); network.advance(0); }
@@ -682,8 +780,8 @@ describe('GuestSession prediction', () => {
     const initial = snapshot();
     const players = roster(initial.state);
     const send = (data: Parameters<typeof encodeControlMessage>[0]) => peer.send('reliable', encodeControlMessage(data));
-    send({ type: 'welcome', trackId: 'meadow', laps: 3, slot: 1, roster: players, hostTime: 0 });
-    send({ type: 'race_start', trackId: 'meadow', laps: 3, raceId: 1, seed: 431, roster: players, startAtHostTime: 0 });
+    send({ type: 'welcome', cpuLevel: 'normal', cpuFill: true, items: true, trackId: 'meadow', laps: 3, slot: 1, roster: players, hostTime: 0 });
+    send({ type: 'race_start', cpuLevel: 'normal', cpuFill: true, items: true, trackId: 'meadow', laps: 3, raceId: 1, seed: 431, roster: players, startAtHostTime: 0 });
     initial.state.karts[1].item = 'dash';
     peer.send('unreliable', encodeSnapshot(initial.state, 1, 0));
     network.advance(0);
@@ -755,8 +853,8 @@ describe('Predictor respawns (guest-local)', () => {
     const initial = first(180);
     const players = roster(initial.state);
     const send = (data: Parameters<typeof encodeControlMessage>[0]) => peer.send('reliable', encodeControlMessage(data));
-    send({ type: 'welcome', trackId, laps: 3, slot: 1, roster: players, hostTime: 0 });
-    send({ type: 'race_start', trackId, laps: 3, raceId: 1, seed: 431, roster: players, startAtHostTime: 0 });
+    send({ type: 'welcome', cpuLevel: 'normal', cpuFill: true, items: true, trackId, laps: 3, slot: 1, roster: players, hostTime: 0 });
+    send({ type: 'race_start', cpuLevel: 'normal', cpuFill: true, items: true, trackId, laps: 3, raceId: 1, seed: 431, roster: players, startAtHostTime: 0 });
     peer.send('unreliable', encodeSnapshot(initial.state, 1, network.now));
     network.advance(0);
     const snapshotNow = (value: Snapshot) => peer.send('unreliable', encodeSnapshot(value.state, 1, network.now));

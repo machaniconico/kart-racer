@@ -25,11 +25,12 @@ function goldenPresent(testInfo: TestInfo, name: string): boolean {
 
 // M11-10, Chromium headless on darwin-arm64, 1280x720, DPR 1, seed 127, all 10 grid frames
 // (renderer.info.render including shadows). Same values as RENDER_BASELINE in buildCourse.test.ts.
+// M12-06: item box ring + icosahedron core add 1 draw and 252 triangles per box (24 boxes): +1 / +6_048.
 const courses = [
-  { id: 'summit', name: 'SUMMIT DROP', drawCalls: 126, triangles: 101_126 },
-  { id: 'chasm', name: 'CHASM LEAP', drawCalls: 130, triangles: 72_538 },
-  { id: 'velodrome', name: 'WALL BOWL', drawCalls: 125, triangles: 94_122 },
-  { id: 'spire', name: 'SKY SPIRE', drawCalls: 133, triangles: 78_424 },
+  { id: 'summit', name: 'SUMMIT DROP', drawCalls: 127, triangles: 107_174 },
+  { id: 'chasm', name: 'CHASM LEAP', drawCalls: 131, triangles: 78_586 },
+  { id: 'velodrome', name: 'WALL BOWL', drawCalls: 126, triangles: 100_170 },
+  { id: 'spire', name: 'SKY SPIRE', drawCalls: 134, triangles: 84_472 },
 ] as const satisfies readonly {
   id: string; name: string; drawCalls: number; triangles: number;
 }[];
@@ -263,7 +264,7 @@ test('M11-10: CHASM LEAP fall respawns near respawnAt, renders, and returns cont
   expect(errors).toEqual([]);
 });
 
-test('M11-10: EXTREME CUP is the fifth cup and runs its four courses', async ({ page }) => {
+test('M11-10: EXTREME CUP is the fifth cup and runs its five courses', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto('./');
@@ -274,7 +275,7 @@ test('M11-10: EXTREME CUP is the fifth cup and runs its four courses', async ({ 
   await page.getByRole('radio', { name: /EXTREME CUP/ }).check();
   await page.locator('#laps-select input[value="1"]').check();
   await page.locator('#start-race').click();
-  const tracks = ['summit', 'chasm', 'velodrome', 'spire'];
+  const tracks = ['summit', 'chasm', 'velodrome', 'spire', 'aqueduct'];
   for (const [index, trackId] of tracks.entries()) {
     await test.step(`Race ${index + 1}: ${trackId}`, async () => {
       await page.waitForFunction(() => window.__kartDebug.state.phase === 'racing');
@@ -292,6 +293,7 @@ test('M11-10: EXTREME CUP is the fifth cup and runs its four courses', async ({ 
       await expect(page.locator('#gp-cup')).toHaveText('EXTREME CUP');
       await expect(page.locator('.standings-row')).toHaveCount(8);
       if (index < tracks.length - 1) {
+        await expect(page.locator('.podium > .podium-place')).toHaveCount(0);
         await page.locator('#gp-next').click();
       } else {
         await expect(page.locator('.podium > .podium-place')).toHaveCount(3);

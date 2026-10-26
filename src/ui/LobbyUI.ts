@@ -1,4 +1,5 @@
-import type { NetPhase, RosterView } from '../net/session';
+import type { NetPhase, RaceSettings, RosterView } from '../net/session';
+import type { CpuLevel } from '../sim/types';
 import { LAP_CHOICES } from '../sim/laps';
 import './lobby.css';
 
@@ -10,6 +11,9 @@ export interface LobbyUICallbacks {
   onJoin: (code: string) => void;
   onCourse: (id: string) => void;
   onLaps: (laps: number) => void;
+  onCpuLevel: (level: CpuLevel) => void;
+  onCpuFill: (fill: boolean) => void;
+  onItems: (items: boolean) => void;
 }
 
 /** Display data for one course; main.ts supplies it so the lobby stays free of sim code. */
@@ -32,6 +36,13 @@ export function courseView(courses: readonly CourseOption[], selectedId: string,
 export function lapsView(selected: number, role: 'host' | 'guest'): CourseView {
   return { editable: role === 'host', index: LAP_CHOICES.indexOf(selected as 1 | 2 | 3),
     label: `${selected} 周${role === 'guest' ? '（ホストが選択）' : ''}` };
+}
+
+const CPU_LEVEL_LABELS: Record<CpuLevel, string> = { easy: 'やさしい', normal: 'ふつう', hard: 'つよい' };
+
+/** Read-only text of the host's race options, shown to guests. */
+export function settingsLabel(settings: RaceSettings): string {
+  return `CPU ${CPU_LEVEL_LABELS[settings.cpuLevel]} · ${settings.cpuFill ? 'CPU で 8 台' : 'プレイヤーのみ'} · アイテム${settings.items ? 'あり' : 'なし'}（ホストが選択）`;
 }
 
 // Kept presentation-local: the UI must not load transport, protocol, or sim code.
@@ -87,6 +98,9 @@ export class LobbyUI {
   onJoin?: LobbyUICallbacks['onJoin'];
   onCourse?: LobbyUICallbacks['onCourse'];
   onLaps?: LobbyUICallbacks['onLaps'];
+  onCpuLevel?: LobbyUICallbacks['onCpuLevel'];
+  onCpuFill?: LobbyUICallbacks['onCpuFill'];
+  onItems?: LobbyUICallbacks['onItems'];
 
   private readonly entry: HTMLElement;
   private readonly lobby: HTMLElement;
@@ -155,7 +169,20 @@ export class LobbyUI {
           <div class="lobby-room-actions"><button id="lobby-copy" type="button">コピー</button><button id="lobby-share" type="button" hidden>共有</button></div>
         </div>
         <div class="lobby-body">
-          <section class="lobby-grid" aria-label="参加者"><ol id="lobby-roster"></ol></section>
+          <div class="lobby-grid">
+          <section aria-label="参加者"><ol id="lobby-roster"></ol></section>
+          <div class="lobby-settings">
+            <fieldset id="lobby-cpu-level-select" class="lobby-options">
+              <legend>CPU の強さ</legend>
+              <div class="lobby-laps-options">${(Object.keys(CPU_LEVEL_LABELS) as CpuLevel[]).map(level => `<label><input type="radio" name="lobby-cpu-level" value="${level}"${level === 'normal' ? ' checked' : ''}><span>${CPU_LEVEL_LABELS[level]}</span></label>`).join('')}</div>
+            </fieldset>
+            <fieldset id="lobby-rules-select" class="lobby-options">
+              <legend>ルール</legend>
+              <div class="lobby-laps-options"><label><input id="lobby-cpu-fill" type="checkbox" checked><span>CPU で 8 台</span></label><label><input id="lobby-items" type="checkbox" checked><span>アイテム</span></label></div>
+            </fieldset>
+            <output id="lobby-settings-name" aria-label="レース設定（ホストが選択）" hidden></output>
+          </div>
+          </div>
           <div class="lobby-side">
           <div class="lobby-course">
             <label for="lobby-course-select" class="lobby-label">コース</label>
@@ -215,6 +242,17 @@ export class LobbyUI {
       if (this.phase === 'lobby' && this.localPlayer()?.kind === 'host') this.invoke(() => this.onCourse?.(courseSelect.value));
     });
     this.listen(this.get('lobby-laps-select'), 'change', event => this.changeLaps(event));
+    this.listen(this.get('lobby-cpu-level-select'), 'change', event => {
+      const input = event.target;
+      if (!this.hostInLobby() || !(input instanceof HTMLInputElement) || !input.checked || !Object.hasOwn(CPU_LEVEL_LABELS, input.value)) return;
+      this.invoke(() => this.onCpuLevel?.(input.value as CpuLevel));
+    });
+    this.listen(this.get('lobby-cpu-fill'), 'change', () => {
+      if (this.hostInLobby()) this.invoke(() => this.onCpuFill?.(this.get<HTMLInputElement>('lobby-cpu-fill').checked));
+    });
+    this.listen(this.get('lobby-items'), 'change', () => {
+      if (this.hostInLobby()) this.invoke(() => this.onItems?.(this.get<HTMLInputElement>('lobby-items').checked));
+    });
 
     this.listen(this.get('online-create'), 'click', () => this.connect());
     this.listen(this.get('online-join-form'), 'submit', event => {
@@ -391,6 +429,26 @@ export class LobbyUI {
     name.hidden = view.editable;
     if (name.textContent !== view.label) name.textContent = view.label;
   }
+
+  /** Host: CPU level and rule toggles. Guests see one read-only line; only the host can change them. */
+  setSettings(settings: RaceSettings, role: 'host' | 'guest'): void {
+    if (this.destroyed) return;
+    const editable = role === 'host';
+    for (const id of ['lobby-cpu-level-select', 'lobby-rules-select']) {
+      const fieldset = this.get<HTMLFieldSetElement>(id);
+      fieldset.hidden = !editable;
+      fieldset.disabled = !editable || this.phase !== 'lobby';
+    }
+    for (const input of this.get('lobby-cpu-level-select').querySelectorAll<HTMLInputElement>('input')) input.checked = input.value === settings.cpuLevel;
+    this.get<HTMLInputElement>('lobby-cpu-fill').checked = settings.cpuFill;
+    this.get<HTMLInputElement>('lobby-items').checked = settings.items;
+    const name = this.get('lobby-settings-name');
+    name.hidden = editable;
+    const label = settingsLabel(settings);
+    if (name.textContent !== label) name.textContent = label;
+  }
+
+  private hostInLobby(): boolean { return this.phase === 'lobby' && this.localPlayer()?.kind === 'host'; }
 
   private changeLaps(event: Event): void {
     const input = event.target;

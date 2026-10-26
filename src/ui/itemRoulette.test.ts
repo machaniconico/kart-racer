@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { createRouletteView, nextRouletteItem, rouletteInterval, rouletteItems, stepRoulette } from './itemIcons';
+import { createRouletteView, emptyItemIcon, itemIcons, nextRouletteItem, rouletteEase, roulettePhase, ROULETTE_SETTLE, ROULETTE_STEPS, rouletteItems, rouletteStripHtml, stepRoulette } from './itemIcons';
 import { playRouletteSound, type SoundKit } from '../audio/itemSounds';
 import { interpolateState } from '../net/interpolation';
 import { attachKartEffects, updateKartEffects } from '../render/itemVisuals';
@@ -8,17 +8,58 @@ import { createRace } from '../sim/race';
 import { ROULETTE_TIME } from '../sim/items';
 
 describe('item roulette presentation', () => {
-  it('flashes all 14 icons and slows down as the remaining time runs out', () => {
+  it('scrolls all 14 icons with an easeOut that slows down and rests exactly when the remaining time hits 0', () => {
     expect(rouletteItems).toHaveLength(14);
-    const fast = rouletteInterval(ROULETTE_TIME, ROULETTE_TIME);
-    const middle = rouletteInterval(ROULETTE_TIME / 2, ROULETTE_TIME);
-    const slow = rouletteInterval(0.01, ROULETTE_TIME);
-    expect(fast).toBeLessThan(middle);
-    expect(middle).toBeLessThan(slow);
-    expect(fast).toBeGreaterThan(1 / 60);
-    expect(slow).toBeLessThan(0.3);
-    expect(rouletteInterval(-1, ROULETTE_TIME)).toBe(rouletteInterval(0, ROULETTE_TIME));
-    expect(rouletteInterval(9, ROULETTE_TIME)).toBe(fast);
+    const speed = (remaining: number) => (roulettePhase(remaining - 0.01, ROULETTE_TIME) - roulettePhase(remaining, ROULETTE_TIME)) / 0.01;
+    expect(speed(ROULETTE_TIME)).toBeGreaterThan(speed(ROULETTE_TIME / 2));
+    expect(speed(ROULETTE_TIME / 2)).toBeGreaterThan(speed(0.2));
+    expect(roulettePhase(ROULETTE_TIME, ROULETTE_TIME)).toBe(0);
+    expect(roulettePhase(0, ROULETTE_TIME)).toBe(ROULETTE_STEPS);
+    expect(roulettePhase(-1, ROULETTE_TIME)).toBe(ROULETTE_STEPS);
+    expect(roulettePhase(9, ROULETTE_TIME)).toBe(0);
+    expect(rouletteEase(0.5)).toBeGreaterThan(0.5);
+    expect(ROULETTE_SETTLE).toBe(0.12);
+  });
+
+  it('stops within one frame of rouletteTime reaching 0 and the strip has settled by then', () => {
+    const view = createRouletteView();
+    const dt = 1 / 60;
+    stepRoulette(view, ROULETTE_TIME, false, ROULETTE_TIME);
+    let remaining = ROULETTE_TIME;
+    let stoppedAt = -1;
+    for (let frame = 1; frame < 200 && stoppedAt < 0; frame++) {
+      remaining = Math.max(0, remaining - dt);
+      if (stepRoulette(view, remaining, false, ROULETTE_TIME) === 'stop') stoppedAt = frame;
+    }
+    expect(Math.abs(stoppedAt - Math.round(ROULETTE_TIME / dt))).toBeLessThanOrEqual(1);
+    // One frame before the stop the scroll is nearly at rest (easeOut), so no visible jump.
+    expect(roulettePhase(dt, ROULETTE_TIME)).toBeGreaterThan(ROULETTE_STEPS - 0.1);
+  });
+
+  it('renders a frame-anchored 3-tile strip whose centre tile always stays inside the frame', () => {
+    const view = createRouletteView();
+    stepRoulette(view, ROULETTE_TIME * 0.9, false, ROULETTE_TIME);
+    for (const frac of [0, 0.25, 0.5, 0.999]) {
+      view.frac = frac;
+      const html = rouletteStripHtml(view);
+      expect(html.match(/<svg /g)).toHaveLength(3);
+      expect(html).toContain('position:absolute;inset:0;overflow:hidden');
+      expect(html.match(/height:33\.3333%/g)).toHaveLength(3);
+      expect(html).toContain('height:300%');
+      // Window = one frame (1/3 of the strip) starting at |translateY|; it must stay within [0, 100%] of the strip.
+      const shift = Number(/translateY\(-([\d.]+)%\)/.exec(html)![1]);
+      expect(shift).toBeGreaterThanOrEqual(33.3);
+      expect(shift + 100 / 3).toBeLessThanOrEqual(100);
+      expect(html.match(/width:70%;height:70%/g)).toHaveLength(3);
+    }
+  });
+
+  it('shows the final icon (or "?" when unknown) still without a strip under reduced motion', () => {
+    const view = createRouletteView();
+    stepRoulette(view, ROULETTE_TIME * 0.8, true, ROULETTE_TIME);
+    expect(view.strip).toBeNull();
+    expect(rouletteStripHtml(view, 'bomb')).toBe(itemIcons.bomb);
+    expect(rouletteStripHtml(view)).toBe(emptyItemIcon);
   });
 
   it('never repeats the current icon and stays in range for any random value', () => {
@@ -61,7 +102,7 @@ describe('roulette view state machine', () => {
     expect(view.active).toBe(true);
     // The item was stolen and a box grabbed on the same tick: rouletteTime jumps back up without a 0 frame.
     expect(stepRoulette(view, ROULETTE_TIME, false, ROULETTE_TIME)).toBe('start');
-    expect(view.lastSwitch).toBe(ROULETTE_TIME);
+    expect(view.step).toBe(0);
     const steps = run(view, ROULETTE_TIME - 1 / 60, ROULETTE_TIME - 0.3);
     expect(steps.filter((step) => step === 'switch').length).toBeGreaterThanOrEqual(3);
   });

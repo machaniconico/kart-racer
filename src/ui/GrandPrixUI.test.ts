@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CUPS, createGrandPrix, GP_POINTS, standings } from '../gp/grandPrix';
 import type { CupId, GrandPrix } from '../gp/grandPrix';
 import { TRACKS } from '../sim/tracks';
-import { GrandPrixUI } from './GrandPrixUI';
+import { GrandPrixUI, POINTS_COUNT_UP_MS, STANDINGS_ROW_STAGGER_MS, countUpValue } from './GrandPrixUI';
 
 // Like LobbyUI.test.ts, these tests use element doubles in the repository's
 // Node environment. Actual sizing and scrolling need browser layout tests.
@@ -81,6 +81,19 @@ function grandPrix(races = 2, cupId: CupId = 'sunrise'): GrandPrix {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('GrandPrixUI', () => {
+  it('keeps EXTREME CUP open after race four and finishes after aqueduct', () => {
+    const { root, ui } = harness();
+    ui.render(grandPrix(4, 'extreme'), 0);
+    expect(root.querySelector('#gp-progress').textContent).toBe('RACE 4 / 5');
+    expect(root.querySelector('#gp-next-course').textContent).toBe('NEXT · AQUEDUCT');
+    expect(root.querySelector('#gp-next').textContent).toBe('次のレースへ');
+    expect(root.querySelectorAll('.podium')).toHaveLength(0);
+    ui.render(grandPrix(5, 'extreme'), 0);
+    expect(root.querySelector('#gp-progress').textContent).toBe('FINAL RESULT');
+    expect(root.querySelector('#gp-next').textContent).toBe('タイトルへ');
+    expect(root.querySelectorAll('.podium')).toHaveLength(1);
+  });
+
   it('mounts a hidden, labelled section and toggles only its own screen', () => {
     const { root, screen, ui } = harness();
     const sibling = new ElementDouble('section');
@@ -145,7 +158,7 @@ describe('GrandPrixUI', () => {
     for (const races of [1, 2, 3]) {
       ui.render(grandPrix(races, cup.id), 0);
       expect(root.querySelector('#gp-cup').textContent).toBe(cup.name);
-      expect(root.querySelector('#gp-progress').textContent).toBe(`RACE ${races} / 4`);
+      expect(root.querySelector('#gp-progress').textContent).toBe(`RACE ${races} / ${cup.tracks.length}`);
       expect(root.querySelector('#gp-next-course').textContent).toContain(TRACKS[cup.tracks[races]].name);
       expect(root.querySelector('#gp-next-course').hidden).toBe(false);
       expect(root.querySelector('#gp-next').textContent).toBe('次のレースへ');
@@ -229,6 +242,82 @@ describe('GrandPrixUI', () => {
     expect(player.querySelector('.racer-swatch').style.backgroundColor).toBe('#000123');
     expect(root.querySelectorAll('img')).toHaveLength(0);
     expect(root.querySelector('#gp-progress').textContent).toBe('RACE 1 / 4');
+  });
+});
+
+describe('GrandPrixUI entrance', () => {
+  const media = (matches: boolean) => {
+    const m = { matches, handlers: [] as (() => void)[], addEventListener: (_: string, h: () => void) => m.handlers.push(h), removeEventListener: () => undefined };
+    return m;
+  };
+
+  it('counts points up over 600 ms in an aria-hidden overlay and keeps the real text final', () => {
+    const frames: ((t: number) => void)[] = [];
+    vi.stubGlobal('requestAnimationFrame', (cb: (t: number) => void) => frames.push(cb));
+    vi.stubGlobal('cancelAnimationFrame', () => undefined);
+    vi.stubGlobal('matchMedia', () => media(false));
+    const { ui, root } = harness();
+    ui.render(grandPrix(2), 0);
+    ui.show();
+    const lives = root.querySelectorAll('.standings-points-live');
+    const finals = standings(grandPrix(2));
+    const starts = finals.map(row => row.points - row.gained);
+    expect(lives.map(node => node.textContent)).toEqual(starts.map(String));
+    expect(lives.every(node => node.getAttribute('aria-hidden') === 'true' && !node.hidden)).toBe(true);
+    const strongs = root.querySelectorAll('.standings-points');
+    expect(strongs.every(node => node.className.includes('is-counting'))).toBe(true);
+    frames.shift()!(1000);
+    frames.shift()!(1000 + POINTS_COUNT_UP_MS / 2);
+    expect(Number(lives[0].textContent)).toBeGreaterThan(starts[0]);
+    expect(strongs[0].textContent).toBe(`${finals[0].points} 合計 ${finals[0].points} ポイント`);
+    frames.shift()!(1000 + POINTS_COUNT_UP_MS);
+    expect(strongs.some(node => node.className.includes('is-counting'))).toBe(false);
+    expect(lives.every(node => node.hidden)).toBe(true);
+    expect(POINTS_COUNT_UP_MS).toBe(600);
+  });
+
+  it('skips the count-up and stagger under reduced motion', () => {
+    const raf = vi.fn();
+    vi.stubGlobal('requestAnimationFrame', raf);
+    vi.stubGlobal('matchMedia', () => media(true));
+    const { ui, root } = harness();
+    ui.render(grandPrix(2), 0);
+    ui.show();
+    expect(raf).not.toHaveBeenCalled();
+    expect(root.querySelectorAll('.standings-points').some(node => node.className.includes('is-counting'))).toBe(false);
+  });
+
+  it('stops the count-up and cancels row animations when reduced motion turns on mid-run', () => {
+    const cancelFrame = vi.fn();
+    vi.stubGlobal('requestAnimationFrame', () => 7);
+    vi.stubGlobal('cancelAnimationFrame', cancelFrame);
+    const m = media(false);
+    vi.stubGlobal('matchMedia', () => m);
+    const { ui, root } = harness();
+    ui.render(grandPrix(2), 0);
+    const cancel = vi.fn();
+    root.querySelectorAll('.standings-row').forEach(row => Object.assign(row, { animate: () => ({ cancel }) }));
+    ui.show();
+    expect(root.querySelectorAll('.standings-points').every(node => node.className.includes('is-counting'))).toBe(true);
+    m.matches = true;
+    m.handlers.forEach(handler => handler());
+    expect(cancel).toHaveBeenCalledTimes(8);
+    expect(cancelFrame).toHaveBeenCalledWith(7);
+    expect(root.querySelectorAll('.standings-points').some(node => node.className.includes('is-counting'))).toBe(false);
+    expect(root.querySelectorAll('.standings-points-live').every(node => node.hidden)).toBe(true);
+  });
+
+  it('staggers rows by 70 ms and eases the count-up to its target', () => {
+    vi.stubGlobal('matchMedia', () => media(false));
+    const { ui, root } = harness();
+    ui.render(grandPrix(2), 0);
+    const calls: number[] = [];
+    root.querySelectorAll('.standings-row').forEach(row => {
+      Object.assign(row, { animate: (_k: unknown, o: { delay: number }) => { calls.push(o.delay); } });
+    });
+    ui.show();
+    expect(calls.slice(0, 3)).toEqual([0, STANDINGS_ROW_STAGGER_MS, 2 * STANDINGS_ROW_STAGGER_MS]);
+    expect([countUpValue(0, 10, 0), countUpValue(0, 10, 600), countUpValue(0, 10, 9999)]).toEqual([0, 10, 10]);
   });
 });
 

@@ -20,11 +20,12 @@ import { summit } from './summit';
 import { chasm } from './chasm';
 import { velodrome } from './velodrome';
 import { spire } from './spire';
+import { aqueduct } from './aqueduct';
 
 export const TRACK_IDS: readonly TrackId[] = Object.freeze([
   'meadow', 'canyon', 'snowpeak', 'neon', 'harbor', 'forest', 'volcano', 'skyline',
   'dunes', 'garden', 'speedway', 'bayou', 'cavern', 'temple', 'serpentine', 'lunar',
-  'summit', 'chasm', 'velodrome', 'spire',
+  'summit', 'chasm', 'velodrome', 'spire', 'aqueduct',
 ]);
 const cache = new Map<TrackId, Track>();
 
@@ -32,7 +33,7 @@ const cache = new Map<TrackId, Track>();
 export const TRACKS: Readonly<Record<TrackId, TrackDef>> = Object.freeze(Object.fromEntries(
   [meadow, canyon, snowpeak, neon, harbor, forest, volcano, skyline,
     dunes, garden, speedway, bayou, cavern, temple, serpentine, lunar,
-    summit, chasm, velodrome, spire].map(def => {
+    summit, chasm, velodrome, spire, aqueduct].map(def => {
     const track = buildTrack(def);
     cache.set(def.id, track);
     return [def.id, track.def];
