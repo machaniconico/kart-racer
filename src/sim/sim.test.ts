@@ -1109,10 +1109,15 @@ describe('sim fingerprint', () => {
   };
   const FINGERPRINTS: Record<string, Partial<Record<LegacyTrackId, number>>> = {
     'darwin-arm64': DARWIN_FINGERPRINTS,
-    // M12-24 decision (2026-10-24): keep linux {} / pending-ci logging, as in M11.
-    // After the publication commit/push, one goldens-linux workflow_dispatch will measure and
-    // pin digests and surfaces/BASELINE for all 21 courses, including aqueduct. No CI pin here.
-    'linux-x64': {},
+    // M12 publish: copied from the Deploy run 40267610997 npm test log (6951a1d), all 21 courses.
+    'linux-x64': {
+      meadow: 2889191276, canyon: 1602573074, snowpeak: 329798897, neon: 3027348555,
+      harbor: 1111155962, forest: 1559539714, volcano: 1112957756, skyline: 4254649250,
+      dunes: 2673660054, garden: 2892360769, speedway: 1108644384, bayou: 717101873,
+      cavern: 632477907, temple: 2134899828, serpentine: 2403048609, lunar: 954815431,
+      summit: 3381224184, chasm: 1085675791, velodrome: 2298919371, spire: 888139673,
+      aqueduct: 900873585,
+    },
   };
   const platform = `${process.platform}-${process.arch}`;
 
